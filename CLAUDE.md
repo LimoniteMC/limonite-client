@@ -16,8 +16,10 @@ starting any task, and treat it as the source of truth for architecture decision
     the owner can tick what's done and split the rest into its own milestone.
   - After M5 comes milestone 5b, containers, then M6.
   - Both repos are public. The superproject is `Doodle-Studios/limonite-client` (`main`), and the
-    fork is `Doodle-Studios/Pumpkin` (`limonite`, at `443b954` locally). Check STATUS.md for
+    fork is `Doodle-Studios/Pumpkin` (`limonite`, at `f9badd8` locally). Check STATUS.md for
     what's pushed. Ask the owner before pushing anything.
+  - **Upstream syncs are weekly** (owner, 2026-10-26). STATUS.md's "Where we are" gives the next
+    due date. If one is due, do it first, by the procedure in `docs/upstream.md`, and log it there.
   - The superproject's GitHub wiki mirrors `docs/`; see Rules for keeping it in step.
 - **Before touching the fork, read** `docs/recon/m0-pumpkin-bedrock.md`, and the "Deviations"
   sections of `docs/milestones/m1-plan.md` to `m4-plan.md`.
@@ -71,7 +73,7 @@ All three transports implement the `Transport` trait. The host never touches the
 - Never attempt to decrypt Marketplace content.
 - Always update the readme regarding any info that needs to be shared.
 - Keep the GitHub wiki in step with `docs/`. The wiki mirrors `docs/PLAN.md`, `docs/STATUS.md`,
-  `docs/recon/` and `docs/milestones/`, one page each. `docs/` stays the source of truth, so never
+  `docs/upstream.md`, `docs/recon/` and `docs/milestones/`, one page each. `docs/` stays the source of truth, so never
   edit wiki pages by hand.
   - Whenever a change to those files is committed, run `pwsh scripts/sync-wiki.ps1`. It clones the
     wiki into `run/wiki` (gitignored) if needed, and regenerates every page.

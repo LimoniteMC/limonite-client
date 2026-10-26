@@ -23,7 +23,7 @@ Limonite Client is a Minecraft Bedrock Edition client written in Rust, shipped a
 
 **Guiding principles**
 
-1. Seams over spaghetti: every cross-cutting change to Pumpkin goes through a small, named seam so upstream rebases stay cheap.
+1. Seams over spaghetti: every cross-cutting change to Pumpkin goes through a small, named seam so upstream syncs stay cheap.
 2. Detect capabilities, never brands: a GPU feature flag decides a code path, a vendor name never does.
 3. Measure, don't guess: performance tiers come from timed frames, not GPU names.
 4. Shared cores first: the layered pack filesystem, the Molang interpreter and the Java to Bedrock mapping table feed most features, so they get built well and early.
@@ -110,7 +110,7 @@ The backend is a source-level fork of [Pumpkin](https://github.com/Pumpkin-MC/Pu
 
 - The fork lives as a git submodule inside a cargo workspace (layout in Repository layout, below).
 - New code goes in new modules; edits to existing Pumpkin files are kept to the seams listed above.
-- Rebase on upstream regularly. A small diff keeps `git rebase upstream/master` painless, which matters while upstream is actively fixing Bedrock.
+- Merge upstream `master` into the fork once a calendar week (owner, 2026-10-26), and log each sync in `docs/upstream.md`. A small diff keeps each merge painless, which matters while upstream is actively fixing Bedrock. It's a merge, not a rebase: every superproject commit pins a fork commit by its hash, and rewriting `limonite` would leave older pins pointing at commits no branch holds.
 - Each seam gets a short doc comment saying why it exists.
 - On Windows, clone with `git config core.longpaths true`; some Pumpkin paths exceed `MAX_PATH`.
 
@@ -383,13 +383,13 @@ The biggest risk is upstream Pumpkin's Bedrock support being incomplete; the big
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | Pumpkin's Bedrock side is WIP | Missing packets or behaviour block milestones | Upstream fixes; keep the official client as a control to tell fork bugs from client bugs |
-| Fork drifts from upstream | Rebases become painful, Bedrock fixes are missed | Seam-only edits, frequent rebases |
+| Fork drifts from upstream | Syncs become painful, Bedrock fixes are missed | Seam-only edits, weekly merges logged in `docs/upstream.md` |
 | Iris scope explosion | Shader work eats the project | Fixed 2–3 pack test suite; defer the long tail |
 | wgpu RT is experimental | RT path churns between wgpu versions | Keep RT behind the escape hatch and the capability gate |
 | Bedrock protocol changes each game update | External LAN guests on newer clients can't join | Pin the guest client version; follow upstream Pumpkin's protocol bumps |
 | Pumpkin compiles Mojang's vanilla Java datapack into the binary | A distributed Limonite binary would contain Mojang data (worldgen, loot tables, recipes, tags), breaking the "never bundle Mojang assets" rule. `pumpkin-data`'s build script downloads the Java server jar, and generated code `include_str!`s its JSON | Local dev builds only until solved. Decide before any release; one option is to fetch the server jar from Mojang on the user's machine at first run and load the datapack at runtime |
 | The client binary embeds the Bedrock block palette (M4) | 3.9 MB of BDS-mined block names and states, from the fork's `assets/bedrock/block_states.nbt` (CloudburstMC's dump, vendored with Geyser's notice), ship inside the client. It's interoperability data, not assets, but it's Mojang-derived | Dev builds only until decided, together with the datapack row above. `blocks/palette_source.rs` is the one module that knows the source, so a runtime read or a generated table can replace it without touching the renderer |
-| Bedrock auto-updates past Pumpkin's exact protocol | The official client, our control, can't join at all: Pumpkin accepts one exact protocol | Record the client version in each milestone's test; rebase onto upstream protocol bumps; avoid updating the test client mid-milestone |
+| Bedrock auto-updates past Pumpkin's exact protocol | The official client, our control, can't join at all: Pumpkin accepts one exact protocol | Record the client version in each milestone's test; take upstream's protocol bumps at a weekly sync, with the owner, ideally between milestones; avoid updating the test client mid-milestone |
 | Pumpkin trusts what a Bedrock client reports (found while planning M5) | Pumpkin takes a Bedrock player's position as sent, with no speed or collision check, and places whatever item the client says it holds. That's harmless for the host, who owns the world. But a LAN guest's client (M7) could fly, pass through walls, or place blocks it doesn't have | M7 decides how to treat guests before LAN opens: accept it on a trusted LAN, add checks through a seam, or upstream checks to Pumpkin. Details: `docs/milestones/m5-plan.md`, Findings 1 and 3 |
 | Asset and licence issues | Can't distribute | Load vanilla assets from the user's install; client is GPL-3.0; never bundle packs |
 | Public servers and Realms | Custom clients can trip anti-cheat or break terms | Out of scope; test only on the embedded server and own LAN |

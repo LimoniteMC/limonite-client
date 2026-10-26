@@ -4,18 +4,26 @@ A living page: where the project is, how to build and run it, and what bites. Up
 milestone step lands. Architecture decisions live in `docs/PLAN.md`; this page is about progress
 and environment.
 
-_Last updated: 2026-10-25._
+_Last updated: 2026-10-26._
 
 ## Where we are
 
-- **Current milestone:** 5, playable singleplayer. **Planned and approved on 2026-10-24:**
-  `docs/milestones/m5-plan.md`. The owner answered all fifteen questions as recommended, and added
-  five amendments. Not started.
-  - **First:** Step 1, the official-client capture (owner present, about 30 minutes, Bedrock
-    1.26.52).
+- **Current milestone:** 5, playable singleplayer, under way: `docs/milestones/m5-plan.md`,
+  approved on 2026-10-24 with the owner's five amendments.
+  - **Step 1, the official-client capture, was recorded on 2026-10-26.** The raw capture is in
+    `run/captures/m5-official/` (gitignored). Choosing the fixtures and writing up its Results
+    are still to do.
+  - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
+    They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
     owner can tick what's done and split the rest into its own milestone.
   - **Next:** milestone 5b, containers, added to PLAN.md at M5's approval; then M6.
+- **Upstream syncs are weekly** (owner, 2026-10-26): merge upstream Pumpkin's `master` into the
+  fork once a calendar week. `docs/upstream.md` has the procedure, and a log of what each sync
+  brought in.
+  - **Last sync:** 2026-10-26, upstream `5e9101f` (44 commits). The fork's `limonite` is at
+    `f9badd8`, and `main` bumped it in `a8f0271`.
+  - **Next sync due:** 2026-11-02.
 - **Milestone 4 is done (2026-10-24).** Plan, results and deviations: `docs/milestones/m4-plan.md`.
   - **What it built:** a window (winit) with a wgpu device and a fly camera that flies the host;
     CPU meshes for every loaded sub-chunk, drawn with vanilla textures read at runtime from the
@@ -40,6 +48,8 @@ _Last updated: 2026-10-25._
     `origin/limonite`. The fork goes first, since `main`'s submodule pointer names its commit;
   - the wiki, `https://github.com/Doodle-Studios/limonite-client.wiki.git` (`master`), from its
     clone in `run/wiki`. It goes after `main`, since its pages name `main`'s commit.
+  - **Not pushed yet** (2026-10-26): the upstream sync, which is the fork's `845450b` and `f9badd8`,
+    then `main`'s bump `a8f0271` and the docs after it.
 - **No upstream PR is open.** The candidates are listed under "Upstream PR candidates".
 
   Ask the owner before pushing anything, and before opening an upstream PR.
@@ -147,10 +157,13 @@ Windows 11, with Git Bash and PowerShell both used.
 
 **Pumpkin fork: `pumpkin/`**
 - A git submodule of `https://github.com/Doodle-Studios/Pumpkin`, branch **`limonite`**, at
-  `443b954`: upstream `aac0a82` (2026-10-18) plus the M1 to M4 commits. Its git directory is
+  `f9badd8`: the M1 to M4 commits on upstream `aac0a82`, with upstream `master` `5e9101f`
+  (2026-10-26) merged in (`845450b`), then the NBT reader fix. Its git directory is
   `.git/modules/pumpkin`.
 - `upstream` points at `https://github.com/Pumpkin-MC/Pumpkin.git`, whose default branch is
-  `master`.
+  `master`. The fork merges it weekly (`docs/upstream.md`).
+- **The fork's whole diff:** `git -C pumpkin diff upstream/master` (after a fetch) shows exactly
+  what Limonite adds.
 - **Fresh clone:** clone `https://github.com/Doodle-Studios/limonite-client`, then set long
   paths before the submodule checks out. Run `git -c core.longpaths=true submodule update
   --init`, then `git -C pumpkin config core.longpaths true`.
@@ -351,8 +364,10 @@ the gitignored folder.
   every config.
 - **Lockfile and profiles:** building from the repo root ignores Pumpkin's `Cargo.lock`,
   profiles and `rust-toolchain.toml`. The root has mirrored copies, so when the fork changes them:
-  - **After a rebase onto upstream,** copy `pumpkin/Cargo.lock` over the root `Cargo.lock` again
-    and build. Shared crates then match the versions the fork was tested with.
+  - **After an upstream sync,** copy `pumpkin/Cargo.lock` over the root `Cargo.lock` again and
+    build. Shared crates then match the versions the fork was tested with. Cargo re-adds the
+    client-only crates at their newest versions, so pin back any that moved (`docs/upstream.md`,
+    the procedure's step 4).
   - **Profiles:** copy any new or changed ones into the root `Cargo.toml`. The `pumpkin-wasm-host*`
     overrides are left out on purpose: no root crate builds the plugin host.
 - **Misleading banner:** a `--no-default-features` server with `networking.java.enabled = true`
@@ -549,8 +564,12 @@ once a join's meshing settles, so a new world refreshes it.
   replaces a SipHash lookup per block with a per-palette table. The output is byte-identical,
   checked against the old code kept as a test oracle. Before and after numbers are in
   `docs/milestones/m3-plan.md`, Results.
+- **Read exactly one NBT compound** (fork `f9badd8`, the 2026-10-26 sync). Upstream's
+  `PacketRead for NbtCompound` reads the rest of the packet before parsing, so it only works while
+  the NBT is a packet's last field. The fork's reads exactly the compound
+  (`pumpkin-protocol/src/serial/nbt_source.rs`), with tests.
 - **Fire never tells clients about its changes** (found in M3, still in upstream `master`
-  `44d881c`). `block/blocks/fire/fire.rs` sets blocks with `BlockFlags::NOTIFY_NEIGHBORS` only in
+  `5e9101f`). `block/blocks/fire/fire.rs` sets blocks with `BlockFlags::NOTIFY_NEIGHBORS` only in
   three places: fire that can't survive, fire put out by rain, and fire spreading. But
   `World::on_block_state_set` only queues a client update with `NOTIFY_LISTENERS`. So clients keep
   seeing fire that went out, and never see fire that spread. Vanilla uses flag 3 (`NOTIFY_ALL`)
@@ -559,5 +578,19 @@ once a join's meshing settles, so a new world refreshes it.
 - **A second encode step, not tried yet** (m3-plan Deviation 12). The palette conversion is still
   about 89% of the faster encode: the packer divides by a runtime word size for each position,
   and `network_indices` builds a buffer per section. Measure it before proposing anything.
+
+**Pumpkin bugs reported upstream** (found by the M5 capture, 2026-10-26; the owner chose to report
+them rather than fix them in the fork). Each hits every Bedrock player, so our host too, until
+upstream fixes it and a weekly sync brings the fix in:
+
+- **No fall damage for Bedrock players:** Pumpkin-MC/Pumpkin#3396, already open. The Bedrock input
+  handler (`net/bedrock/play/player_auth_input.rs`) never calls `LivingEntity::fall`, which the
+  Java handlers do (`net/java/play/player_position.rs:157`, `:316`).
+- **Block pick is always ignored:** Pumpkin-MC/Pumpkin#4321, opened by the owner's account on
+  2026-10-26. `block_pick_request.rs:23-26` takes `max_slots` as the slot to fill, and the official
+  client always sends 9, so the handler returns.
+- **A survival placement costs two items:** Pumpkin-MC/Pumpkin#4130, already open. The official
+  client's use-item transaction carries its predicted slot change, which `inventory_action.rs`
+  applies (`:87-135`) before its own `stack.decrement(1)` (`:289`).
 
 Notes for M2 (found while planning M1) were all handled; see `docs/milestones/m2-plan.md`.

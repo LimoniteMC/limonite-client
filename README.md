@@ -329,7 +329,9 @@ branch `limonite`, as a git submodule. Upstream Pumpkin's Bedrock support speaks
 accepts exactly one protocol: **Bedrock 1.26.51, protocol 2193**.
 
 The fork stays small on purpose. Changes to existing Pumpkin files only go through small, named
-seams, each with a doc comment saying why it exists, so rebasing onto upstream stays cheap.
+seams, each with a doc comment saying why it exists, so merging upstream stays cheap. The fork
+merges upstream's `master` every week, and [docs/upstream.md](docs/upstream.md) logs what each
+sync brought in.
 
 **What the fork adds**
 
@@ -400,7 +402,7 @@ The rules Claude works by are in [CLAUDE.md](CLAUDE.md).
 ## Principles
 
 1. **Seams over spaghetti.** Every change to Pumpkin goes through a small, named seam, so upstream
-   rebases stay cheap.
+   syncs stay cheap.
 2. **Detect capabilities, never brands.** A GPU feature flag decides a code path; a vendor name
    never does.
 3. **Measure, don't guess.** Performance tiers come from timed frames, not GPU names.

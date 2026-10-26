@@ -4,8 +4,8 @@
 
 .DESCRIPTION
   docs/ stays the source of truth (CLAUDE.md); the wiki is a read-only mirror of it.
-  This copies docs/PLAN.md, docs/STATUS.md, docs/recon/*.md and docs/milestones/*.md into the
-  wiki checkout, one page each, turns the docs' references to each other into wiki links, and
+  This copies docs/PLAN.md, docs/STATUS.md, docs/upstream.md, docs/recon/*.md and
+  docs/milestones/*.md into the wiki checkout, one page each, turns the docs' references to each other into wiki links, and
   writes the Home, _Sidebar and _Footer pages. Pages it no longer generates are deleted.
 
   It never commits or pushes. Review the checkout's diff, then commit and push it once the owner
@@ -40,6 +40,7 @@ elseif (-not [System.IO.Path]::IsPathRooted($WikiDir)) { $WikiDir = Join-Path (G
 $pages = [ordered]@{
     'docs/PLAN.md'   = 'Design-Plan'
     'docs/STATUS.md' = 'Status'
+    'docs/upstream.md' = 'Upstream-Syncs'
 }
 foreach ($file in Get-ChildItem (Join-Path $repo 'docs/recon') -Filter '*.md' | Sort-Object Name) {
     if ($file.Name -notmatch '^m(\w+?)-') { throw "docs/recon/$($file.Name): expected a name like m<N>-<topic>.md" }
@@ -144,7 +145,7 @@ Write-Page 'Home' @(
     ''
     "<p align=`"center`"><b>The design documents of <a href=`"$site`">Limonite Client</a>, a Minecraft: Bedrock Edition client written in Rust.</b></p>"
     ''
-    "This wiki mirrors the project's [``docs/``]($site/tree/main/docs) folder: the design plan, the status page, the recon note and every milestone's plan, with its results and deviations. The repository is the source of truth, and these pages are regenerated from it."
+    "This wiki mirrors the project's [``docs/``]($site/tree/main/docs) folder: the design plan, the status page, the log of upstream syncs, the recon note and every milestone's plan, with its results and deviations. The repository is the source of truth, and these pages are regenerated from it."
     ''
     "**Developed AI-first.** These documents are written by Claude Opus 5.5, and every milestone's plan is approved by [@LaDoodleInTheHat](https://github.com/LaDoodleInTheHat) before any code is written."
     ''
@@ -154,6 +155,7 @@ Write-Page 'Home' @(
     '| --- | --- |'
     '| [Design Plan](Design-Plan) | The design, and the source of truth for decisions: architecture, the fork''s seams, the renderer, packs, UI, milestones and risks |'
     '| [Status](Status) | Where the project stands, the dev setup, build times and gotchas |'
+    '| [Upstream Syncs](Upstream-Syncs) | What each weekly merge of upstream Pumpkin brought in, and how to do the next one |'
     ''
     '## Milestones'
     ''
@@ -174,6 +176,7 @@ Write-Page '_Sidebar' (@(
     ''
     '- [Design Plan](Design-Plan)'
     '- [Status](Status)'
+    '- [Upstream Syncs](Upstream-Syncs)'
     ''
     '**Milestones**'
     ''
