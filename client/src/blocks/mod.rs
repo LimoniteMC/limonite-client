@@ -4,6 +4,7 @@
 pub mod appearance;
 pub mod palette;
 pub mod palette_source;
+pub mod shapes;
 
 use std::{collections::HashMap, time::Instant};
 
