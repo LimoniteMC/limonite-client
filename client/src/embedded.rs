@@ -96,10 +96,11 @@ impl EmbeddedServer {
     /// Stops the server, which kicks any players and saves the world, and waits
     /// for its thread to finish.
     ///
-    /// A process can only run one server: Pumpkin's stop flags are process
-    /// globals that are never reset.
+    /// Only this server stops: its own stop token is cancelled, and Pumpkin's
+    /// process-wide stop flags are left alone, since an embedded server doesn't
+    /// own the process.
     pub fn stop(self) {
-        pumpkin_core::stop_server();
+        self.server.stop();
         if self.thread.join().is_err() {
             error!("The embedded server thread panicked while stopping");
         }
@@ -125,19 +126,18 @@ fn run_server(config: PumpkinConfig, ready: &mpsc::Sender<Ready>) {
 
 async fn serve(config: PumpkinConfig, ready: &mpsc::Sender<Ready>) {
     // Pumpkin's `init_logger` is never called: the client already installed
-    // the global `tracing` subscriber, and Pumpkin's events reach it. But
-    // `PumpkinServer::start` waits on `LOGGER_IMPL` being set, at startup with
-    // a console and always at the end. Setting it to "no logger" lets both
-    // waits return at once.
-    let _ = pumpkin_core::LOGGER_IMPL.set(None);
-
+    // the global `tracing` subscriber, and Pumpkin's events reach it.
     let vanilla_data = VanillaData::load();
+    // Not standalone: the server reads no console, never marks the process as
+    // stopping, and ends only its own world when stopped.
+    let standalone = false;
     let server = match PumpkinServer::new(
         config.basic,
         config.advanced,
         config.telemetry,
         vanilla_data,
         Vec::new(),
+        standalone,
     )
     .await
     {
