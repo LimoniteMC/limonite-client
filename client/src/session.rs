@@ -28,7 +28,7 @@ use pumpkin_protocol::{
             set_local_player_as_initialized::SSetLocalPlayerAsInitialized,
         },
     },
-    codec::{bitset::Bitset, var_int::VarInt, var_uint::VarUInt, var_ulong::VarULong},
+    codec::{var_int::VarInt, var_uint::VarUInt, var_ulong::VarULong},
     packet::Packet,
     serial::PacketRead,
 };
@@ -45,7 +45,7 @@ use crate::{
     login,
     measure::Stats,
     packets,
-    player::{EYE_HEIGHT, Motion},
+    player::{EYE_HEIGHT, Motion, movement::Flags},
     render::camera::look_direction,
     world::{Applied, World},
 };
@@ -113,15 +113,18 @@ impl fmt::Display for TimedOut {
     }
 }
 
-/// How this tick's input describes the player's move.
+/// Where this tick's move came from, which decides how the input describes
+/// it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Report {
-    /// The scripted session, standing on the ground, as in M2.
-    Standing,
-    /// The scripted session, walking (or flying) east on its own.
-    Walking,
-    /// The window: however far the player moved since the last input.
-    Moved,
+enum Source {
+    /// Physics: the player's own report, flag for flag (`player/movement.rs`).
+    Physics,
+    /// The scripted session's walk (or flight) east, past physics: M4's
+    /// flags for walking on the ground.
+    ScriptedWalk,
+    /// The bench, which places the player where its camera flies: M4's
+    /// flags, and however far it moved since the last input.
+    Placed,
 }
 
 pub struct Session {
@@ -346,43 +349,48 @@ impl Session {
     /// in between: the server drops a client it hasn't heard from in 10 s.
     pub fn tick(&mut self) {
         self.drain();
-        let (motion, report) = self.scripted();
-        self.step_with(motion, report);
+        let (motion, source) = self.scripted();
+        self.step_with(motion, source);
     }
 
     /// One tick for the window: steps the game with `motion`, and sends the
     /// input that reports it. One every 50 ms, whatever the frame rate.
     pub fn step(&mut self, motion: Motion) {
-        self.step_with(motion, Report::Moved);
+        let source = if matches!(motion, Motion::To(_)) {
+            Source::Placed
+        } else {
+            Source::Physics
+        };
+        self.step_with(motion, source);
     }
 
     /// Input starts with `StartGame`: the server ignores it until the player
     /// has loaded, but any packet keeps its 10 s timeout away.
-    fn step_with(&mut self, motion: Motion, report: Report) {
+    fn step_with(&mut self, motion: Motion, source: Source) {
         if self.stage == Stage::Disconnected || self.game.player().is_none() {
             return;
         }
         self.game.tick(motion);
-        if let Some(input) = self.input(report) {
+        if let Some(input) = self.input(source) {
             self.send(&input);
             self.input_tick += 1;
         }
     }
 
     /// The scripted session's motion this tick: a step east while it walks,
-    /// standing still otherwise.
-    fn scripted(&mut self) -> (Motion, Report) {
+    /// and physics alone otherwise, so it stands, or falls back down.
+    fn scripted(&mut self) -> (Motion, Source) {
         let Some(player) = self.game.player() else {
-            return (Motion::Still, Report::Standing);
+            return (Motion::Still, Source::Physics);
         };
         if self.walk_ticks == 0 {
-            return (Motion::Still, Report::Standing);
+            return (Motion::Still, Source::Physics);
         }
         self.walk_ticks -= 1;
         let mut pose = player.pose();
         pose.feet.x += f64::from(self.step);
         pose.yaw = YAW_EAST;
-        (Motion::To(pose), Report::Walking)
+        (Motion::To(pose), Source::ScriptedWalk)
     }
 
     /// Handles everything that has arrived, without sending input. Called on
@@ -551,43 +559,49 @@ impl Session {
 
     /// This tick's `PlayerAuthInput`, from the player as the game has it.
     ///
-    /// Scripted, the host is on the ground, standing or walking east: the
-    /// position, `delta` and `move_vec` move together, as they would from the
-    /// official client holding "forward" facing east. From a window, it
-    /// reports how far the player moved since the last input. Step 6 makes
-    /// the flags and `delta` what the official client sends.
+    /// Under physics it's the player's own report: the flags, `move_vec` and
+    /// `raw_move` as `player/movement.rs` set them, and the velocity as
+    /// `delta`, as the official client sends them (m5-plan Results, Step 1).
     ///
-    /// The first input after a teleport says it was handled, with the new
-    /// position and no movement (m5-plan Results, Step 1).
-    fn input(&mut self, report: Report) -> Option<SPlayerAuthInput> {
+    /// A scripted walk keeps M4's report of walking on the ground: the
+    /// position, `delta` and `move_vec` move together, as they would from the
+    /// official client holding "forward" facing east. The bench reports how
+    /// far the player moved since the last input. Either way, the first input
+    /// after a teleport says it was handled, with no movement.
+    fn input(&mut self, source: Source) -> Option<SPlayerAuthInput> {
         let player = self.game.player_mut()?;
         let pose = player.pose();
-        let teleported = player.take_teleported();
         let eyes = pose.eyes();
         let position = Vector3::new(eyes.x as f32, eyes.y as f32, eyes.z as f32);
-        // The flags the official client sets while on the ground.
-        let mut input_data = Bitset::<66>::default();
-        input_data.set(InputData::BlockBreakingDelayEnabled as usize, true);
-        input_data.set(InputData::VerticalCollision as usize, true);
         let still = Vector2::new(0.0, 0.0);
-        let (move_vec, delta) = if teleported {
-            input_data.set(InputData::HandledTeleport as usize, true);
-            (still, Vector3::new(0.0, 0.0, 0.0))
+        let (flags, move_vec, raw_move, delta) = if source == Source::Physics {
+            let report = *player.report();
+            let v = player.velocity;
+            (
+                report.flags,
+                vec2(report.move_vec),
+                vec2(report.raw_move),
+                Vector3::new(v.x as f32, v.y as f32, v.z as f32),
+            )
         } else {
-            match report {
-                Report::Standing => (still, Vector3::new(0.0, STANDING_DELTA_Y, 0.0)),
-                Report::Walking => {
-                    input_data.set(InputData::Up as usize, true);
-                    (Vector2::new(0.0, 1.0), Vector3::new(self.step, STANDING_DELTA_Y, 0.0))
-                }
-                Report::Moved => {
-                    let moved = eyes - self.reported.unwrap_or(eyes);
-                    (still, Vector3::new(moved.x as f32, moved.y as f32, moved.z as f32))
-                }
-            }
+            // The flags the official client sets while on the ground.
+            let mut flags = Flags::default();
+            flags.set(InputData::BlockBreakingDelayEnabled);
+            flags.set(InputData::VerticalCollision);
+            let (move_vec, delta) = if player.take_teleported() {
+                flags.set(InputData::HandledTeleport);
+                (still, Vector3::new(0.0, 0.0, 0.0))
+            } else if source == Source::ScriptedWalk {
+                flags.set(InputData::Up);
+                (Vector2::new(0.0, 1.0), Vector3::new(self.step, STANDING_DELTA_Y, 0.0))
+            } else {
+                let moved = eyes - self.reported.unwrap_or(eyes);
+                (still, Vector3::new(moved.x as f32, moved.y as f32, moved.z as f32))
+            };
+            (flags, move_vec, move_vec, delta)
         };
         self.reported = Some(eyes);
-        if teleported {
+        if flags.has(InputData::HandledTeleport) {
             self.teleport_report = Some(TeleportReport {
                 eyes: position,
                 delta,
@@ -602,7 +616,7 @@ impl Session {
             position,
             move_vec,
             head_yaw: yaw,
-            input_data,
+            input_data: flags.to_bitset(),
             input_mode: VarUInt(INPUT_MODE_MOUSE),
             play_mode: VarUInt(PLAY_MODE_SCREEN),
             interaction_model: VarInt(0),
@@ -617,7 +631,7 @@ impl Session {
             vehicle_unique_id: None,
             analog_move: Vector2::new(0.0, 0.0),
             camera_orientation: Vector3::new(forward.x, forward.y, forward.z),
-            raw_move: move_vec,
+            raw_move,
         })
     }
 
@@ -643,4 +657,8 @@ impl Session {
             }
         }
     }
+}
+
+fn vec2(v: glam::DVec2) -> Vector2<f32> {
+    Vector2::new(v.x as f32, v.y as f32)
 }

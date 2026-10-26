@@ -9,7 +9,7 @@ use winit::{
     keyboard::KeyCode,
 };
 
-use crate::render::camera::Movement;
+use crate::player::movement::Keys;
 
 /// Something the player can do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -329,15 +329,17 @@ impl Input {
         self.wheel = 0.0;
     }
 
-    /// The camera's movement from the held actions.
+    /// The movement keys held, for physics.
     #[must_use]
-    pub fn movement(&self) -> Movement {
-        let axis = |plus, minus| f64::from(i8::from(self.held(plus)) - i8::from(self.held(minus)));
-        Movement {
-            forward: axis(Action::Forward, Action::Back),
-            right: axis(Action::Right, Action::Left),
-            up: axis(Action::Jump, Action::Sneak),
-            fast: self.held(Action::Sprint),
+    pub fn keys(&self) -> Keys {
+        Keys {
+            forward: self.held(Action::Forward),
+            back: self.held(Action::Back),
+            left: self.held(Action::Left),
+            right: self.held(Action::Right),
+            jump: self.held(Action::Jump),
+            sneak: self.held(Action::Sneak),
+            sprint: self.held(Action::Sprint),
         }
     }
 }
@@ -358,12 +360,12 @@ mod tests {
         input.button(key(KeyCode::KeyA), ElementState::Pressed);
         input.button(key(KeyCode::ControlLeft), ElementState::Pressed);
         assert_eq!(
-            input.movement(),
-            Movement {
-                forward: 1.0,
-                right: -1.0,
-                up: 0.0,
-                fast: true
+            input.keys(),
+            Keys {
+                forward: true,
+                left: true,
+                sprint: true,
+                ..Keys::default()
             }
         );
         assert_eq!(input.take_pressed(), [Action::Forward, Action::Left, Action::Sprint]);
@@ -371,9 +373,9 @@ mod tests {
 
         input.button(key(KeyCode::KeyW), ElementState::Released);
         input.button(key(KeyCode::KeyS), ElementState::Pressed);
-        assert!((input.movement().forward + 1.0).abs() < f64::EPSILON);
+        assert!(input.keys().back && !input.keys().forward);
         input.button(key(KeyCode::ShiftLeft), ElementState::Pressed);
-        assert!((input.movement().up + 1.0).abs() < f64::EPSILON, "Shift sinks");
+        assert!(input.keys().sneak, "Shift sneaks");
 
         input.mouse_motion(3.0, -1.0);
         input.mouse_motion(1.0, 0.5);
@@ -381,7 +383,7 @@ mod tests {
         assert_eq!(input.take_mouse(), (0.0, 0.0));
 
         input.clear();
-        assert_eq!(input.movement(), Movement::default());
+        assert_eq!(input.keys(), Keys::default());
         // An unbound key does nothing.
         input.button(key(KeyCode::KeyZ), ElementState::Pressed);
         assert!(input.take_pressed().is_empty());

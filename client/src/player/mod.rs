@@ -1,5 +1,11 @@
 //! The local player (m5-plan Decision 2): who the server says it is, what it
-//! may do, and where it is, tick by tick. Step 6 gives it physics.
+//! may do, and where it is, tick by tick, moved by physics (Step 6).
+
+pub mod movement;
+pub mod physics;
+pub mod terrain;
+#[cfg(test)]
+mod traces;
 
 use glam::DVec3;
 use pumpkin_protocol::bedrock::client::{
@@ -8,13 +14,12 @@ use pumpkin_protocol::bedrock::client::{
 use pumpkin_util::GameMode;
 use tracing::debug;
 
-use crate::{
-    clock::TICK,
-    render::camera::{Movement, fly_direction, fly_speed},
+use self::{
+    movement::{Keys, Movement, Report, Situation},
+    physics::{Body, Terrain},
 };
 
-/// How far the eyes are above the feet, standing: Bedrock's player.
-pub const EYE_HEIGHT: f64 = 1.62;
+pub use self::physics::EYE_HEIGHT;
 
 /// Where the player is, and where it looks.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -47,18 +52,12 @@ impl Pose {
 /// What moves the player for one tick.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Motion {
-    /// Nothing does.
+    /// No keys: physics alone, so it stands, falls or drifts to a stop.
     Still,
-    /// M4's flight, now a tick at a time: through everything, along the
-    /// camera's yaw, at creative flying speed, three times as fast with
-    /// sprint held. Step 6 replaces it with walking and flying under physics.
-    Fly {
-        movement: Movement,
-        pitch: f32,
-        yaw: f32,
-    },
-    /// Straight to a pose: the bench and the scripted session move the
-    /// player themselves.
+    /// The keys, and where the camera looks, under physics.
+    Keys { keys: Keys, pitch: f32, yaw: f32 },
+    /// Straight to a pose, past physics: the bench and the scripted session
+    /// move the player themselves.
     To(Pose),
 }
 
@@ -227,9 +226,15 @@ pub struct Player {
     pub gamemode: GameMode,
     pub abilities: Abilities,
     pub attributes: Attributes,
-    /// In blocks a tick. Only the server sets it so far (`SetActorMotion`);
-    /// from Step 6, physics moves the player by it.
+    /// In blocks a tick, carried into the next tick: physics moves the player
+    /// by it, and the server can set it (`SetActorMotion`).
     pub velocity: DVec3,
+    /// Resting on something at the end of the last tick.
+    pub on_ground: bool,
+    /// Flying, sprinting, sneaking, and what the keys were.
+    pub movement: Movement,
+    /// What the last tick's input reports.
+    report: Report,
     pose: Pose,
     /// The pose a tick ago, which frames draw from.
     previous: Pose,
@@ -250,11 +255,20 @@ impl Player {
             abilities: Abilities::default(),
             attributes: Attributes::default(),
             velocity: DVec3::ZERO,
+            on_ground: false,
+            movement: Movement::default(),
+            report: Report::default(),
             pose,
             previous: pose,
             teleported: false,
             turned: None,
         }
+    }
+
+    /// What the last tick's input reports.
+    #[must_use]
+    pub const fn report(&self) -> &Report {
+        &self.report
     }
 
     /// This tick's pose.
@@ -270,27 +284,45 @@ impl Player {
         self.previous.eyes().lerp(self.pose.eyes(), alpha)
     }
 
-    /// One tick of `motion`.
-    pub fn step(&mut self, motion: Motion) {
+    /// One tick of `motion`, through `terrain`.
+    ///
+    /// Under physics, the tick a teleport is reported in holds the player
+    /// still; the report says it was handled, and the flag is used up. A
+    /// scripted move leaves the flag for the script's own report.
+    pub fn step(&mut self, motion: Motion, terrain: &impl Terrain) {
         self.previous = self.pose;
-        // The tick a teleport is reported in, the player only turns.
-        let holding = self.teleported;
         match motion {
-            Motion::Still => {}
-            Motion::Fly { movement, pitch, yaw } => {
-                self.pose.pitch = pitch;
-                self.pose.yaw = yaw;
-                if !holding {
-                    let blocks = fly_speed(movement) * TICK.as_secs_f64();
-                    self.pose.feet += fly_direction(movement, yaw) * blocks;
-                }
-            }
-            Motion::To(pose) if !holding => self.pose = pose,
+            Motion::Still => self.move_by_keys(Keys::default(), self.pose.pitch, self.pose.yaw, terrain),
+            Motion::Keys { keys, pitch, yaw } => self.move_by_keys(keys, pitch, yaw, terrain),
+            Motion::To(pose) if !self.teleported => self.pose = pose,
             Motion::To(pose) => {
                 self.pose.pitch = pose.pitch;
                 self.pose.yaw = pose.yaw;
             }
         }
+    }
+
+    fn move_by_keys(&mut self, keys: Keys, pitch: f32, yaw: f32, terrain: &impl Terrain) {
+        self.pose.pitch = pitch;
+        self.pose.yaw = yaw;
+        let mut body = Body {
+            feet: self.pose.feet,
+            velocity: self.velocity,
+            on_ground: self.on_ground,
+        };
+        let situation = Situation {
+            gamemode: self.gamemode,
+            may_fly: self.abilities.may_fly,
+            hunger: self.attributes.hunger,
+            movement: f64::from(self.attributes.movement),
+            gravity: f64::from(self.attributes.gravity),
+            fly_speed: f64::from(self.abilities.fly_speed),
+        };
+        let teleported = std::mem::take(&mut self.teleported);
+        self.report = self.movement.tick(&mut body, keys, yaw, &situation, terrain, teleported);
+        self.pose.feet = body.feet;
+        self.velocity = body.velocity;
+        self.on_ground = body.on_ground;
     }
 
     /// The server moved the player: a teleport, a respawn, or a reset. It's
@@ -299,8 +331,15 @@ impl Player {
         self.pose = pose;
         self.previous = pose;
         self.velocity = DVec3::ZERO;
+        self.on_ground = false;
         self.teleported = true;
         self.turned = Some((pose.pitch, pose.yaw));
+    }
+
+    /// The server's abilities: they say whether the player is flying, too.
+    pub const fn set_abilities(&mut self, abilities: Abilities) {
+        self.abilities = abilities;
+        self.movement.flying = abilities.flying;
     }
 
     /// The server turned the player, without moving it.
@@ -336,73 +375,87 @@ impl Player {
 
 #[cfg(test)]
 mod tests {
-    use pumpkin_protocol::bedrock::client::SerializedAbilitiesDataSerializedLayer;
+    use pumpkin_protocol::bedrock::{
+        client::SerializedAbilitiesDataSerializedLayer, server::player_auth_input::InputData,
+    };
 
-    use super::*;
-    use crate::render::camera::FLY_SPEED;
+    use super::{
+        physics::tests::{Kind, World},
+        *,
+    };
+
+    /// Flat stone with its top at y 64.
+    fn flat(_: i32, y: i32, _: i32) -> Kind {
+        if y < 64 { Kind::Stone } else { Kind::Air }
+    }
 
     fn player() -> Player {
         let pose = Pose::from_eyes(DVec3::new(0.5, 65.62, 0.5), 0.0, 0.0);
-        Player::new(7, 7, GameMode::Creative, pose)
+        Player::new(7, 7, GameMode::Survival, pose)
     }
 
-    const FORWARD: Movement = Movement {
-        forward: 1.0,
-        right: 0.0,
-        up: 0.0,
-        fast: false,
-    };
+    fn forward(pitch: f32, yaw: f32) -> Motion {
+        let keys = Keys {
+            forward: true,
+            ..Keys::default()
+        };
+        Motion::Keys { keys, pitch, yaw }
+    }
 
     #[test]
-    fn flying_moves_a_tick_at_a_time_and_frames_draw_in_between() {
+    fn the_keys_walk_a_tick_at_a_time_and_frames_draw_in_between() {
+        let world = World(flat);
         let mut player = player();
+        // A tick standing still finds the ground under it.
+        player.step(Motion::Still, &world);
+        assert!(player.on_ground);
         let start = player.pose().eyes();
-        // Facing east (yaw -90).
-        player.step(Motion::Fly {
-            movement: FORWARD,
-            pitch: 10.0,
-            yaw: -90.0,
-        });
-        let step = FLY_SPEED / 20.0;
-        assert!((player.pose().eyes() - (start + DVec3::X * step)).length() < 1e-9);
+        // Facing east (yaw -90): the first tick's push is 0.98 × 0.1.
+        player.step(forward(10.0, -90.0), &world);
+        let step = 0.098;
+        assert!((player.pose().eyes() - (start + DVec3::X * step)).length() < 1e-5);
         assert_eq!((player.pose().pitch, player.pose().yaw), (10.0, -90.0));
+        assert!(player.report().flags.has(InputData::Up));
         // Halfway through the next tick, a frame draws it halfway along.
-        assert!((player.eyes_at(0.5) - (start + DVec3::X * step / 2.0)).length() < 1e-9);
+        assert!((player.eyes_at(0.5) - (start + DVec3::X * step / 2.0)).length() < 1e-5);
         assert!((player.eyes_at(0.0) - start).length() < 1e-9);
         assert!((player.eyes_at(1.0) - player.pose().eyes()).length() < 1e-9);
     }
 
     #[test]
     fn a_teleport_jumps_holds_a_tick_and_is_reported_once() {
+        let world = World(flat);
         let mut player = player();
-        player.step(Motion::Fly {
-            movement: FORWARD,
-            pitch: 0.0,
-            yaw: 0.0,
-        });
+        player.step(forward(0.0, 0.0), &world);
         let there = Pose::from_eyes(DVec3::new(100.5, 80.62, -3.5), 20.0, 45.0);
         player.teleport(there);
         // No sliding across the jump.
         assert_eq!(player.eyes_at(0.5), there.eyes());
         assert_eq!(player.take_turned(), Some((20.0, 45.0)));
         assert_eq!(player.take_turned(), None);
-        // The next tick holds still, though the keys still turn it.
-        player.step(Motion::Fly {
-            movement: FORWARD,
-            pitch: 5.0,
-            yaw: 50.0,
-        });
+        // The next tick holds still, though the keys still turn it, and says
+        // the teleport was handled.
+        player.step(forward(5.0, 50.0), &world);
         assert_eq!(player.pose().feet, there.feet);
         assert_eq!(player.pose().yaw, 50.0);
-        assert!(player.take_teleported());
-        assert!(!player.take_teleported());
-        // Then it flies again.
-        player.step(Motion::Fly {
-            movement: FORWARD,
-            pitch: 5.0,
-            yaw: 50.0,
+        assert!(player.report().flags.has(InputData::HandledTeleport));
+        assert!(!player.take_teleported(), "used up by that tick");
+        // Then it moves again: up in the air, it falls.
+        player.step(forward(5.0, 50.0), &world);
+        assert!(!player.report().flags.has(InputData::HandledTeleport));
+        player.step(forward(5.0, 50.0), &world);
+        assert!(player.pose().feet.y < there.feet.y);
+    }
+
+    #[test]
+    fn the_servers_abilities_say_whether_it_flies() {
+        let mut player = player();
+        player.set_abilities(Abilities {
+            may_fly: true,
+            flying: true,
+            ..Abilities::default()
         });
-        assert_ne!(player.pose().feet, there.feet);
+        assert!(player.movement.flying);
     }
 
     fn layer(set: u32, values: u32) -> SerializedAbilitiesDataSerializedLayer {

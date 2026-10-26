@@ -30,7 +30,7 @@ use tracing::warn;
 use crate::{
     clock::TimeOfDay,
     packets::PacketName,
-    player::{self, Abilities, Motion, Player, Pose},
+    player::{self, Abilities, Motion, Player, Pose, terrain::WorldTerrain},
     world::{Applied, ApplyError, World},
 };
 
@@ -134,12 +134,14 @@ impl Game {
         self.player = Some(player);
     }
 
-    /// One tick: the time of day moves on, and the player moves by `motion`.
+    /// One tick: the time of day moves on, and the player moves by `motion`
+    /// through the world's blocks.
     pub fn tick(&mut self, motion: Motion) {
         self.ticks += 1;
         self.time.tick();
+        let terrain = WorldTerrain::new(&self.world);
         if let Some(player) = &mut self.player {
-            player.step(motion);
+            player.step(motion, &terrain);
         }
     }
 
@@ -198,7 +200,7 @@ impl Game {
                 if update.data.target_player_raw_id != player.unique_id {
                     return Ok(Effect::Ignored);
                 }
-                player.abilities = Abilities::from_data(&update.data);
+                player.set_abilities(Abilities::from_data(&update.data));
             }
             CSetPlayerGameType::PACKET_ID => {
                 let set: CSetPlayerGameType = read(packet)?;

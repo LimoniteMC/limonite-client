@@ -193,9 +193,9 @@ impl<'a> App<'a> {
         }
     }
 
-    /// What moves the player this tick. The keys fly it along the camera's
-    /// yaw. The bench flies the camera itself, frame by frame as in M4, so its
-    /// numbers compare with M4's, and the player just follows the camera.
+    /// What moves the player this tick: the keys, under physics, facing the
+    /// camera's way. The bench flies the camera itself, frame by frame as in
+    /// M4, so its numbers compare with M4's, and the player just follows it.
     fn motion(&self) -> Motion {
         let Some(camera) = &self.camera else {
             return Motion::Still;
@@ -203,8 +203,8 @@ impl<'a> App<'a> {
         if self.bench.is_some() {
             Motion::To(Pose::from_eyes(camera.position, camera.pitch, camera.yaw))
         } else {
-            Motion::Fly {
-                movement: self.input.movement(),
+            Motion::Keys {
+                keys: self.input.keys(),
                 pitch: camera.pitch,
                 yaw: camera.yaw,
             }
