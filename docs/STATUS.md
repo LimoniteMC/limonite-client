@@ -10,9 +10,13 @@ _Last updated: 2026-10-26._
 
 - **Current milestone:** 5, playable singleplayer, under way: `docs/milestones/m5-plan.md`,
   approved on 2026-10-24 with the owner's five amendments.
-  - **Step 1, the official-client capture, was recorded on 2026-10-26.** The raw capture is in
-    `run/captures/m5-official/` (gitignored). Choosing the fixtures and writing up its Results
-    are still to do.
+  - **Step 1 is done (2026-10-26):** the official client's play packets, captured. The raw
+    capture is in `run/captures/m5-official/` (gitignored).
+    - **Its Results** in the plan are the spec for every packet the client sends.
+    - **The fixtures:** 23 codec fixtures, in the fork (committed with Step 2), and 12 physics
+      traces in `client/src/player/fixtures/`.
+    - **Its Deviations** (1 to 8) record the script's changes and the upstream sync.
+  - **Next:** Step 2, the play codecs in the fork.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the

@@ -1,6 +1,6 @@
 # Milestone 5 plan: Playable singleplayer
 
-**Status: approved on 2026-10-24; not started.** The owner answered all fifteen questions as
+**Status: approved on 2026-10-24; under way. Step 1 was done on 2026-10-26.** The owner answered all fifteen questions as
 recommended ("Questions and answers", at the end), and asked for five changes, all folded in below:
 - the physics is checked against the official client: Step 1's captured `PlayerAuthInput`
   positions are the ground truth for a jump's peak, walking, sprinting and sneaking speeds, and
@@ -1000,4 +1000,136 @@ The questions as they were asked:
 
 ## Deviations (filled in during execution)
 
+1. **The capture script was tightened for the physics runs** (with the owner present, 2026-10-24).
+   - **A flat floor in the sky:** `/fill -8 199 0 8 199 40 stone`, with nothing near it, so every
+     trace's floor is known exactly.
+   - **Each clean run starts with a `/tp`:** to the same spot, facing along an axis. That fixes the
+     start, and marks the run in the recording.
+   - **Three more runs:** a walk at yaw 30 and one with W and D, which test the turning and the
+     diagonal maths that straight runs can't; and a held sprint-jump.
+   - **The 10-block fall by `/tp`** instead of a pillar: the same fall, from rest.
+   - **Placing before breaking,** since the strip has no dirt.
+   - **Water and a ladder,** added as an optional item, which the owner did.
+2. **The hook kept up to 60,000 `PlayerAuthInput` packets, not 5,000.** At 20 a second, 5,000 is
+   four minutes, the same reason as m2-plan Deviation 1. It also wrote `captures/index.csv`, each
+   packet's place in the overall order and its arrival time, so the runs could be found between
+   the commands.
+3. **The first attempt was discarded** (2026-10-24). The owner switched to creative before the clean
+   runs, where a quick double tap on Space starts flying, and the session ended there. The capture
+   was recorded again from scratch, in a fresh world, on 2026-10-26. The first attempt is kept in
+   `run/m5-capture-attempt1/` (gitignored).
+4. **The creative-list take wasn't captured:** the inventory was only opened in survival. The owner
+   moved it to Step 12, together with the official-client join on the merged fork (Deviation 7).
+5. **A twelfth trace, creative flight** (`fly.bin`), from the script's item 8. It wasn't one of the
+   planned clean runs, but it's the only ground truth for flying.
+6. **Landing doesn't end creative flight on Bedrock** (Decision 5 says it does). In the trace the
+   player lands while flying, and Space still rises at flight speed until a double tap sends
+   `StopFlying`. Bedrock wins: flight ends only by a double tap (or the server).
+7. **The fork merged upstream Pumpkin mid-milestone** (the owner's request, 2026-10-26).
+   - **What:** upstream `master` `5e9101f`, 44 commits, merged into `limonite` (`845450b`), then a
+     fix for upstream's new NBT reader (`f9badd8`), and the bump `a8f0271`. `docs/upstream.md` has
+     the details. The owner also made syncs weekly, merged rather than rebased.
+   - **Finding 13 no longer holds.** Upstream lets an embedded server stop without ending the
+     process (Pumpkin-MC/Pumpkin#3771), and the client now embeds it that way. Decision 17's
+     supervisor, a fresh process per world, is to be looked at again with the owner before Step 16.
+     A child process still isolates a crash better.
+   - **Step 18.1's check changes.** A diff against `443b954` now includes all of upstream's
+     changes. Instead, M5's own fork commits must touch only `pumpkin-protocol`:
+     `git -C pumpkin log --no-merges --name-only 443b954..limonite ^upstream/master`.
+   - **`uuid` comes in at 1.29,** Pumpkin's spec since the merge (Decision 22 said 1.28).
+8. **Three Pumpkin bugs, found by the capture, are reported upstream instead of fixed** (owner,
+   2026-10-26). Each hits every Bedrock player, so our host too:
+   - no fall damage: Pumpkin-MC/Pumpkin#3396, already reported;
+   - block pick ignored: Pumpkin-MC/Pumpkin#4321, opened from the owner's account;
+   - a survival placement costs two items: Pumpkin-MC/Pumpkin#4130, already reported.
+
+   **For this plan:** survival falls don't hurt, and survival building uses stacks up twice as
+   fast. Step 9's middle click sends the official client's packet, which the server ignores until
+   upstream fixes it. The physics, the predictions and their tests don't change. A weekly sync
+   brings each fix in when it lands.
+
 ## Results (filled in during execution)
+
+### Step 1: what the official client sends (2026-10-26)
+
+**The capture:** 9,594 serverbound packets in 7.2 minutes, from Bedrock 1.26.52. It's in
+`run/captures/m5-official/` (gitignored), with a decoded timeline beside it. Every packet was read
+by Pumpkin's own reader with no bytes left over.
+
+| Id | Packet | Count |
+| --- | --- | --- |
+| 144 | `PlayerAuthInput` | 8,513 |
+| 44 | `Animate` | 499 |
+| 135 | `ClientCacheBlobStatus` | 341 |
+| 31 | `MobEquipment` | 57 |
+| 30 | `InventoryTransaction` | 50 |
+| 36 | `PlayerAction` | 42 |
+| 33 | `Interact` | 36 |
+| 77 | `CommandRequest` | 22 |
+| 34 | `BlockPickRequest` | 17 |
+| 147 | `ItemStackRequest` | 5 |
+| 8, 312 | `ResourcePackClientResponse`, `ServerboundLoadingScreen` | 2 each |
+| 9, 45, 47, 69, 113, 129, 193 | `Text`, `Respawn`, `ContainerClose`, `RequestChunkRadius`, `SetLocalPlayerAsInitialized`, `ClientCacheStatus`, `RequestNetworkSettings` | 1 each |
+
+**The spec for Steps 6, 9, 11 and 12:**
+
+- **Each tick, `PlayerAuthInput`'s flags:**
+  - always 48 (`BlockBreakingDelayEnabled`); on the ground 50 (`VerticalCollision`), with `delta.y`
+    -0.0784; against a wall 49 (`HorizontalCollision`);
+  - W, S, A and D are 10, 11, 12 and 13. `move_vec` and `raw_move` are -1, 0 or 1 per axis, with a
+    diagonal at 0.7071, and `analog_move` stays 0 on a keyboard;
+  - **sprint:** 25 (`StartSprinting`) once, then 4 and 20 each tick, and 26 to stop;
+  - **sneak:** 27 once, then 8, 9, 17 and 64 each tick, and 28 to stop. 63 and 62 mark the key's
+    press and release;
+  - **jump:** 3, 6, 16 and 61 while Space is held; 60 on the press and 59 on the release. 31
+    (`StartJumping`) comes on the tick the jump starts: the press, on the ground, or the tick after
+    landing with Space held;
+  - **fly:** 42 (`StartFlying`) on the second tap, 43 (`StopFlying`) on the next double tap. Space
+    and Shift rise and sink with the jump and sneak flags;
+  - **teleported:** 37 (`HandledTeleport`) on the first input after the server moves the player,
+    with the new position and a `delta` of 0;
+  - 35 (`PerformBlockActions`) whenever the packet carries block actions. Water needs no flag of its
+    own: swimming up is the jump flags, and `StartSwimming` needs sprinting.
+- **Movement numbers** (the traces, below): walking 0.21586 blocks a tick, sprinting 0.28062,
+  sneaking 0.06476; a jump peaks 1.25224 up; falling follows `(v - 0.08) × 0.98`; water
+  `0.8 v - 0.005`, with 0.04 more a tick while rising; a ladder climbs at 0.2. All but the ladder's
+  fall cap match Java.
+- **Breaking:**
+  - **survival:** `StartDestroyBlock` once in `PlayerAuthInput`'s block actions; nothing per tick;
+    then `ContinueDestroyBlock` and `PredictDestroyBlock` together on the tick the block breaks
+    (dirt by hand: 14 ticks after the start). Moving onto another block while holding sends
+    `ContinueDestroyBlock` for it, and letting go sends `AbortDestroyBlock` with face 0;
+  - **creative:** `PlayerAction` `CreativeDestroyBlock`, and `StartDestroyBlock` with
+    `PredictDestroyBlock` in the same tick's input. Held, it repeats on the next block every 5
+    ticks (once 4) with `ContinueDestroyBlock`;
+  - **the swing:** `Animate` `SwingArm`, source `Mine`, about once a frame while the button is held.
+    Our client sends one a tick.
+- **Placing,** five packets a click:
+  1. `PlayerAction` `StartItemUseOn`, with the clicked block, the placed position and the face;
+  2. `Animate` `SwingArm`, source `Build`;
+  3. `InventoryTransaction`, use item, click block (action 0, trigger 1, client prediction 1), with
+     the hotbar slot's predicted change as a legacy action (an even negative id, container 29);
+  4. `InventoryTransaction`, use item, click air (action 1, face 255), with no actions;
+  5. `PlayerAction` `StopItemUseOn`, a few ticks later, when the button comes up.
+- **The hotbar:** `MobEquipment` on every change, keys and wheel alike, often after an `Interact`
+  `InteractUpdate` with target 0. Q is a normal `InventoryTransaction`: the slot's change and a
+  world-source drop.
+- **The inventory:** E sends `Interact` `OpenInventory` (target: the player's own runtime id).
+  - Each move is an `ItemStackRequest` with a falling odd id (-3, -5, -7 and on): `Take` to the
+    cursor, `Place` from it, `Swap` with it.
+  - Closing sends `ContainerClose` with container 0 and type 247.
+- **Block pick:** `BlockPickRequest` with `max_slots` 9; `with_data` is true on the first and
+  false after (Deviation 8).
+- **Death:** an `InventoryTransaction` of type mismatch after dying. Then Respawn sends `Respawn`
+  (`ClientReadyToSpawn`) and `PlayerAction` `Respawn` (face -1), and the next input has
+  `HandledTeleport` at the world spawn.
+- **Commands and chat:** `CommandRequest` (origin `player`, version `latest`) and `Text` (`Chat`).
+  Both identify the player, so their fixtures stay private (Decision 19).
+- **Not needed by our client:** `ClientCacheStatus` and `ClientCacheBlobStatus` (the official
+  client takes chunks from a blob cache; ours never asks for it), `ServerboundLoadingScreen`, and
+  the login packets M2 covers.
+
+**The fixtures:**
+- **Codecs:** 23 new files in `client_codecs/fixtures/`, listed in its README.
+- **Physics:** 12 traces in `client/src/player/fixtures/`, 1,256 ticks and 143 KB, listed in that
+  README with each run's numbers.

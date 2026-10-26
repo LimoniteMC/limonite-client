@@ -9,9 +9,10 @@ starting any task, and treat it as the source of truth for architecture decision
 - **Progress and dev setup:** `docs/STATUS.md`. Read it first, and update it whenever a milestone
   step lands.
 - **Milestones 0 to 4 are done** (M4 on 2026-10-24). **Milestone 5, playable singleplayer, is
-  planned and approved** (2026-10-24): `docs/milestones/m5-plan.md`, with the owner's five
-  amendments folded in. Start at its Step 1, the official-client capture, which needs the owner
-  present with Bedrock 1.26.52.
+  under way:** `docs/milestones/m5-plan.md`, approved on 2026-10-24 with the owner's five
+  amendments. Its Step 1, the official-client capture, is done; continue from the step STATUS.md
+  names. The plan's Results and Deviations record what each step found, so read them as well as
+  its Decisions.
   - Each owner checkpoint (after Steps 7, 11, 14 and 16) is a go/no-go point: if a phase overruns,
     the owner can tick what's done and split the rest into its own milestone.
   - After M5 comes milestone 5b, containers, then M6.
