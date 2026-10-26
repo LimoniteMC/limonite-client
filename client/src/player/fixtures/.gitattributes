@@ -1,0 +1,2 @@
+# Packet captures: never touch their bytes (no line-ending conversion, no diffs).
+*.bin binary
