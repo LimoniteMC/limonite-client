@@ -47,8 +47,9 @@ newest first: what came in, what it changed for Limonite, and how the conflicts 
    adds back the client-only crates at their newest versions, so compare them with the lockfile from
    before, and pin back any that moved with `cargo update -p <crate> --precise <version>`. Then the
    shared crates match what the fork was tested with, and the client's stay as they were.
-   - **Profiles:** if upstream changed a profile in `pumpkin/Cargo.toml`, mirror it in the root
-     `Cargo.toml` (STATUS.md, Gotchas).
+   - **Profiles and specs:** if upstream changed a profile, or the spec of a dependency the root
+     also names (such as `tokio`), mirror it in the root `Cargo.toml` (STATUS.md, Gotchas). The
+     root's comment promises the same versions as `pumpkin/Cargo.toml`.
 5. **The client:** `cargo build`, `cargo test --workspace`, `cargo clippy --workspace
    --all-targets`, and the headless checks (`--headless --map`). Adapt the client where upstream's
    API changed.
@@ -114,6 +115,8 @@ newest first: what came in, what it changed for Limonite, and how the conflicts 
    - The root `Cargo.lock` is the fork's again, and `toml_edit` is pinned back to 0.25.15, the one
      client-only crate that moved.
    - M5 takes `uuid` at Pumpkin's 1.29 (m5-plan Decision 22 said 1.28).
+   - The root `Cargo.toml` mirrored `tokio` 1.54 in a follow-up commit, which the procedure now
+     covers.
 8. **Still open upstream:** the Pumpkin bugs the M5 capture found. No fall damage for Bedrock
    players is Pumpkin-MC/Pumpkin#3396, and two items used per placement is Pumpkin-MC/Pumpkin#4130,
    both reported before. Block pick ignored is Pumpkin-MC/Pumpkin#4321, opened on 2026-10-26 (STATUS.md,

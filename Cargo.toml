@@ -20,7 +20,7 @@ tracing-subscriber = { version = "0.3.23", default-features = false, features = 
     "ansi",
 ] }
 # The embedded server's async runtime.
-tokio = { version = "1.53", default-features = false, features = ["rt-multi-thread"] }
+tokio = { version = "1.54", default-features = false, features = ["rt-multi-thread"] }
 # Pumpkin's worldgen and chunk encoding run on the global Rayon pool, which we name.
 rayon = { version = "1.12", default-features = false }
 # Pumpkin's HTTP client is built without a crypto provider; the process installs `ring`.
