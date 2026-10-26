@@ -1,16 +1,15 @@
 //! The host's session with the embedded server.
 //!
-//! A 20 Hz loop on the main thread, the skeleton of the future render loop:
-//! each tick drains what the server sent, reacts to it, and sends this tick's
-//! input. Everything goes through a `LocalClientEnd`, whose methods never
-//! wait, so the loop needs no async runtime.
+//! It keeps the conversation: logging in, the stages up to spawning, and one
+//! `PlayerAuthInput` every tick. Everything the server says about the game
+//! goes on to [`Game`] (m5-plan Decision 2). Everything goes through a
+//! `LocalClientEnd`, whose methods never wait, so the loop needs no async
+//! runtime.
 
-use std::{
-    fmt, thread,
-    time::{Duration, Instant},
-};
+use std::{fmt, thread, time::Instant};
 
 use bytes::Bytes;
+use glam::DVec3;
 use pumpkin_core::net::bedrock::{
     level_chunk::CLevelChunk,
     local::{LocalClientEnd, LocalConnector},
@@ -21,8 +20,6 @@ use pumpkin_protocol::{
         client::{
             CChunkRadiusUpdated, CDisconnect, CPlayStatus, CResourcePackStackPacket,
             CResourcePacksInfo, CStartGame, GameType,
-            network_chunk_publisher_update::CNetworkChunkPublisherUpdate,
-            update_block::CUpdateBlock,
         },
         server::{
             player_auth_input::{InputData, SPlayerAuthInput},
@@ -43,15 +40,16 @@ use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tracing::{debug, info, warn};
 
 use crate::{
+    clock::TICK,
+    game::{Effect, Game},
     login,
     measure::Stats,
     packets,
+    player::{EYE_HEIGHT, Motion},
     render::camera::look_direction,
     world::{Applied, World},
 };
 
-/// One client tick, as in vanilla.
-pub const TICK: Duration = Duration::from_millis(50);
 /// Bedrock's input-mode and play-mode values for mouse and keyboard on a
 /// screen, as the official client sends them.
 const INPUT_MODE_MOUSE: u32 = 1;
@@ -84,14 +82,23 @@ pub enum Stage {
     Disconnected,
 }
 
-/// What `StartGame` told us about the player.
+/// What `StartGame` told us about the player. The game's player has the
+/// rest.
 #[derive(Clone, Copy, Debug)]
 pub struct Spawn {
     pub runtime_id: u64,
     /// Where the player's eyes are; Bedrock positions are at eye height.
     pub eye_position: Vector3<f32>,
-    pub pitch: f32,
-    pub yaw: f32,
+}
+
+/// What the first input after a teleport said (the "teleport" check).
+#[derive(Clone, Copy, Debug)]
+pub struct TeleportReport {
+    /// Where it put the eyes.
+    pub eyes: Vector3<f32>,
+    pub delta: Vector3<f32>,
+    /// The input's tick number.
+    pub tick: u64,
 }
 
 /// The session timed out before reaching the stage it waited for.
@@ -106,18 +113,27 @@ impl fmt::Display for TimedOut {
     }
 }
 
+/// How this tick's input describes the player's move.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Report {
+    /// The scripted session, standing on the ground, as in M2.
+    Standing,
+    /// The scripted session, walking (or flying) east on its own.
+    Walking,
+    /// The window: however far the player moved since the last input.
+    Moved,
+}
+
 pub struct Session {
     client: LocalClientEnd,
     stage: Stage,
     spawn: Option<Spawn>,
-    /// The eye position the host reports each tick.
-    position: Vector3<f32>,
-    /// The position the last input reported, for its movement `delta`.
-    reported: Vector3<f32>,
-    /// The camera's pitch and yaw, once a window drives the host. Until
-    /// then the scripted session faces where `StartGame` put it, or east
-    /// while walking.
-    look: Option<(f32, f32)>,
+    /// Everything the server has said about the game.
+    game: Game,
+    /// The eyes the last input reported, for the next one's `delta`.
+    reported: Option<DVec3>,
+    /// The last input that reported a teleport, until it's taken.
+    teleport_report: Option<TeleportReport>,
     /// Ticks of input sent so far; also the input packets' tick number.
     input_tick: u64,
     /// Ticks of moving east still to do, and how far each one goes.
@@ -127,11 +143,9 @@ pub struct Session {
     chunk_radius: i32,
     /// `LevelChunk` packets received, decoded or not.
     level_chunks: u32,
-    /// The client's picture of the world, built from the packets.
-    world: World,
     /// `LevelChunk` packets the world decoded and stored.
     chunks_decoded: u32,
-    /// Packets the world couldn't apply.
+    /// Packets the game couldn't apply.
     world_errors: u32,
     /// From `StartGame`: whether block network ids are hashes. Our id table
     /// assumes they are.
@@ -158,15 +172,14 @@ impl Session {
             client,
             stage: Stage::LoggingIn,
             spawn: None,
-            position: Vector3::new(0.0, 0.0, 0.0),
-            reported: Vector3::new(0.0, 0.0, 0.0),
-            look: None,
+            game: Game::default(),
+            reported: None,
+            teleport_report: None,
             input_tick: 0,
             walk_ticks: 0,
             step: WALK_STEP,
             chunk_radius,
             level_chunks: 0,
-            world: World::new(),
             chunks_decoded: 0,
             world_errors: 0,
             ids_hashed: None,
@@ -196,8 +209,22 @@ impl Session {
         &self.stats
     }
 
+    pub const fn game(&self) -> &Game {
+        &self.game
+    }
+
+    pub const fn game_mut(&mut self) -> &mut Game {
+        &mut self.game
+    }
+
+    /// The world: a shortcut, so the checks read as they did before `Game`.
     pub const fn world(&self) -> &World {
-        &self.world
+        self.game.world()
+    }
+
+    /// The world, for a window that tracks its changes.
+    pub const fn world_mut(&mut self) -> &mut World {
+        self.game.world_mut()
     }
 
     pub const fn chunks_decoded(&self) -> u32 {
@@ -212,19 +239,30 @@ impl Session {
         self.ids_hashed
     }
 
-    /// The eye position the host is reporting.
-    pub const fn position(&self) -> Vector3<f32> {
-        self.position
+    /// The eye position the host is at.
+    pub fn position(&self) -> Vector3<f32> {
+        let eyes = self.game.player().map_or(DVec3::ZERO, |player| player.pose().eyes());
+        Vector3::new(eyes.x as f32, eyes.y as f32, eyes.z as f32)
     }
 
     pub const fn start_game(&self) -> Option<&CStartGame> {
         self.start_game.as_ref()
     }
 
+    /// The last input that reported a teleport, since
+    /// [`Self::forget_teleport_report`].
+    pub const fn teleport_report(&self) -> Option<TeleportReport> {
+        self.teleport_report
+    }
+
+    pub const fn forget_teleport_report(&mut self) {
+        self.teleport_report = None;
+    }
+
     /// Walks east (+X) for `ticks` ticks, starting next tick.
     ///
-    /// Only the reported position moves; there is no client physics yet, and
-    /// the server trusts what the client reports. This tests the transport.
+    /// A script, not physics: the player moves by a fixed step each tick, and
+    /// the server trusts what the client reports. It tests the transport.
     pub const fn walk(&mut self, ticks: u32) {
         self.walk_ticks = ticks;
         self.step = WALK_STEP;
@@ -237,19 +275,23 @@ impl Session {
     /// collision check, so this is a straight line through the air. Flying
     /// above the terrain keeps the server from suffocating the player in a
     /// hillside.
-    pub const fn fly_east(&mut self, ticks: u32, eye_y: f32) {
+    pub fn fly_east(&mut self, ticks: u32, eye_y: f32) {
         self.rise_to(eye_y);
         self.walk_ticks = ticks;
         self.step = FLY_STEP;
     }
 
-    /// Reports the eyes at `eye_y` from the next tick on, x and z unchanged.
+    /// Puts the eyes at `eye_y`, x and z unchanged, from the next input on.
     ///
-    /// The host has no physics: its scripted walk keeps one height, so it can
+    /// The scripted host has no physics: its walk keeps one height, so it can
     /// end up with its head in a hillside, where the server suffocates it.
     /// Up in the air it can stay as long as a measurement needs.
-    pub const fn rise_to(&mut self, eye_y: f32) {
-        self.position.y = eye_y;
+    pub fn rise_to(&mut self, eye_y: f32) {
+        if let Some(player) = self.game.player_mut() {
+            let mut pose = player.pose();
+            pose.feet.y = f64::from(eye_y) - EYE_HEIGHT;
+            player.place(pose);
+        }
     }
 
     pub const fn is_walking(&self) -> bool {
@@ -270,19 +312,6 @@ impl Session {
                 start_game.player_gamemode
             );
         }
-    }
-
-    /// Reports the camera's pose from the next input on: its eye position,
-    /// and its pitch and yaw in Bedrock's angles. The server streams chunks
-    /// around wherever the host is, so the host follows the camera.
-    pub const fn set_pose(&mut self, eye: Vector3<f32>, pitch: f32, yaw: f32) {
-        self.position = eye;
-        self.look = Some((pitch, yaw));
-    }
-
-    /// The world, for a window that tracks its changes.
-    pub const fn world_mut(&mut self) -> &mut World {
-        &mut self.world
     }
 
     /// Runs ticks until `done` returns true or `deadline` passes.
@@ -310,36 +339,50 @@ impl Session {
         }
     }
 
-    /// One tick: handle everything that arrived, then send this tick's input.
+    /// One scripted tick: handle everything that arrived, step the game with
+    /// the script's motion, and send this tick's input.
     ///
     /// Public so long work on the main thread (the measurements) can call it
     /// in between: the server drops a client it hasn't heard from in 10 s.
     pub fn tick(&mut self) {
         self.drain();
-        if self.stage == Stage::Disconnected {
-            return;
-        }
-        self.send_input();
+        let (motion, report) = self.scripted();
+        self.step_with(motion, report);
     }
 
-    /// Sends this tick's `PlayerAuthInput`: one every 50 ms, whatever the
-    /// frame rate.
-    ///
+    /// One tick for the window: steps the game with `motion`, and sends the
+    /// input that reports it. One every 50 ms, whatever the frame rate.
+    pub fn step(&mut self, motion: Motion) {
+        self.step_with(motion, Report::Moved);
+    }
+
     /// Input starts with `StartGame`: the server ignores it until the player
     /// has loaded, but any packet keeps its 10 s timeout away.
-    pub fn send_input(&mut self) {
-        if self.spawn.is_none() || self.stage == Stage::Disconnected {
+    fn step_with(&mut self, motion: Motion, report: Report) {
+        if self.stage == Stage::Disconnected || self.game.player().is_none() {
             return;
         }
-        let walking = self.walk_ticks > 0;
-        if walking {
-            self.position.x += self.step;
-            self.walk_ticks -= 1;
+        self.game.tick(motion);
+        if let Some(input) = self.input(report) {
+            self.send(&input);
+            self.input_tick += 1;
         }
-        let input = self.input(walking);
-        self.send(&input);
-        self.reported = self.position;
-        self.input_tick += 1;
+    }
+
+    /// The scripted session's motion this tick: a step east while it walks,
+    /// standing still otherwise.
+    fn scripted(&mut self) -> (Motion, Report) {
+        let Some(player) = self.game.player() else {
+            return (Motion::Still, Report::Standing);
+        };
+        if self.walk_ticks == 0 {
+            return (Motion::Still, Report::Standing);
+        }
+        self.walk_ticks -= 1;
+        let mut pose = player.pose();
+        pose.feet.x += f64::from(self.step);
+        pose.yaw = YAW_EAST;
+        (Motion::To(pose), Report::Walking)
     }
 
     /// Handles everything that has arrived, without sending input. Called on
@@ -401,13 +444,6 @@ impl Session {
                 Ok(update) => info!("Chunk radius is {}", update.chunk_radius.0),
                 Err(err) => warn!("Bad ChunkRadiusUpdated: {err}"),
             },
-            CLevelChunk::PACKET_ID => {
-                self.level_chunks += 1;
-                self.apply_to_world(packet);
-            }
-            CUpdateBlock::PACKET_ID | CNetworkChunkPublisherUpdate::PACKET_ID => {
-                self.apply_to_world(packet);
-            }
             CDisconnect::PACKET_ID => {
                 match self.decode::<CDisconnect>(packet) {
                     Ok(disconnect) => warn!(
@@ -418,7 +454,12 @@ impl Session {
                 }
                 self.stage = Stage::Disconnected;
             }
-            _ => {}
+            id => {
+                if id == CLevelChunk::PACKET_ID {
+                    self.level_chunks += 1;
+                }
+                self.apply(packet);
+            }
         }
     }
 
@@ -431,15 +472,21 @@ impl Session {
         decoded
     }
 
-    /// Hands a packet to the world, timing the decode into the stats.
-    fn apply_to_world(&mut self, packet: &RawPacket) {
+    /// Hands a packet to the game, timing the ones it uses into the stats.
+    fn apply(&mut self, packet: &RawPacket) {
         let start = Instant::now();
-        let applied = self.world.apply(packet);
-        self.stats.record_decode(packet.id, start.elapsed());
+        let applied = self.game.apply(packet);
+        let took = start.elapsed();
         match applied {
-            Ok(Applied::Chunk { .. }) => self.chunks_decoded += 1,
-            Ok(_) => {}
+            Ok(Effect::Ignored) => {}
+            Ok(effect) => {
+                self.stats.record_decode(packet.id, took);
+                if let Effect::World(Applied::Chunk { .. }) = effect {
+                    self.chunks_decoded += 1;
+                }
+            }
             Err(err) => {
+                self.stats.record_decode(packet.id, took);
                 self.world_errors += 1;
                 warn!("{err}");
             }
@@ -450,8 +497,6 @@ impl Session {
         let spawn = Spawn {
             runtime_id: start_game.runtime_entity_id.0,
             eye_position: start_game.position,
-            pitch: start_game.pitch,
-            yaw: start_game.yaw,
         };
         let settings = &start_game.level_settings;
         let block = settings.spawn_position.0;
@@ -472,7 +517,7 @@ impl Session {
             warn!("StartGame says block ids aren't hashed; the world's id table expects hashes");
         }
         self.ids_hashed = Some(start_game.blocknetwork_ids_are_hashed);
-        self.position = spawn.eye_position;
+        self.game.start(&start_game);
         self.spawn = Some(spawn);
         self.start_game = Some(start_game);
         self.stage = Stage::Spawning;
@@ -504,39 +549,57 @@ impl Session {
         });
     }
 
-    /// This tick's `PlayerAuthInput`.
+    /// This tick's `PlayerAuthInput`, from the player as the game has it.
     ///
     /// Scripted, the host is on the ground, standing or walking east: the
     /// position, `delta` and `move_vec` move together, as they would from the
-    /// official client holding "forward" facing east. Driven by a camera, it
-    /// reports the camera's pose, and how far it moved since the last input.
-    fn input(&self, walking: bool) -> SPlayerAuthInput {
-        let (spawn_pitch, spawn_yaw) = self
-            .spawn
-            .map_or((0.0, 0.0), |spawn| (spawn.pitch, spawn.yaw));
+    /// official client holding "forward" facing east. From a window, it
+    /// reports how far the player moved since the last input. Step 6 makes
+    /// the flags and `delta` what the official client sends.
+    ///
+    /// The first input after a teleport says it was handled, with the new
+    /// position and no movement (m5-plan Results, Step 1).
+    fn input(&mut self, report: Report) -> Option<SPlayerAuthInput> {
+        let player = self.game.player_mut()?;
+        let pose = player.pose();
+        let teleported = player.take_teleported();
+        let eyes = pose.eyes();
+        let position = Vector3::new(eyes.x as f32, eyes.y as f32, eyes.z as f32);
         // The flags the official client sets while on the ground.
         let mut input_data = Bitset::<66>::default();
         input_data.set(InputData::BlockBreakingDelayEnabled as usize, true);
         input_data.set(InputData::VerticalCollision as usize, true);
         let still = Vector2::new(0.0, 0.0);
-        let (pitch, yaw, move_vec, delta) = match self.look {
-            Some((pitch, yaw)) => {
-                let (now, then) = (self.position, self.reported);
-                let moved = Vector3::new(now.x - then.x, now.y - then.y, now.z - then.z);
-                (pitch, yaw, still, moved)
+        let (move_vec, delta) = if teleported {
+            input_data.set(InputData::HandledTeleport as usize, true);
+            (still, Vector3::new(0.0, 0.0, 0.0))
+        } else {
+            match report {
+                Report::Standing => (still, Vector3::new(0.0, STANDING_DELTA_Y, 0.0)),
+                Report::Walking => {
+                    input_data.set(InputData::Up as usize, true);
+                    (Vector2::new(0.0, 1.0), Vector3::new(self.step, STANDING_DELTA_Y, 0.0))
+                }
+                Report::Moved => {
+                    let moved = eyes - self.reported.unwrap_or(eyes);
+                    (still, Vector3::new(moved.x as f32, moved.y as f32, moved.z as f32))
+                }
             }
-            None if walking => {
-                input_data.set(InputData::Up as usize, true);
-                let delta = Vector3::new(self.step, STANDING_DELTA_Y, 0.0);
-                (spawn_pitch, YAW_EAST, Vector2::new(0.0, 1.0), delta)
-            }
-            None => (spawn_pitch, spawn_yaw, still, Vector3::new(0.0, STANDING_DELTA_Y, 0.0)),
         };
+        self.reported = Some(eyes);
+        if teleported {
+            self.teleport_report = Some(TeleportReport {
+                eyes: position,
+                delta,
+                tick: self.input_tick,
+            });
+        }
+        let (pitch, yaw) = (pose.pitch, pose.yaw);
         let forward = look_direction(pitch, yaw);
-        SPlayerAuthInput {
+        Some(SPlayerAuthInput {
             pitch,
             yaw,
-            position: self.position,
+            position,
             move_vec,
             head_yaw: yaw,
             input_data,
@@ -555,7 +618,7 @@ impl Session {
             analog_move: Vector2::new(0.0, 0.0),
             camera_orientation: Vector3::new(forward.x, forward.y, forward.z),
             raw_move: move_vec,
-        }
+        })
     }
 
     /// Frames and queues one packet for the server.
@@ -581,4 +644,3 @@ impl Session {
         }
     }
 }
-

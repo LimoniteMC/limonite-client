@@ -40,6 +40,24 @@ pub fn look_direction(pitch: f32, yaw: f32) -> Vec3 {
     Vec3::new(-yaw.sin() * pitch.cos(), -pitch.sin(), yaw.cos() * pitch.cos())
 }
 
+/// The way `movement` flies, facing `yaw`, as a unit vector: forward and
+/// right follow the yaw only, so looking down doesn't fly into the ground.
+/// Zero when nothing is held.
+#[must_use]
+pub fn fly_direction(movement: Movement, yaw: f32) -> DVec3 {
+    let yaw = f64::from(yaw).to_radians();
+    let forward = DVec3::new(-yaw.sin(), 0.0, yaw.cos());
+    // Right of forward, with y up: forward × up.
+    let right = forward.cross(DVec3::Y);
+    (forward * movement.forward + right * movement.right + DVec3::Y * movement.up).normalize_or_zero()
+}
+
+/// How fast `movement` flies, in blocks a second.
+#[must_use]
+pub fn fly_speed(movement: Movement) -> f64 {
+    FLY_SPEED * if movement.fast { FAST } else { 1.0 }
+}
+
 /// Which way the camera wants to move this frame, each axis from -1 to 1.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Movement {
@@ -90,18 +108,10 @@ impl Camera {
         self.pitch = (self.pitch + dy as f32 * MOUSE_DEGREES).clamp(-MAX_PITCH, MAX_PITCH);
     }
 
-    /// Moves for `seconds` of flight. Forward and right follow the yaw only,
-    /// so looking down doesn't fly into the ground.
+    /// Moves for `seconds` of flight: only the bench's camera flies itself
+    /// now; otherwise it follows the player.
     pub fn fly(&mut self, movement: Movement, seconds: f64) {
-        let yaw = f64::from(self.yaw).to_radians();
-        let forward = DVec3::new(-yaw.sin(), 0.0, yaw.cos());
-        // Right of forward, with y up: forward × up.
-        let right = forward.cross(DVec3::Y);
-        let direction = forward * movement.forward + right * movement.right + DVec3::Y * movement.up;
-        if direction.length_squared() > 0.0 {
-            let speed = FLY_SPEED * if movement.fast { FAST } else { 1.0 };
-            self.position += direction.normalize() * speed * seconds;
-        }
+        self.position += fly_direction(movement, self.yaw) * fly_speed(movement) * seconds;
     }
 
     /// Rotation only: the camera stays at the origin (camera-relative

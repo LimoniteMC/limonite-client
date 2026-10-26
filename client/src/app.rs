@@ -9,9 +9,13 @@
 //! `PlayerAuthInput` every 50 ms, as the official client does, and the
 //! server drops a client it hasn't heard from in 10 s. Frames come at the
 //! display's rate while the window is visible, and not at all while it's
-//! minimised. So `about_to_wait` sends the ticks that are due, whatever
+//! minimised. So `about_to_wait` runs the ticks that are due, whatever
 //! happened to frames, and then asks winit to wake it at the next tick at
 //! the latest (`ControlFlow::WaitUntil`).
+//!
+//! Each tick moves the player once; each frame draws it between its last
+//! two ticks' poses, and turns the camera by the mouse (m5-plan Decision 3,
+//! `clock.rs`).
 
 use std::{
     collections::HashMap,
@@ -20,8 +24,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use glam::DVec3;
-use pumpkin_util::math::vector3::Vector3;
 use tracing::{debug, error, info, warn};
 use winit::{
     application::ApplicationHandler,
@@ -35,8 +37,10 @@ use winit::{
 use crate::{
     bench::{Bench, Sample},
     blocks::{self, appearance::AppearanceTable},
+    clock::Ticks,
     embedded::EmbeddedServer,
     input::{Action, Button, Input, PIXELS_PER_NOTCH},
+    player::{EYE_HEIGHT, Motion, Pose},
     render::{
         Frame, Gpu, Needs,
         camera::{Camera, FOV_Y},
@@ -45,7 +49,7 @@ use crate::{
         textures::TextureArray,
         tint::Tints,
     },
-    session::{Session, Stage, TICK},
+    session::{Session, Stage},
     settings::Settings,
 };
 
@@ -59,13 +63,8 @@ pub struct Assets {
     pub stand_ins: HashMap<u32, String>,
 }
 
-/// After a stall, at most this many overdue ticks are sent at once. The rest
-/// are skipped: a burst of inputs would only make the server's player jump.
-const MAX_CATCH_UP: u32 = 3;
-/// Bedrock's eye height above the feet, for `/tp`, which places the feet.
-const EYE_HEIGHT: f64 = 1.62;
-/// The longest step the camera takes in one frame, so a hitch doesn't fling
-/// it far away.
+/// The longest step the bench's camera takes in one frame, so a hitch doesn't
+/// fling it far away.
 const MAX_FRAME_SECONDS: f64 = 0.25;
 
 /// Opens the window, joins the embedded server as the host with this
@@ -128,13 +127,14 @@ pub struct App<'a> {
     stand_ins: Option<HashMap<u32, String>>,
     meshes: Meshes,
     terrain: Option<Terrain>,
-    /// Placed where `StartGame` put the host, once it has spawned.
+    /// Placed where `StartGame` put the host, once it has spawned. It draws
+    /// the player's eyes, except during the bench, which flies it.
     camera: Option<Camera>,
     input: Input,
     cursor_grabbed: bool,
     /// Whether frames can be seen: not minimised or covered.
     visible: bool,
-    next_tick: Instant,
+    ticks: Ticks,
     last_frame: Instant,
     /// Counting frames for the title, which updates once a second.
     second_started: Instant,
@@ -174,7 +174,7 @@ impl<'a> App<'a> {
             input,
             cursor_grabbed: false,
             visible: true,
-            next_tick: now,
+            ticks: Ticks::new(now),
             last_frame: now,
             second_started: now,
             frames_this_second: 0,
@@ -184,24 +184,40 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Sends the ticks that are due: one `PlayerAuthInput` per 50 ms, with
-    /// the camera's pose once there is a camera.
-    fn send_ticks(&mut self) {
-        let now = Instant::now();
-        let mut sent = 0;
-        while now >= self.next_tick {
-            if sent == MAX_CATCH_UP {
-                self.next_tick = now + TICK;
-                break;
+    /// Runs the ticks that are due: each moves the player once and sends one
+    /// `PlayerAuthInput`.
+    fn run_ticks(&mut self) {
+        for _ in 0..self.ticks.due(Instant::now()) {
+            let motion = self.motion();
+            self.session.step(motion);
+        }
+    }
+
+    /// What moves the player this tick. The keys fly it along the camera's
+    /// yaw. The bench flies the camera itself, frame by frame as in M4, so its
+    /// numbers compare with M4's, and the player just follows the camera.
+    fn motion(&self) -> Motion {
+        let Some(camera) = &self.camera else {
+            return Motion::Still;
+        };
+        if self.bench.is_some() {
+            Motion::To(Pose::from_eyes(camera.position, camera.pitch, camera.yaw))
+        } else {
+            Motion::Fly {
+                movement: self.input.movement(),
+                pitch: camera.pitch,
+                yaw: camera.yaw,
             }
-            if let Some(camera) = &self.camera {
-                let eye = camera.position.as_vec3();
-                self.session
-                    .set_pose(Vector3::new(eye.x, eye.y, eye.z), camera.pitch, camera.yaw);
-            }
-            self.session.send_input();
-            self.next_tick += TICK;
-            sent += 1;
+        }
+    }
+
+    /// When the server turns the player (a teleport), the camera turns with
+    /// it, before the next tick reads the camera's angles.
+    fn follow_turns(&mut self) {
+        let turned = self.session.game_mut().player_mut().and_then(|player| player.take_turned());
+        if let (Some((pitch, yaw)), Some(camera)) = (turned, &mut self.camera) {
+            camera.pitch = pitch;
+            camera.yaw = yaw;
         }
     }
 
@@ -210,15 +226,11 @@ impl<'a> App<'a> {
         if self.camera.is_some() || self.session.stage() != Stage::Spawned {
             return;
         }
-        let Some(spawn) = self.session.spawn() else {
+        let Some(player) = self.session.game().player() else {
             return;
         };
-        let eye = spawn.eye_position;
-        let mut camera = Camera::new(
-            DVec3::new(f64::from(eye.x), f64::from(eye.y), f64::from(eye.z)),
-            spawn.pitch,
-            spawn.yaw,
-        );
+        let pose = player.pose();
+        let mut camera = Camera::new(pose.eyes(), pose.pitch, pose.yaw);
         if let Some(window) = &self.window {
             let size = window.inner_size();
             camera.aspect = aspect(size);
@@ -296,14 +308,19 @@ impl<'a> App<'a> {
         }
         let (dx, dy) = self.input.take_mouse();
         let sensitivity = self.settings.mouse_sensitivity;
+        let alpha = self.ticks.alpha(now);
         if let Some(camera) = &mut self.camera {
             match &self.bench {
                 Some(bench) => camera.fly(bench.movement(), seconds),
                 None => {
+                    // Looking around turns the camera every frame; moving
+                    // shows the player between its last two ticks.
                     if self.cursor_grabbed {
                         camera.turn(dx * sensitivity, dy * sensitivity);
                     }
-                    camera.fly(self.input.movement(), seconds);
+                    if let Some(player) = self.session.game().player() {
+                        camera.position = player.eyes_at(alpha);
+                    }
                 }
             }
         }
@@ -375,14 +392,15 @@ impl<'a> App<'a> {
             let server = player.position();
             debug!(
                 "Camera eyes at ({:.2}, {:.2}, {:.2}); the server's player feet at ({:.2}, {:.2}, {:.2}); \
-                 {} LevelChunks so far",
+                 {} LevelChunks so far; time of day {:?}",
                 p.x,
                 p.y,
                 p.z,
                 server.x,
                 server.y,
                 server.z,
-                self.session.level_chunks()
+                self.session.level_chunks(),
+                self.session.game().time().get(),
             );
         }
     }
@@ -498,7 +516,8 @@ impl ApplicationHandler for App<'_> {
             return;
         }
         self.place_camera();
-        self.send_ticks();
+        self.follow_turns();
+        self.run_ticks();
 
         // Meshing, within its budget: what changed in the world, nearest
         // the camera first.
@@ -533,6 +552,6 @@ impl ApplicationHandler for App<'_> {
         {
             window.request_redraw();
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_tick));
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.ticks.next()));
     }
 }

@@ -23,8 +23,9 @@ use pumpkin_world::{chunk::palette::NetworkPalette, world::BlockFlags};
 use tracing::{info, warn};
 
 use crate::{
+    clock::TICK,
     packets::PacketName,
-    session::{FLY_STEP, Session, TICK},
+    session::{FLY_STEP, Session},
     world::{AIR, level_chunk},
 };
 

@@ -2,7 +2,9 @@ mod app;
 mod bench;
 mod blocks;
 mod checks;
+mod clock;
 mod embedded;
+mod game;
 mod home;
 mod identity;
 mod input;
@@ -11,6 +13,7 @@ mod login;
 mod map;
 mod measure;
 mod packets;
+mod player;
 mod render;
 mod session;
 mod settings;
@@ -26,17 +29,18 @@ use std::{
     time::{Duration, Instant},
 };
 
-use pumpkin_util::math::vector2::Vector2;
+use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
 use pumpkin_world::{CURRENT_BEDROCK_MC_PROTOCOL, CURRENT_BEDROCK_MC_VERSION};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
 use crate::{
     checks::Check,
+    clock::TICK,
     embedded::{EmbeddedServer, HostOperator},
     home::Home,
     identity::Identity,
-    session::{Session, Stage, TICK},
+    session::{Session, Stage},
     settings::{MAX_RADIUS, MIN_RADIUS, Overrides, Settings},
     world::World,
 };
@@ -53,6 +57,10 @@ const SPAWN_DEADLINE: Duration = Duration::from_secs(120);
 const WALK_TICKS: u32 = 40;
 /// How long to wait for the server to apply the walk before checking it.
 const SETTLE: Duration = Duration::from_secs(5);
+/// How far up the teleport check moves the host, in blocks.
+const TELEPORT_UP: f64 = 5.0;
+/// How long the client has to arrive and report a teleport (m5-plan Step 5).
+const TELEPORT_DEADLINE: Duration = Duration::from_secs(1);
 /// The join is over once no chunk has arrived for this long...
 const CHUNKS_QUIET: Duration = Duration::from_secs(2);
 /// ...or after this, whichever comes first. A radius-32 join into a fresh
@@ -378,6 +386,7 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             session.check_gamemode(settings.gamemode);
             checks.push(walk_and_check(&mut session, server, &spawn));
             checks.push(checks::operator(&server.server, login::host_uuid(&settings.name, identity.xid())));
+            checks.push(teleport_and_check(&mut session, server));
             if args.measure || args.stream.is_some() {
                 // These runs stay a minute or more. A host left standing
                 // with its head in terrain dies in about 10 s, and the server
@@ -398,7 +407,7 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             true
         }
         _ => {
-            for name in ["movement", "operator"] {
+            for name in ["movement", "operator", "teleport"] {
                 checks.push(Check::new(name, false, "not checked: never spawned".to_string()));
             }
             false
@@ -485,6 +494,27 @@ fn walk_and_check(session: &mut Session, server: &EmbeddedServer, spawn: &sessio
         checks::movement(&server.server, spawn).passed()
     });
     checks::movement(&server.server, spawn)
+}
+
+/// Asks the server to move the host [`TELEPORT_UP`] blocks up, as `/tp` does,
+/// then runs ticks until an input reports the teleport, for up to
+/// [`TELEPORT_DEADLINE`], and checks the report.
+fn teleport_and_check(session: &mut Session, server: &EmbeddedServer) -> Check {
+    let players = server.server.get_all_players();
+    let Some(player) = players.first() else {
+        return Check::new("teleport", false, "the server has no player".to_string());
+    };
+    let entity = &player.living_entity.entity;
+    let from = player.position();
+    let to = Vector3::new(from.x, from.y + TELEPORT_UP, from.z);
+    // Where the server puts the eyes: it sends the feet plus its eye height.
+    let eyes = Vector3::new(to.x, to.y + f64::from(entity.entity_type.eye_height), to.z);
+    info!("Teleporting the host {TELEPORT_UP} blocks up");
+    session.forget_teleport_report();
+    let asked = Instant::now();
+    player.request_teleport(to, entity.yaw.load(), entity.pitch.load());
+    let _ = session.run_until(asked + TELEPORT_DEADLINE, |s| s.teleport_report().is_some());
+    checks::teleport(session.teleport_report(), eyes, asked.elapsed())
 }
 
 /// Compares every decoded chunk the server still has loaded with the

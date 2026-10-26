@@ -3,20 +3,24 @@
 //! M2's "no socket is opened" can't be made from inside the process; it's
 //! done from outside while the session lingers.
 
+use std::time::Duration;
+
 use pumpkin_core::{net::bedrock::level_chunk::CLevelChunk, server::Server};
 use pumpkin_data::{Block, BlockState, BlockStateId, biome::Biome};
-use pumpkin_util::PermissionLvl;
+use pumpkin_util::{PermissionLvl, math::vector3::Vector3};
 use pumpkin_world::chunk::{ChunkData, palette::bedrock_water_state};
 use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
-    session::{Session, Spawn},
+    session::{Session, Spawn, TeleportReport},
     world::{BlockTable, chunk::Chunk, level_chunk},
 };
 
 /// How far east the host must have moved, as the server sees it.
 pub const MIN_MOVE: f64 = 4.0;
+/// How close to the server's teleport the client's report must be, in blocks.
+const TELEPORT_TOLERANCE: f64 = 0.01;
 
 pub struct Check {
     name: &'static str,
@@ -63,6 +67,41 @@ pub fn movement(server: &Server, spawn: &Spawn) -> Check {
             "the server's player moved {moved:.2} blocks east (needs {MIN_MOVE}); \
              feet y {start_feet_y:.2} -> {:.2}",
             now.y
+        ),
+    )
+}
+
+/// Whether the client went where the server teleported it, and said so in
+/// its next input, as the official client does: `HandledTeleport`, the new
+/// eye position, and a `delta` of 0 (m5-plan Step 5).
+pub fn teleport(report: Option<TeleportReport>, expected_eyes: Vector3<f64>, waited: Duration) -> Check {
+    const NAME: &str = "teleport";
+    let Some(report) = report else {
+        return Check::new(
+            NAME,
+            false,
+            format!("no input reported the teleport within {:.1} s", waited.as_secs_f64()),
+        );
+    };
+    let eyes = report.eyes;
+    let off = ((f64::from(eyes.x) - expected_eyes.x).powi(2)
+        + (f64::from(eyes.y) - expected_eyes.y).powi(2)
+        + (f64::from(eyes.z) - expected_eyes.z).powi(2))
+    .sqrt();
+    let delta = report.delta;
+    let still = delta.x == 0.0 && delta.y == 0.0 && delta.z == 0.0;
+    Check::new(
+        NAME,
+        off < TELEPORT_TOLERANCE && still,
+        format!(
+            "input {} reported HandledTeleport {:.0} ms after the server's teleport, with the eyes \
+             {off:.4} blocks from where the server put them (needs under {TELEPORT_TOLERANCE}) and a \
+             delta of ({}, {}, {})",
+            report.tick,
+            waited.as_secs_f64() * 1000.0,
+            delta.x,
+            delta.y,
+            delta.z
         ),
     )
 }

@@ -99,7 +99,7 @@ packet_names!(
 
 /// A clientbound packet id that prints as its Pumpkin type name, or
 /// `Unknown(id)`.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PacketName(pub i32);
 
 impl PacketName {
