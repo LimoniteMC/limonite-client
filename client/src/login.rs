@@ -14,30 +14,30 @@ use pumpkin_protocol::bedrock::server::login::SLogin;
 use pumpkin_world::CURRENT_BEDROCK_MC_PROTOCOL;
 use serde_json::{Value, json};
 
-/// The fixed development identity until M5 brings a per-install one.
-///
-/// The server derives the player's UUID from this, so player data (inventory,
-/// position) in dev worlds won't carry over when it changes.
-pub const DEV_XID: &str = "1000000000000001";
-
 /// The login `AuthenticationType` the official client sends (0, "Full").
 /// Offline, the server only checks that it's a known value.
 const AUTHENTICATION_TYPE: u8 = 0;
 
-/// Builds the host's `SLogin` for display name `name`.
-pub fn host_login(name: &str) -> SLogin {
-    let token = unsecured_jwt(&json!({
-        "xname": name,
-        "xid": DEV_XID,
-        "cpk": placeholder_cpk(),
-    }));
-    let jwt = json!({ "AuthenticationType": AUTHENTICATION_TYPE, "Token": token });
+/// Builds the host's `SLogin` for display name `name` and this install's Xbox
+/// user id `xid` (`identity.rs`).
+pub fn host_login(name: &str, xid: &str) -> SLogin {
+    let jwt = json!({ "AuthenticationType": AUTHENTICATION_TYPE, "Token": host_token(name, xid) });
 
     SLogin {
         protocol_version: CURRENT_BEDROCK_MC_PROTOCOL as i32,
         jwt: jwt.to_string().into_bytes(),
         raw_token: unsecured_jwt(&client_data()).into_bytes(),
     }
+}
+
+/// The identity token in the host's login: the claims the server reads the
+/// player's name and `xid` from, and derives their UUID from.
+pub fn host_token(name: &str, xid: &str) -> String {
+    unsecured_jwt(&json!({
+        "xname": name,
+        "xid": xid,
+        "cpk": placeholder_cpk(),
+    }))
 }
 
 /// The `ClientData` claims: the 10 fields the server requires.
@@ -84,6 +84,9 @@ mod tests {
 
     use super::*;
 
+    /// M4's fixed development identity.
+    const XID: &str = "1000000000000001";
+
     fn token(login: &SLogin) -> String {
         let jwt: Value = serde_json::from_slice(&login.jwt).unwrap();
         assert_eq!(jwt["AuthenticationType"], 0);
@@ -92,20 +95,20 @@ mod tests {
 
     #[test]
     fn the_server_reads_our_name_and_xid() {
-        let claims = extract_oidc_token_player_claims(&token(&host_login("Limonite"))).unwrap();
+        let claims = extract_oidc_token_player_claims(&token(&host_login("Limonite", XID))).unwrap();
         assert_eq!(claims.display_name, "Limonite");
-        assert_eq!(claims.xuid, DEV_XID);
+        assert_eq!(claims.xuid, XID);
     }
 
     #[test]
     fn the_server_accepts_our_cpk() {
-        let cpk = extract_cpk_from_token(&token(&host_login("Limonite"))).unwrap();
+        let cpk = extract_cpk_from_token(&token(&host_login("Limonite", XID))).unwrap();
         assert_eq!(cpk.as_affine(), &AffinePoint::GENERATOR);
     }
 
     #[test]
     fn the_server_parses_our_client_data() {
-        let login = host_login("Limonite");
+        let login = host_login("Limonite", XID);
         let raw_token = std::str::from_utf8(&login.raw_token).unwrap();
         let payload = raw_token.split('.').nth(1).unwrap();
         let client_data: ClientData =
@@ -117,7 +120,7 @@ mod tests {
 
     #[test]
     fn tokens_are_unsecured_jwts() {
-        let login = host_login("Limonite");
+        let login = host_login("Limonite", XID);
         for jwt in [token(&login), String::from_utf8(login.raw_token).unwrap()] {
             let parts: Vec<_> = jwt.split('.').collect();
             assert_eq!(parts.len(), 3);

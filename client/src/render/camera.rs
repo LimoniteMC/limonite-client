@@ -26,8 +26,9 @@ const MOUSE_DEGREES: f32 = 0.15;
 /// Pitch stops short of straight up or down, where "forward" and "up" would
 /// be the same direction and the view matrix would be undefined.
 const MAX_PITCH: f32 = 89.9;
-/// The vertical field of view, in degrees.
-const FOV_Y: f32 = 70.0;
+/// The vertical field of view a camera starts with, in degrees. The settings
+/// can change it.
+pub const FOV_Y: f32 = 70.0;
 /// The near and far planes, in blocks.
 const NEAR: f32 = 0.05;
 const FAR: f32 = 2048.0;
@@ -59,6 +60,8 @@ pub struct Camera {
     pub yaw: f32,
     /// Width over height of the window.
     pub aspect: f32,
+    /// The vertical field of view, in degrees.
+    pub fov_y: f32,
 }
 
 impl Camera {
@@ -69,6 +72,7 @@ impl Camera {
             pitch,
             yaw,
             aspect: 16.0 / 9.0,
+            fov_y: FOV_Y,
         }
     }
 
@@ -112,7 +116,7 @@ impl Camera {
     /// `directx`.
     #[must_use]
     pub fn projection(&self) -> Mat4 {
-        camera::rh::proj::directx::perspective(FOV_Y.to_radians(), self.aspect, NEAR, FAR)
+        camera::rh::proj::directx::perspective(self.fov_y.to_radians(), self.aspect, NEAR, FAR)
     }
 
     #[must_use]

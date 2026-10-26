@@ -3,6 +3,8 @@ mod bench;
 mod blocks;
 mod checks;
 mod embedded;
+mod home;
+mod identity;
 mod input;
 mod install;
 mod login;
@@ -32,21 +34,18 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use crate::{
     checks::Check,
     embedded::EmbeddedServer,
+    home::Home,
+    identity::Identity,
     session::{Session, Stage, TICK},
-    settings::Settings,
+    settings::{MAX_RADIUS, MIN_RADIUS, Overrides, Settings},
     world::World,
 };
 
-const USAGE: &str = "usage: limonite-client [--bedrock <path>] [--data-dir <path>] [--name <name>] \
-                     [--gamemode <mode>] [--radius <chunks>] [--bench <seconds>]\n       \
-                     limonite-client --headless [--data-dir <path>] [--name <name>] \
+const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [--data-dir <path>] \
+                     [--name <name>] [--gamemode <mode>] [--radius <chunks>] [--bench <seconds>]\n       \
+                     limonite-client --headless [--home <path>] [--data-dir <path>] [--name <name>] \
                      [--gamemode <mode>] [--radius <chunks>] [--linger <seconds>] [--measure] \
                      [--map <path.png>] [--stream <blocks>]";
-
-/// The view distance asked for without `--radius`, in chunks.
-const DEFAULT_RADIUS: i32 = 8;
-/// The most `--radius` accepts: the embedded server's Bedrock view distance.
-const MAX_RADIUS: i32 = 32;
 
 /// Login and spawn must finish within this.
 const SPAWN_DEADLINE: Duration = Duration::from_secs(120);
@@ -73,12 +72,13 @@ struct Args {
     headless: bool,
     /// The Bedrock install: the folder that holds `data/resource_packs`.
     bedrock: Option<PathBuf>,
-    /// What the player chose: the host's gamemode, from `--gamemode`.
-    settings: Settings,
+    /// The home folder: the settings and this install's identity.
+    home: PathBuf,
     /// Where the embedded server keeps its world and data files.
     data_dir: PathBuf,
-    /// The host's display name.
-    name: String,
+    /// What `--name`, `--radius` and `--gamemode` change in the settings for
+    /// this run.
+    overrides: Overrides,
     /// How long to stay in the world after the checks, still sending input,
     /// so the process can be inspected from outside.
     linger: Duration,
@@ -86,8 +86,6 @@ struct Args {
     measure: bool,
     /// Where to write a top-down PNG map of the loaded chunks.
     map: Option<PathBuf>,
-    /// The view distance to ask for, in chunks.
-    radius: i32,
     /// After the join, fly this many blocks east and log how chunks stream.
     stream: Option<u32>,
     /// Fly the window's camera east for this long, log the frame times, and
@@ -99,15 +97,14 @@ impl Args {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut headless = false;
         let mut bedrock = None;
+        let mut home = PathBuf::from("run/home");
         let mut data_dir = PathBuf::from("run/client");
-        let mut name = "Limonite".to_string();
+        let mut overrides = Overrides::default();
         let mut linger = Duration::ZERO;
         let mut measure = false;
         let mut map = None;
-        let mut radius = DEFAULT_RADIUS;
         let mut stream = None;
         let mut bench = None;
-        let mut settings = Settings::default();
         // The scripted session's flags, which mean nothing to the window.
         let mut headless_only = Vec::new();
         while let Some(arg) = args.next() {
@@ -119,15 +116,24 @@ impl Args {
                 "--bedrock" => {
                     bedrock = Some(PathBuf::from(args.next().ok_or("--bedrock needs a path")?));
                 }
+                "--home" => home = args.next().ok_or("--home needs a path")?.into(),
                 "--data-dir" => {
                     data_dir = args.next().ok_or("--data-dir needs a path")?.into();
                 }
-                "--name" => name = args.next().ok_or("--name needs a name")?,
+                "--name" => {
+                    let name = args.next().ok_or("--name needs a name")?;
+                    if !settings::is_valid_name(&name) {
+                        return Err(format!(
+                            "--name: `{name}` isn't 1 to 16 characters without control characters"
+                        ));
+                    }
+                    overrides.name = Some(name);
+                }
                 "--gamemode" => {
                     let mode = args.next().ok_or("--gamemode needs a mode")?;
-                    settings.gamemode = mode.parse().map_err(|_| {
+                    overrides.gamemode = Some(mode.parse().map_err(|_| {
                         format!("--gamemode: `{mode}` isn't survival, creative, adventure or spectator")
-                    })?;
+                    })?);
                 }
                 "--linger" => {
                     let secs = args.next().ok_or("--linger needs a number of seconds")?;
@@ -140,11 +146,13 @@ impl Args {
                 "--map" => map = Some(PathBuf::from(args.next().ok_or("--map needs a path")?)),
                 "--radius" => {
                     let chunks = args.next().ok_or("--radius needs a number of chunks")?;
-                    radius = chunks
-                        .parse()
-                        .ok()
-                        .filter(|r| (2..=MAX_RADIUS).contains(r))
-                        .ok_or(format!("--radius: `{chunks}` isn't 2 to {MAX_RADIUS} chunks"))?;
+                    overrides.radius = Some(
+                        chunks
+                            .parse()
+                            .ok()
+                            .filter(|r| (MIN_RADIUS..=MAX_RADIUS).contains(r))
+                            .ok_or(format!("--radius: `{chunks}` isn't {MIN_RADIUS} to {MAX_RADIUS} chunks"))?,
+                    );
                 }
                 "--stream" => {
                     let blocks = args.next().ok_or("--stream needs a number of blocks")?;
@@ -182,14 +190,13 @@ impl Args {
         };
         Ok(Self {
             headless,
-            settings,
             bedrock: bedrock.as_deref().map(absolute).transpose()?,
+            home: absolute(&home)?,
             data_dir: absolute(&data_dir)?,
-            name,
+            overrides,
             linger,
             measure,
             map: map.as_deref().map(absolute).transpose()?,
-            radius,
             stream,
             bench,
         })
@@ -219,21 +226,41 @@ fn main() -> ExitCode {
         }
     };
 
+    let (settings, identity) = match open_home(&args) {
+        Ok(home) => home,
+        Err(err) => {
+            error!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+
     if args.headless {
         if args.bedrock.is_some() {
             warn!("--bedrock is unused: the scripted session reads no assets");
         }
-        headless(&args)
+        headless(&args, &settings, &identity)
     } else {
-        windowed(&args)
+        windowed(&args, settings, &identity)
     }
+}
+
+/// Opens the home folder, and reads the settings, with this run's flags
+/// applied, and this install's identity.
+fn open_home(args: &Args) -> Result<(Settings, Identity), String> {
+    let home = Home::open(args.home.clone())
+        .map_err(|err| format!("Can't use the home folder {}: {err}", args.home.display()))?;
+    info!("Home folder: {}", home.root().display());
+    let mut settings = Settings::load(&home.settings());
+    settings.apply(&args.overrides);
+    let identity = Identity::load_or_create(&home.identity())?;
+    Ok((settings, identity))
 }
 
 /// The default path: the window.
 ///
 /// The assets load first, before the server starts, so a missing install
 /// fails at once.
-fn windowed(args: &Args) -> ExitCode {
+fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
     let install = match install::find(args.bedrock.as_deref()) {
         Ok(install) => install,
         Err(err) => {
@@ -259,7 +286,7 @@ fn windowed(args: &Args) -> ExitCode {
     let stand_ins = blocks::stand_in_ids(&palette, &looks.report);
     let tints = render::load_tints(&vanilla.stack);
 
-    let server = match start_server(args) {
+    let server = match start_server(args, &settings) {
         Ok(server) => server,
         Err(code) => return code,
     };
@@ -276,26 +303,26 @@ fn windowed(args: &Args) -> ExitCode {
         tints,
         stand_ins,
     };
-    let result = app::run(&server, &args.name, args.radius, args.settings, needs, assets, args.bench);
+    let result = app::run(&server, settings, identity.xid(), needs, assets, args.bench);
     server.stop();
     result
 }
 
 /// The scripted session (`--headless`): the M2 and M3 acceptance run, which
 /// needs no GPU and no Bedrock install.
-fn headless(args: &Args) -> ExitCode {
-    let server = match start_server(args) {
+fn headless(args: &Args, settings: &Settings, identity: &Identity) -> ExitCode {
+    let server = match start_server(args, settings) {
         Ok(server) => server,
         Err(code) => return code,
     };
-    let result = play(&server, args);
+    let result = play(&server, args, settings, identity);
     server.stop();
     result
 }
 
 /// Sets up the process, changes into the data directory, and starts the
 /// embedded server.
-fn start_server(args: &Args) -> Result<EmbeddedServer, ExitCode> {
+fn start_server(args: &Args, settings: &Settings) -> Result<EmbeddedServer, ExitCode> {
     set_up_process();
     if let Err(err) = enter_data_dir(&args.data_dir) {
         error!(
@@ -306,10 +333,10 @@ fn start_server(args: &Args) -> Result<EmbeddedServer, ExitCode> {
     }
     info!("Data directory: {}", args.data_dir.display());
     info!(
-        "New players get gamemode {} (--gamemode)",
-        args.settings.gamemode.name()
+        "New players get gamemode {} (the settings, or --gamemode)",
+        settings.gamemode.name()
     );
-    EmbeddedServer::start(embedded::config(&args.settings)).map_err(|err| {
+    EmbeddedServer::start(embedded::config(settings)).map_err(|err| {
         error!("{err}");
         ExitCode::FAILURE
     })
@@ -317,8 +344,8 @@ fn start_server(args: &Args) -> Result<EmbeddedServer, ExitCode> {
 
 /// The scripted host session: log in, spawn, walk east, check the move on the
 /// server, optionally linger, and report.
-fn play(server: &EmbeddedServer, args: &Args) -> ExitCode {
-    let mut session = match Session::connect(&server.connector, &args.name, args.radius) {
+fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Identity) -> ExitCode {
+    let mut session = match Session::connect(&server.connector, &settings.name, identity.xid(), settings.radius) {
         Ok(session) => session,
         Err(err) => {
             error!("Couldn't connect to the embedded server: {err}");
@@ -340,7 +367,7 @@ fn play(server: &EmbeddedServer, args: &Args) -> ExitCode {
 
     let spawned = match (spawned, session.spawn()) {
         (Ok(()), Some(spawn)) => {
-            session.check_gamemode(args.settings.gamemode);
+            session.check_gamemode(settings.gamemode);
             checks.push(walk_and_check(&mut session, server, &spawn));
             if args.measure || args.stream.is_some() {
                 // These runs stay a minute or more. A host left standing

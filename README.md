@@ -222,7 +222,7 @@ embedded server, and you fly around it as the host. Closing the window saves the
 | <kbd>P</kbd> | Logs where you are as a `/tp` command |
 
 The title bar shows the frame rate and frame time, the chunk and mesh counts, the draw calls and
-your position.
+your position. Every key can be changed in the settings file (below).
 
 <details>
 <summary><b>Command-line flags</b></summary>
@@ -230,12 +230,15 @@ your position.
 
 | Flag | What it does |
 | --- | --- |
+| `--home <path>` | Where your settings and identity are kept (default `run/home`) |
 | `--bedrock <path>` | Where Bedrock is, if it isn't in the usual place: the folder that holds `data/resource_packs` |
 | `--data-dir <path>` | Where the world is kept (default `run/client`) |
-| `--name <name>` | The host's display name (default `Limonite`) |
-| `--gamemode <mode>` | The host's gamemode in a new world: `survival`, `creative` (the default), `adventure` or `spectator` |
-| `--radius <chunks>` | The view distance to ask for, 2 to 32 (default 8) |
+| `--name <name>` | The host's display name, for this run |
+| `--gamemode <mode>` | The host's gamemode in a new world, for this run: `survival`, `creative`, `adventure` or `spectator` |
+| `--radius <chunks>` | The view distance to ask for, 2 to 32, for this run |
 | `--bench <seconds>` | Flies east for that long and logs frame times; use a release build |
+
+`--name`, `--gamemode` and `--radius` override the settings file without changing it.
 
 </details>
 
@@ -259,7 +262,7 @@ cargo run -p limonite-client -- --headless --map run/m3/map.png
 | `--measure` | Logs what the in-process channel costs, chunk encode and decode split into phases, and how fast a block change reaches the client; only meaningful in a release build |
 | `--stream <blocks>` | After joining, flies that many blocks east at creative flying speed and logs how fast new chunks arrive |
 
-`--data-dir`, `--name`, `--gamemode` and `--radius` work here too.
+`--home`, `--data-dir`, `--name`, `--gamemode` and `--radius` work here too.
 
 </details>
 
@@ -267,6 +270,12 @@ cargo run -p limonite-client -- --headless --map run/m3/map.png
 
 - **Your world carries over.** Each run starts where the last one ended. Delete `run/client/` for a
   fresh world.
+- **Your settings** are in `run/home/settings.toml`: your name, the view distance, the field of
+  view, the mouse sensitivity, the gamemode for new worlds, and every key. The first run writes it
+  with comments. Edit it while the client is closed; a setting that's missing or wrong gets its
+  default back.
+- **Your identity** is in `run/home/identity.toml`, made on the first run. Worlds remember your
+  inventory and position by it, so keep it: without it, your worlds see a new player.
 - **Logging:** `RUST_LOG` picks what gets logged. `RUST_LOG=info,limonite_client=debug` also logs
   every packet the client receives.
 - **Rebuilding:** on Windows, a running client locks its `.exe`, so close the window before you run

@@ -142,13 +142,15 @@ pub struct Session {
 }
 
 impl Session {
-    /// Connects to the embedded server and sends the login.
+    /// Connects to the embedded server and sends the login, as `name` with
+    /// this install's `xid`.
     ///
     /// # Errors
     /// If the server isn't accepting local connections.
     pub fn connect(
         connector: &LocalConnector,
         name: &str,
+        xid: &str,
         chunk_radius: i32,
     ) -> std::io::Result<Self> {
         let client = connector.connect()?;
@@ -173,7 +175,7 @@ impl Session {
         };
         // No `RequestNetworkSettings` first: compression then never turns on,
         // and every batch stays plain bytes (recon §5).
-        session.send(&login::host_login(name));
+        session.send(&login::host_login(name, xid));
         info!("Logging in as {name}");
         Ok(session)
     }

@@ -26,7 +26,7 @@ use tracing::{debug, error, info, warn};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
-    event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent},
+    event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
     keyboard::PhysicalKey,
     window::{CursorGrabMode, Window, WindowId},
@@ -36,10 +36,10 @@ use crate::{
     bench::{Bench, Sample},
     blocks::{self, appearance::AppearanceTable},
     embedded::EmbeddedServer,
-    input::{Action, Input},
+    input::{Action, Button, Input, PIXELS_PER_NOTCH},
     render::{
         Frame, Gpu, Needs,
-        camera::Camera,
+        camera::{Camera, FOV_Y},
         meshes::{self, Meshes},
         terrain::Terrain,
         textures::TextureArray,
@@ -68,19 +68,19 @@ const EYE_HEIGHT: f64 = 1.62;
 /// it far away.
 const MAX_FRAME_SECONDS: f64 = 0.25;
 
-/// Opens the window, joins the embedded server as the host, and runs until
-/// the window closes, the server ends the connection, or a `bench` of that
-/// many seconds is done.
+/// Opens the window, joins the embedded server as the host with this
+/// install's `xid`, and runs until the window closes, the server ends the
+/// connection, or a `bench` of that many seconds is done.
 pub fn run(
     server: &EmbeddedServer,
-    name: &str,
-    radius: i32,
     settings: Settings,
+    xid: &str,
     needs: Needs,
     assets: Assets,
     bench: Option<Duration>,
 ) -> ExitCode {
-    let mut session = match Session::connect(&server.connector, name, radius) {
+    let radius = settings.radius;
+    let mut session = match Session::connect(&server.connector, &settings.name, xid, radius) {
         Ok(session) => session,
         Err(err) => {
             error!("Couldn't connect to the embedded server: {err}");
@@ -156,6 +156,7 @@ impl<'a> App<'a> {
         assets: Assets,
     ) -> Self {
         let now = Instant::now();
+        let input = Input::new(settings.keymap.clone());
         Self {
             server,
             session,
@@ -170,7 +171,7 @@ impl<'a> App<'a> {
             meshes: Meshes::default(),
             terrain: None,
             camera: None,
-            input: Input::default(),
+            input,
             cursor_grabbed: false,
             visible: true,
             next_tick: now,
@@ -222,6 +223,13 @@ impl<'a> App<'a> {
             let size = window.inner_size();
             camera.aspect = aspect(size);
         }
+        // The bench keeps M4's view, so its numbers compare with the
+        // baseline whatever the settings say.
+        camera.fov_y = if self.bench.is_some() {
+            FOV_Y
+        } else {
+            self.settings.fov as f32
+        };
         self.camera = Some(camera);
         info!("The camera is at the host's spawn; click in the window to look around");
         self.session.check_gamemode(self.settings.gamemode);
@@ -280,18 +288,20 @@ impl<'a> App<'a> {
 
         for action in self.input.take_pressed() {
             match action {
-                Action::ReleaseCursor => self.release_cursor(),
+                // Until the pause menu (Step 16).
+                Action::Pause => self.release_cursor(),
                 Action::LogPose => self.log_pose(),
                 _ => {}
             }
         }
         let (dx, dy) = self.input.take_mouse();
+        let sensitivity = self.settings.mouse_sensitivity;
         if let Some(camera) = &mut self.camera {
             match &self.bench {
                 Some(bench) => camera.fly(bench.movement(), seconds),
                 None => {
                     if self.cursor_grabbed {
-                        camera.turn(dx, dy);
+                        camera.turn(dx * sensitivity, dy * sensitivity);
                     }
                     camera.fly(self.input.movement(), seconds);
                 }
@@ -441,14 +451,26 @@ impl ApplicationHandler for App<'_> {
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
-                    self.input.key(key, event.state);
+                    self.input.button(Button::Key(key), event.state);
                 }
             }
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Left,
-                ..
-            } if !self.cursor_grabbed => self.grab_cursor(),
+            // While the cursor is free, a left click only captures it. A
+            // release always counts, so a button held when the cursor was
+            // let go isn't left held.
+            WindowEvent::MouseInput { state, button, .. } => {
+                if self.cursor_grabbed || state == ElementState::Released {
+                    self.input.button(Button::Mouse(button), state);
+                } else if button == MouseButton::Left {
+                    self.grab_cursor();
+                }
+            }
+            WindowEvent::MouseWheel { delta, .. } if self.cursor_grabbed => {
+                let notches = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => f64::from(y),
+                    MouseScrollDelta::PixelDelta(position) => position.y / PIXELS_PER_NOTCH,
+                };
+                self.input.wheel(notches);
+            }
             WindowEvent::RedrawRequested => self.redraw(),
             _ => {}
         }
