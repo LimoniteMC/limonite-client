@@ -1085,6 +1085,14 @@ The questions as they were asked:
 15. **The settings' gamemode takes all four modes** (Step 4). The create-world screen will offer
     survival and creative (Decision 6), but `--data-dir` worlds read the same setting, and the
     flag already took all four.
+16. **`GameRulesChanged` isn't applied** (Step 5). Pumpkin never sends it to a Bedrock player, its
+    `StartGame` carries no rules (`rule_data` is empty), and the fork's `RuleValue` can't hold a
+    value anyway.
+    - **What it was for:** knowing whether the day moves. The time of day now counts on by itself
+      between the server's `SetTime`s, which Pumpkin sends every 20 ticks.
+    - **A day that stands still** shows as two `SetTime`s, a second apart, with the same time.
+      After a `/time set` while the day is frozen, the clock runs for up to a second before the
+      next `SetTime` stops it.
 
 ## Results (filled in during execution)
 
@@ -1254,3 +1262,47 @@ by Pumpkin's own reader with no bytes left over.
   - **A second run with `--radius 4`:** it asked for radius 4, and reused the same player file.
     Neither file in the home folder changed.
   - **Flags:** a bad `--name` and `--radius 1` are refused with exit code 2.
+
+### Step 5: one `Game`, stepped at 20 Hz (2026-10-26)
+
+- **Commit:** `5b0f117` "Hold the client's picture in one Game, stepped at 20 Hz".
+- **`game.rs`:** `Game` holds the world, the local player and the time of day.
+  - `Session` keeps the login, the stages and the input, and hands every other packet to
+    `Game::apply`.
+  - It applies `MovePlayer`, `SetActorMotion`, `CorrectPlayerMovePrediction`, `UpdateAbilities`,
+    `SetPlayerGameType`, `UpdateAttributes`, `SetHealth` and `SetTime`, besides the world's three.
+    `GameRulesChanged` isn't among them (Deviation 16).
+  - A packet about another runtime id is left for Step 15.
+- **`player/mod.rs`:** the local player's runtime and unique ids, gamemode, abilities,
+  attributes, velocity, and this tick's and the last tick's poses.
+  - **Abilities:** each ability comes from the last of the server's layers that sets it. Pumpkin
+    sends a base layer, and for a spectator a second layer that turns flying on.
+  - **A teleport** (`MovePlayer` in teleport, reset or normal mode) snaps the player there, with
+    nothing drawn in between, and holds it still for one tick. The next input carries
+    `HandledTeleport`, the new position and a `delta` of 0, as Step 1 recorded.
+  - **The camera** takes the teleport's angles before the next tick reads them.
+- **`clock.rs`:**
+  - **The tick schedule:** at most three ticks catch up after a stall.
+  - **Alpha:** it never draws past the newest pose.
+  - **The time of day:** it counts on by itself between `SetTime`s.
+- **The window:**
+  - **Movement:** M4's flight moves the player once a tick, through `Motion::Fly`.
+  - **Frames:** each draws the camera at `lerp(last tick's eyes, this tick's, alpha)`, and the mouse
+    still turns it every frame.
+  - **The bench** still flies its camera frame by frame, and the player follows it (`Motion::To`).
+- **The scripted session** still moves by its fixed steps (`Motion::To`) until Step 6 gives it
+  physics. Its `PlayerAuthInput`s are M4's, but now come from the player's state.
+- **The "teleport" check** (headless, the seventh):
+  - after the walk, the server moves the host 5 blocks up with `Player::request_teleport`;
+  - the next input reported it 50 ms later, one tick, with the eyes exactly where the server put
+    them and a `delta` of 0.
+- **Runs:**
+  - **Headless:** all seven checks pass.
+  - **The window,** for 25 s on a copy of the M4 template world: the camera stayed at the player's
+    eyes, the server had the feet 1.62 below them, and the time of day went up 20 a second.
+  - **A 4-second bench** in a dev build flew as before, and chunks streamed in during the flight
+    (329, then 343).
+- **Tests:**
+  - the client's tests went from 97 to 113: the clock 4, the player 5, and `Game::apply` 7, one for
+    each packet's effect;
+  - clippy is clean.

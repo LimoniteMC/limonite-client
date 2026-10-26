@@ -25,7 +25,10 @@ _Last updated: 2026-10-26._
     install's identity, `identity.toml`; the keymap binds keys, mouse buttons and the wheel by
     name; and the host is an operator of its worlds, with spawn protection off. Commits `2fe3859`
     and `09cdbc3`. The headless run has a sixth check, "operator".
-  - **Next:** Step 5, one `Game` stepped at 20 Hz.
+  - **Step 5 is done (2026-10-26):** `Game` holds the world, the player and the time of day, and
+    the player moves once a tick, drawn between ticks (`5b0f117`). The headless run has a seventh
+    check, "teleport".
+  - **Next:** Step 6, walking and flying under physics, matched to the official client's traces.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -214,9 +217,10 @@ RUST_LOG=info,limonite_client=debug cargo run -p limonite-client -- --headless -
 
 - **What it does:**
   1. Starts the embedded server and joins as the host.
-  2. Walks 8 blocks east, then waits for the join's chunks.
-  3. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, chunks, chunks decoded, and
-     world matches server.
+  2. Walks 8 blocks east, has the server teleport it 5 blocks up, then waits for the join's
+     chunks.
+  3. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, teleport, chunks, chunks
+     decoded, and world matches server.
   4. Writes the map, if asked.
 
   The exit code is non-zero on any failure.
