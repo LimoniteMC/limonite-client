@@ -1072,6 +1072,19 @@ The questions as they were asked:
       this for take, place and swap; the creative take is checked at Step 12's capture.
     - **Chat:** the client writes `Text` with the server's own writer, since Pumpkin sends chat to
       clients too. It matches the official client byte for byte.
+13. **Four more actions than Step 4 lists** (Step 4):
+    - `hotbar_next` and `hotbar_previous`, so the wheel has something to bind to. Scrolling
+      towards you moves right, as in the official client.
+    - **Chat and commands are two actions,** `chat` (T) and `command` (/), not one. Then the
+      command line can open with a `/` already typed for `command`, as the official client's does.
+    - `log_pose` (P) stays from M4.
+14. **A sixth headless check, "operator"** (Step 4). It checks that the server knows the host by
+    the UUID the client worked out, at permission level 4. So the UUID test runs end to end on
+    every headless run, not only against a fixed value. With Step 5's teleport, that's seven
+    checks.
+15. **The settings' gamemode takes all four modes** (Step 4). The create-world screen will offer
+    survival and creative (Decision 6), but `--data-dir` worlds read the same setting, and the
+    flag already took all four.
 
 ## Results (filled in during execution)
 
@@ -1185,3 +1198,59 @@ by Pumpkin's own reader with no bytes left over.
   `15745d6`) touch 68 files, all in `crates/pumpkin-protocol` (Deviation 7's check).
 - **Step 3, the bump** (`3429125`): the client builds unchanged, its 75 and 26 tests pass, and
   `--headless` gives five PASS lines.
+
+### Step 4: the home folder, settings, identity and the host as operator (2026-10-26)
+
+- **Commits:** `2fe3859` "Keep settings and a per-install identity in a home folder", and
+  `09cdbc3` "Make the host an operator of its worlds".
+- **`--home`,** `run/home` by default: the first run writes `settings.toml` and `identity.toml`
+  there. `worlds/`, `backups/` and `deleted/` come with Step 16's world list.
+- **The settings file:**
+  - **What it holds, and the limits:**
+    - the name: 1 to 16 characters, none of them control characters. That's the Xbox gamertag
+      limit. Pumpkin doesn't check Bedrock names at all;
+    - the radius: 2 to 32;
+    - the field of view: vertical, 30 to 110, default 70 (M4's);
+    - the mouse sensitivity: a multiple of M4's 0.15 degrees a count, 0.1 to 10;
+    - the UI scale: `"auto"` or 1 to 8;
+    - smooth lighting;
+    - the gamemode: creative by default;
+    - the keymap, as a `[keys]` table.
+  - **Reading:** each setting is read on its own. A missing one is filled in; a bad one, or an
+    unknown key, is logged and replaced. Then the whole file is rewritten, with a comment on every
+    setting.
+    - A good file is never rewritten, so the player's own comments stay.
+    - A file that isn't TOML is kept as `settings.toml.broken`, and the defaults replace it.
+  - **Flags:** `--name`, `--radius` and `--gamemode` override it for one run. `--name` is checked
+    by the file's rule.
+- **The keymap:**
+  - **Keys** are named by their W3C `code`, which is what winit calls its physical keys. `KeyW` is
+    the key where QWERTY has W, whatever the layout prints on it.
+  - **The mouse:** `MouseLeft` to `MouseForward`, and `WheelUp` and `WheelDown` for the wheel.
+  - **Several or none:** a list binds several buttons to an action, and `[]` binds none.
+  - **The defaults:** Ctrl sprints, Shift sneaks, and Esc pauses. Until the pause menu, Esc
+    releases the cursor.
+  - **The mouse in the window:** while the cursor is free, a left click only captures it. A
+    button's release always counts, so nothing stays held after a pause.
+- **The identity:** 16 random digits, the first not a 0.
+  - **A damaged `identity.toml` stops the client,** with a message saying how to fix it, rather
+    than quietly becoming a new player.
+  - **M4's dev host:** writing `xid = "1000000000000001"` there brings it back.
+- **The host as operator:**
+  - **The UUID:** the host's UUID for M4's dev `xid` is `eb9cf2d5-8d1a-3340-b297-a4713ed878e4`. A
+    test pins that value, which is the server's own player file for that host.
+  - **The entry:** on `run/client`, the first run added the host to `data/ops.json` at level 4, in
+    Pumpkin's format. The second left the file byte for byte as it was.
+  - **The name** in the entry is the one Pumpkin's login builds: the prefix, and spaces made
+    underscores.
+  - **Spawn protection** is 0.
+- **Tests:**
+  - the client's tests went from 75 to 97: settings 7, identity 3, the keymap 5 more, home 2,
+    the operator list 4, and the host's UUID 1;
+  - clippy is clean.
+- **Headless:**
+  - **A fresh home:** six PASS lines. The new identity became one new player file in
+    `run/client`, and M4's dev player file wasn't touched.
+  - **A second run with `--radius 4`:** it asked for radius 4, and reused the same player file.
+    Neither file in the home folder changed.
+  - **Flags:** a bad `--name` and `--radius 1` are refused with exit code 2.

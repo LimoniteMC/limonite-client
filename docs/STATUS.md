@@ -21,7 +21,11 @@ _Last updated: 2026-10-26._
     The fork commits are `77e0ac2`, `12ac8ba`, `2f4dff2` and `15745d6`, and the bump is `3429125`.
     - **The private golden tests** (commands and chat) read the M5 capture through
       `LIMONITE_M5_CAPTURES` (Dev environment, "Lint the fork").
-  - **Next:** Step 4, the home folder, settings, identity and the host as operator.
+  - **Step 4 is done (2026-10-26):** the home folder (`run/home`) holds `settings.toml` and this
+    install's identity, `identity.toml`; the keymap binds keys, mouse buttons and the wheel by
+    name; and the host is an operator of its worlds, with spawn protection off. Commits `2fe3859`
+    and `09cdbc3`. The headless run has a sixth check, "operator".
+  - **Next:** Step 5, one `Game` stepped at 20 Hz.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -57,8 +61,8 @@ _Last updated: 2026-10-26._
     `origin/limonite`. The fork goes first, since `main`'s submodule pointer names its commit;
   - the wiki, `https://github.com/Doodle-Studios/limonite-client.wiki.git` (`master`), from its
     clone in `run/wiki`. It goes after `main`, since its pages name `main`'s commit.
-  - **Not pushed yet** (2026-10-26): the upstream sync, which is the fork's `845450b` and `f9badd8`,
-    then `main`'s bump `a8f0271` and the docs after it.
+  - **Not pushed yet** (2026-10-26): the upstream sync and M5 so far. That's the fork's `limonite`
+    from `845450b` to `15745d6`, then `main` from its bump `a8f0271` on.
 - **No upstream PR is open.** The candidates are listed under "Upstream PR candidates".
 
   Ask the owner before pushing anything, and before opening an upstream PR.
@@ -191,14 +195,13 @@ cargo run -p limonite-client
     runtime and never copied.
 - **Controls:** click in the window to capture the mouse, and move the mouse to look. W, A, S and
   D move, Space rises, Left Shift sinks, and holding Left Ctrl is three times faster. Esc
-  releases the mouse. P logs the pose as a `/tp` command for the official client.
+  releases the mouse (until the pause menu, Step 16). P logs the pose as a `/tp` command for the
+  official client. Every binding is in the settings file (below).
 - **The title bar** shows the frame rate and frame time, chunks, meshes and the queue, visible
   meshes and draws, and the position. Closing the window saves the world and exits.
 - **Window flags:**
-  - `--gamemode <mode>`: survival, creative, adventure or spectator, for a host that joins a
-    world for the first time; creative by default (the fly camera passes through terrain). A
-    saved host keeps its own mode, with a warning.
-  - `--bench <seconds>`: the M6 baseline flight ("Notes for M6"). Use a release build.
+  - `--bench <seconds>`: the M6 baseline flight ("Notes for M6"). Use a release build. It keeps
+    M4's 70-degree field of view, whatever the settings say.
 - **Dev builds** compile the client crate at `opt-level = 1` (root `Cargo.toml`), so meshing keeps
   up after a join. Overflow checks and debug assertions stay on.
 
@@ -212,20 +215,32 @@ RUST_LOG=info,limonite_client=debug cargo run -p limonite-client -- --headless -
 - **What it does:**
   1. Starts the embedded server and joins as the host.
   2. Walks 8 blocks east, then waits for the join's chunks.
-  3. Logs one `PASS`/`FAIL` line each for spawn, movement, chunks, chunks decoded, and world
-     matches server.
+  3. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, chunks, chunks decoded, and
+     world matches server.
   4. Writes the map, if asked.
 
   The exit code is non-zero on any failure.
 - **Debug logging:** `limonite_client=debug` logs every packet name received, and the world
   check's first-pass differences.
 - **Flags for both:**
+  - `--home <path>`: the home folder, default `run/home`, gitignored (below).
   - `--data-dir <path>`: default `run/client`, gitignored. The client changes into it, because
     Pumpkin writes its world there.
-  - `--name <name>`: the host's display name, default `Limonite`.
-  - `--radius <chunks>`: the view distance to ask for, 2 to 32 (default 8). The embedded server
-    allows up to 32.
-  - `--gamemode <mode>`, as above.
+  - `--name <name>`, `--radius <chunks>` and `--gamemode <mode>` override the settings file for
+    one run, without saving. The name is 1 to 16 characters; the radius is 2 to 32, which the
+    embedded server allows; the gamemode is survival, creative, adventure or spectator.
+- **The home folder** (m5-plan Decision 16), written on the first run:
+  - `settings.toml`: the name, the view radius, the field of view, the mouse sensitivity, the UI
+    scale, smooth lighting, the gamemode for new worlds (creative), and the keymap, each with a
+    comment. A missing or bad setting gets its default, and the file is rewritten; a good file is
+    left alone. A file that isn't TOML is kept as `settings.toml.broken`.
+  - `identity.toml`: this install's random 16-digit `xid`. The server derives the host's UUID from
+    it, so worlds remember the player by it. A damaged file stops the client instead of quietly
+    becoming a new player.
+  - **The gamemode** applies to a host the world hasn't saved. A saved host keeps its own mode,
+    with a warning.
+- **The host is an operator:** before the server starts, the world's `data/ops.json` gets the host
+  at level 4 if it isn't listed (Decision 18). A listed host keeps its level.
 - **`--headless` only:**
   - `--linger <secs>`: stay in-world afterwards, for outside inspection; it logs the process id.
   - `--map <path.png>`: a top-down map of the loaded chunks, written after the checks.
@@ -368,8 +383,11 @@ the gitignored folder.
   `SText`, `SActorEvent`, `SAnimate`, `SRespawn` and `SContainerClose`. Look in
   `bedrock/server/` as well as `bedrock/client/` when a packet id seems to be missing.
 - **The host's position persists:** the dev world saves the player per UUID, which comes from
-  the fixed dev `xid`. Every run starts where the last one ended, so delete `run/client/` for a
-  fresh world.
+  the `xid` in `run/home/identity.toml`. Every run starts where the last one ended, so delete
+  `run/client/` for a fresh world.
+  - **M4's dev host** logged in with the fixed `xid` `1000000000000001`, so a world from before
+    Step 4 sees the new identity as a new player. Put `xid = "1000000000000001"` in the identity
+    file to be M4's host again.
 - **Captures are private:** `run/captures/slogin.bin` contains the owner's Xbox token and
   identity. Never commit it, paste it, or print its contents.
 - **Exact protocol:** Pumpkin accepts one Bedrock protocol only. Don't update the Bedrock client
