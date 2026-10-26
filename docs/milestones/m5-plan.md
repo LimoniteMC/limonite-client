@@ -1093,6 +1093,46 @@ The questions as they were asked:
     - **A day that stands still** shows as two `SetTime`s, a second apart, with the same time.
       After a `/time set` while the day is frozen, the clock runs for up to a second before the
       next `SetTime` stops it.
+17. **Where Bedrock's physics isn't Java's** (Step 6; Decision 5 asks for these). The official
+    client's traces showed:
+    - **The push** is `move_vec`, already normalised, times 0.98 and the speed. So a diagonal is
+      no faster than straight ahead (Java's is 2% faster), and sneaking's 0.3 is already in it.
+    - **Water** is decided the way older Minecraft did. The player's box, 0.4 shorter at both
+      ends, must touch water. Modern Java uses the water's surface height instead.
+      - The `water_exit` trace leaves the water between feet heights 203.51 and 203.63, below a
+        surface at 204.
+    - **Ladders:** on one, a fall is capped at 0.2 a tick before the move (Java: 0.15). Pushing
+      against it, or holding jump, ends the tick at exactly 0.2 up, after gravity, so the next
+      tick climbs 0.2.
+    - **Flying:** Space adds 0.15 before the move, as in Java. But Shift takes 0.22, not 0.15.
+      With neither key, 0.375 of the vertical speed stays, before Java's 0.6 after the move.
+      - The tick a flight starts or stops, the push follows the new state and the drag after the
+        move the old one.
+    - **Single precision:** positions (at eye height) and velocities round to `f32` each tick.
+      Standing on something, the height rounds up: the official client rests at 201.62001 on a
+      floor whose top is 200.
+      - Without this, the replays climbed off a ladder, and landed in water, a tick early.
+      - So collisions ignore overlaps under 1e-5, not Java's 1e-7.
+    - **`VerticalCollision`** is set when the move was stopped vertically. On the first tick after
+      a teleport, the official client also sets it for a player standing still on the ground.
+    - **`Sprinting`** (20) isn't the sprint state. It's sent while the sprint key is down and the
+      player is, or just was, sprinting. With the key up the player keeps sprinting, unflagged,
+      until forward is let go.
+    - **Not in any trace, so Java's rule stands, untested:**
+      - flying sideways (0.05 × 0.98, friction 0.91, twice as fast sprinting);
+      - lava;
+      - stopping a sprint at a wall;
+      - the ladder's sideways limit;
+      - the 10-tick delay between held jumps;
+      - the double tap's window (7 ticks; the trace's taps were 4 apart).
+18. **Step 6 started `blocks/shapes.rs`,** with the collision boxes physics walks on. Step 7 adds
+    the outline boxes and draws them.
+19. **Step 6 is one commit for walking and flying,** not two: the flight rules are part of the
+    same tick, and `fly.bin` replays with the other traces. The collision boxes are a commit of
+    their own.
+20. **The scripted walk stays a script** (Step 6). The headless session still moves 0.2 a tick past
+    physics, as M2's transport check did: its world is generated terrain, where a real walk can
+    meet a hill. Standing still, and falling after the teleport check, go through physics.
 
 ## Results (filled in during execution)
 
@@ -1305,4 +1345,57 @@ by Pumpkin's own reader with no bytes left over.
 - **Tests:**
   - the client's tests went from 97 to 113: the clock 4, the player 5, and `Game::apply` 7, one for
     each packet's effect;
+  - clippy is clean.
+
+### Step 6: walking, flying and the honest input (2026-10-27)
+
+- **Commits:** `895c7c5` "Read blocks' collision boxes from pumpkin-data", and `3dd914f` "Walk,
+  swim, climb and fly under physics matched to the official client" (Deviations 17 to 20).
+- **`player/physics.rs`:** one tick as a pure function over a block lookup.
+  - **The rules:** the keys' push, then the move, y first and then the larger of x and z, stepping
+    up 0.6. Sneaking stops at edges. Then friction, drag and gravity, with water, lava and ladders.
+  - **Bedrock's own rules** are in Deviation 17.
+- **`player/movement.rs`:**
+  - **The modes:** a double tap on jump toggles flight in creative, and a spectator always flies
+    through blocks.
+  - **Sprinting and sneaking** start and stop with the keys.
+  - **Each tick's input:** the flags, `move_vec` and `raw_move`, set from what the keys and the
+    physics did. The velocity is `delta`.
+- **`player/terrain.rs`:** the decoded world as physics sees it.
+  - It reads blocks through M3's table and pumpkin-data, and a waterlogged block's water from
+    layer 1.
+  - The player waits until the 3 × 3 chunks around it have arrived.
+- **The official client's traces,** all 12, replayed tick by tick (`player/traces.rs`):
+
+  | Run | Ticks | Worst position | Worst `delta` | Ticks that differ |
+  | --- | --- | --- | --- | --- |
+  | walk | 167 | 0.000015 | 0 | 0 |
+  | sprint | 129 | 0.000015 | 0 | 0 |
+  | sneak | 137 | 0.000015 | 0 | 0 |
+  | jumps | 68 | 0.000015 | 0 | 0 |
+  | walk_turned | 83 | 0.000015 | 0 | 0 |
+  | walk_diagonal | 110 | 0.000015 | 0 | 0 |
+  | sprint_jump | 115 | 0.000015 | 0 | 0 |
+  | fall | 39 | 0 | 0 | 0 |
+  | water | 131 | 0 | 0 | 0 |
+  | water_exit | 67 | 0.000001 | 0 | 0 |
+  | ladder | 100 | 0 | 0 | 0 |
+  | fly | 110 | 0 | 0 | 0 |
+
+  - **What "differ" checks:** a tick differs if its position or `delta` is more than 0.001 off, or
+    if any flag, `move_vec` or `raw_move` differs.
+  - **The 0.000015:** one `f32` step at y 201, on the tick after each teleport. The official
+    client already rests a step higher there.
+- **The window:**
+  - **Movement:** the keys move the player under physics.
+  - **A 20-second run** on a copy of the M4 template world: the player stood at feet 74.00, with
+    the camera at its eyes and the server's copy where the client put it.
+  - **Walking around in a window** is the checkpoint's to try.
+- **Headless:** all seven checks pass.
+  - **The dev world's host was underground** before Step 6's first run, inside the stone at
+    (-721, -8, -27). Something with M5's earlier flight, which passed through terrain, had left it
+    there. The teleport check lifted it 5 blocks, and physics brought it down onto the next ledge.
+- **Tests:**
+  - the client's tests went from 113 to 132: physics 11, movement 4, the traces 1, the shapes 2,
+    and the player 1;
   - clippy is clean.

@@ -28,7 +28,10 @@ _Last updated: 2026-10-26._
   - **Step 5 is done (2026-10-26):** `Game` holds the world, the player and the time of day, and
     the player moves once a tick, drawn between ticks (`5b0f117`). The headless run has a seventh
     check, "teleport".
-  - **Next:** Step 6, walking and flying under physics, matched to the official client's traces.
+  - **Step 6 is done (2026-10-27):** the player walks, swims, climbs and flies under physics, and
+    all 12 of the official client's traces replay within 0.000015 blocks, flag for flag (`895c7c5`,
+    `3dd914f`). Where Bedrock's rules differ from Java's is m5-plan Deviation 17.
+  - **Next:** Step 7, Pumpkin's shapes for the stand-in cubes; then the owner checkpoint.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -197,9 +200,10 @@ cargo run -p limonite-client
     `--bedrock <path>` to the folder that holds `data/resource_packs`. Vanilla files are read at
     runtime and never copied.
 - **Controls:** click in the window to capture the mouse, and move the mouse to look. W, A, S and
-  D move, Space rises, Left Shift sinks, and holding Left Ctrl is three times faster. Esc
-  releases the mouse (until the pause menu, Step 16). P logs the pose as a `/tp` command for the
-  official client. Every binding is in the settings file (below).
+  D walk, Space jumps, Left Shift sneaks, and Left Ctrl sprints. In creative, a double tap on
+  Space flies, Space and Shift rise and sink, and another double tap lands. Esc releases the mouse
+  (until the pause menu, Step 16). P logs the pose as a `/tp` command for the official client.
+  Every binding is in the settings file (below).
 - **The title bar** shows the frame rate and frame time, chunks, meshes and the queue, visible
   meshes and draws, and the position. Closing the window saves the world and exits.
 - **Window flags:**

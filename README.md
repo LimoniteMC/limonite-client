@@ -204,7 +204,8 @@ cargo run -p limonite-client
 ```
 
 The first build takes a few minutes. Then a window opens on a singleplayer world, run by the
-embedded server, and you fly around it as the host. Closing the window saves the world.
+embedded server, and you walk around it as the host (in creative, a double tap on Space
+flies). Closing the window saves the world.
 
 > [!TIP]
 > For the best frame rates, use a release build: `cargo run --release -p limonite-client`. Its
@@ -215,9 +216,11 @@ embedded server, and you fly around it as the host. Closing the window saves the
 | Key | What it does |
 | --- | --- |
 | <kbd>Click</kbd> | Captures the mouse, so you can look around |
-| <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | Fly |
-| <kbd>Space</kbd> / <kbd>Left Shift</kbd> | Up / down |
-| <kbd>Left Ctrl</kbd> (hold) | Fly three times faster |
+| <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> | Walk |
+| <kbd>Space</kbd> | Jump, swim up, climb a ladder |
+| <kbd>Left Shift</kbd> | Sneak, which stops you at edges |
+| <kbd>Left Ctrl</kbd> | Sprint |
+| <kbd>Space</kbd> twice | In creative: fly, or land. Flying, <kbd>Space</kbd> and <kbd>Left Shift</kbd> rise and sink |
 | <kbd>Esc</kbd> | Releases the mouse |
 | <kbd>P</kbd> | Logs where you are as a `/tp` command |
 
