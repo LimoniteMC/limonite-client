@@ -16,7 +16,12 @@ _Last updated: 2026-10-26._
     - **The fixtures:** 23 codec fixtures, in the fork (committed with Step 2), and 12 physics
       traces in `client/src/player/fixtures/`.
     - **Its Deviations** (1 to 8) record the script's changes and the upstream sync.
-  - **Next:** Step 2, the play codecs in the fork.
+  - **Steps 2 and 3 are done (2026-10-26):** the fork's client codecs read 24 play packets and
+    write the player's 12 actions, each written packet golden-tested against the official client.
+    The fork commits are `77e0ac2`, `12ac8ba`, `2f4dff2` and `15745d6`, and the bump is `3429125`.
+    - **The private golden tests** (commands and chat) read the M5 capture through
+      `LIMONITE_M5_CAPTURES` (Dev environment, "Lint the fork").
+  - **Next:** Step 4, the home folder, settings, identity and the host as operator.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -287,6 +292,13 @@ cargo clippy -p pumpkin-core --all-targets
   LIMONITE_SLOGIN_FIXTURE="C:\Users\LaDoodleInTheHat\Desktop\big projects\limonite-client\run\captures\slogin.bin" cargo test -p pumpkin-protocol --features client --lib reproduces_the_official_client_login -- --ignored
   ```
 
+- The M5 command and chat golden tests are `#[ignore]`d for the same reason. They read the
+  capture's folder:
+
+  ```bash
+  LIMONITE_M5_CAPTURES="C:\Users\LaDoodleInTheHat\Desktop\big projects\limonite-client\run\captures\m5-official" cargo test -p pumpkin-protocol --features client --lib client_codecs -- --ignored
+  ```
+
 **Run the server**
 - Run from `run/pumpkin/` (gitignored); it writes its world and config there:
 
@@ -554,6 +566,17 @@ once a join's meshing settles, so a new world refreshes it.
 - **Done in M4:** bamboo (m4-plan Deviation 14).
 
 ## Upstream PR candidates
+
+**Upstream's rules for these** (its root `AGENTS.md`, read on 2026-10-26):
+- a person opens every PR: maintainers close any PR an agent opened;
+- the description carries a disclosure line, under its Description heading, saying an agent drafted
+  it;
+- a gameplay change needs a play-test, with a screenshot or recording attached;
+- commit titles are conventional commits with a scope, such as `fix(protocol): ...`.
+
+It also asks agents not to post on GitHub themselves. Our own rule already has the owner approve
+every upstream PR. The 2026-10-26 issue (Pumpkin-MC/Pumpkin#4321) was opened from the owner's
+account at the owner's request.
 
 - **`Weather::downfall()`** (fork `443b954`, M4): a one-line accessor in
   `pumpkin-util/src/biome.rs`, in place of an `#[expect(dead_code)]` on the field. The client

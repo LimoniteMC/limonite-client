@@ -1047,6 +1047,31 @@ The questions as they were asked:
    fast. Step 9's middle click sends the official client's packet, which the server ignores until
    upstream fixes it. The physics, the predictions and their tests don't change. A weekly sync
    brings each fix in when it lands.
+9. **`ItemRegistry` needed a mirror, and `CreativeContent` an owned twin** (Step 2; Finding 15
+   expected a derive for the first).
+   - **Item data:** each item's component data is an NBT compound written with no length in front
+     (`#[serial(no_prefix)]`), which no derived reader can handle. The mirror parses the compound
+     to find where it ends, and keeps its bytes. It's tested on Pumpkin's whole registry, 2,076
+     items.
+   - **The creative inventory:** `CCreativeContent` borrows its groups and entries as slices, so
+     nothing can be read into it. The client reads `client_codecs::CreativeContent` instead, an
+     owned twin with the same fields.
+10. **Three small fork edits beyond derives and mirrors,** all in `pumpkin-protocol` and behind
+    nothing a server build sees differently:
+    - `client_codecs` is `pub`, so the client can name the creative twin;
+    - `network_item`'s user-data parser is `pub(crate)`, so the twin reads items the same way;
+    - `Interact`'s `Action` gains `Clone` and `Copy`, behind `client`: its derived writer copies the
+      value.
+11. **Actor metadata sends each value's type twice,** as a `VarUInt` and then as a byte. That's
+    Pumpkin's format since its update to 1.26.40 (upstream `f2444bc`). The mirror reads both and
+    checks that they agree.
+12. **The item stack request writer covers only what the client sends:** take, place, swap,
+    drop, destroy, consume, create and the creative take. The others are refused, and for some of
+    them Pumpkin's reader drops data, so no writer could match it.
+    - **The legacy action byte** after each action's type repeats the type. The capture shows
+      this for take, place and swap; the creative take is checked at Step 12's capture.
+    - **Chat:** the client writes `Text` with the server's own writer, since Pumpkin sends chat to
+      clients too. It matches the official client byte for byte.
 
 ## Results (filled in during execution)
 
@@ -1133,3 +1158,30 @@ by Pumpkin's own reader with no bytes left over.
 - **Codecs:** 23 new files in `client_codecs/fixtures/`, listed in its README.
 - **Physics:** 12 traces in `client/src/player/fixtures/`, 1,256 ticks and 143 KB, listed in that
   README with each run's numbers.
+
+### Steps 2 and 3: the play codecs (2026-10-26)
+
+- **Readers, behind `client`,** for 24 packets the server sends:
+  - **player state:** `MovePlayer` (a mirror), `SetActorMotion`, `CorrectPlayerMovePrediction`,
+    `UpdateAbilities`, `UpdateAttributes`, `SetPlayerGameType`, `SetHealth` and `SetTime`;
+  - **entities:** `AddActor`, `AddPlayer`, `AddItemActor`, `RemoveActor`, `MoveActorAbsolute`,
+    `TakeItemActor`, `SetActorData`, and `MoveActorDelta` (a mirror). The actor metadata and the
+    synced properties inside them are mirrors too;
+  - **inventory:** `ItemRegistry` and `CreativeContent` (Deviation 9), `ItemStackResponse` (a
+    mirror), `InventoryContent`, `InventorySlot`, `PlayerHotbar`, `ContainerOpen` and
+    `ContainerClose`.
+- **Writers** for the 12 packets the client sends:
+  - `PlayerAuthInput` with its block actions; `InventoryTransaction` and `ItemStackRequest`
+    (mirrors);
+  - `MobEquipment`, `Interact`, `PlayerAction`, `BlockPickRequest` and `CommandRequest`, derived;
+  - `Animate`, `Respawn`, `Text` and `ContainerClose`, which already wrote.
+- **Tests:** every written packet with a fixture matches the official client byte for byte: 23
+  fixtures, plus the command and the chat through `LIMONITE_M5_CAPTURES`. Every read packet
+  round-trips through Pumpkin's writer with every field away from its default.
+  - `pumpkin-protocol` passes 208 tests with `client`, up from 150, with 3 ignored. Those three,
+    the login, the command and the chat, pass locally against the private captures.
+  - Clippy is clean in all five configurations, and `net::bedrock` and the palette still pass.
+- **The fork's diff:** M5's five fork commits (`f9badd8`, `77e0ac2`, `12ac8ba`, `2f4dff2` and
+  `15745d6`) touch 68 files, all in `crates/pumpkin-protocol` (Deviation 7's check).
+- **Step 3, the bump** (`3429125`): the client builds unchanged, its 75 and 26 tests pass, and
+  `--headless` gives five PASS lines.
