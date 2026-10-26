@@ -33,7 +33,7 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
 use crate::{
     checks::Check,
-    embedded::EmbeddedServer,
+    embedded::{EmbeddedServer, HostOperator},
     home::Home,
     identity::Identity,
     session::{Session, Stage, TICK},
@@ -286,7 +286,7 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
     let stand_ins = blocks::stand_in_ids(&palette, &looks.report);
     let tints = render::load_tints(&vanilla.stack);
 
-    let server = match start_server(args, &settings) {
+    let server = match start_server(args, &settings, identity) {
         Ok(server) => server,
         Err(code) => return code,
     };
@@ -311,7 +311,7 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
 /// The scripted session (`--headless`): the M2 and M3 acceptance run, which
 /// needs no GPU and no Bedrock install.
 fn headless(args: &Args, settings: &Settings, identity: &Identity) -> ExitCode {
-    let server = match start_server(args, settings) {
+    let server = match start_server(args, settings, identity) {
         Ok(server) => server,
         Err(code) => return code,
     };
@@ -320,9 +320,9 @@ fn headless(args: &Args, settings: &Settings, identity: &Identity) -> ExitCode {
     result
 }
 
-/// Sets up the process, changes into the data directory, and starts the
-/// embedded server.
-fn start_server(args: &Args, settings: &Settings) -> Result<EmbeddedServer, ExitCode> {
+/// Sets up the process, changes into the data directory, makes the host an
+/// operator of its world, and starts the embedded server.
+fn start_server(args: &Args, settings: &Settings, identity: &Identity) -> Result<EmbeddedServer, ExitCode> {
     set_up_process();
     if let Err(err) = enter_data_dir(&args.data_dir) {
         error!(
@@ -336,7 +336,15 @@ fn start_server(args: &Args, settings: &Settings) -> Result<EmbeddedServer, Exit
         "New players get gamemode {} (the settings, or --gamemode)",
         settings.gamemode.name()
     );
-    EmbeddedServer::start(embedded::config(settings)).map_err(|err| {
+    let config = embedded::config(settings);
+    match embedded::make_host_operator(&args.data_dir, &config, &settings.name, identity.xid()) {
+        Ok(HostOperator::Added) => info!("The host is now an operator of this world, at level 4"),
+        Ok(HostOperator::Listed(level)) => {
+            info!("The host is an operator of this world at level {}, left as it is", level as u8);
+        }
+        Err(err) => warn!("Couldn't make the host an operator, so it has no commands: {err}"),
+    }
+    EmbeddedServer::start(config).map_err(|err| {
         error!("{err}");
         ExitCode::FAILURE
     })
@@ -369,6 +377,7 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
         (Ok(()), Some(spawn)) => {
             session.check_gamemode(settings.gamemode);
             checks.push(walk_and_check(&mut session, server, &spawn));
+            checks.push(checks::operator(&server.server, login::host_uuid(&settings.name, identity.xid())));
             if args.measure || args.stream.is_some() {
                 // These runs stay a minute or more. A host left standing
                 // with its head in terrain dies in about 10 s, and the server
@@ -389,11 +398,9 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             true
         }
         _ => {
-            checks.push(Check::new(
-                "movement",
-                false,
-                "not checked: never spawned".to_string(),
-            ));
+            for name in ["movement", "operator"] {
+                checks.push(Check::new(name, false, "not checked: never spawned".to_string()));
+            }
             false
         }
     };

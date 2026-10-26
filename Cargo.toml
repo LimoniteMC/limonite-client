@@ -35,6 +35,8 @@ serde = { version = "1.0", default-features = false, features = ["derive", "std"
 toml = { version = "1.1", default-features = false, features = ["parse", "display", "serde"] }
 # The per-install identity's random xid (M5). Same spec as pumpkin/Cargo.toml.
 rand = { version = "0.10.3", default-features = false, features = ["std", "std_rng", "thread_rng"] }
+# The host's operator entry (M5): Pumpkin's `Op` holds a `Uuid`. Same spec as pumpkin/Cargo.toml.
+uuid = { version = "1.29", default-features = false, features = ["serde", "v3", "v4", "std"] }
 # The window and the GPU (M4). wgpu runs on Vulkan, DX12 and Metal; winit owns the main thread.
 wgpu = "30.0.1"
 winit = "0.30.13"

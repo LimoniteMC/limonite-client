@@ -9,10 +9,14 @@ use base64::{
     Engine as _,
     engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
 };
-use pumpkin_auth::p384::{AffinePoint, elliptic_curve::sec1::ToSec1Point};
+use pumpkin_auth::{
+    jwt::extract_oidc_token_player_claims,
+    p384::{AffinePoint, elliptic_curve::sec1::ToSec1Point},
+};
 use pumpkin_protocol::bedrock::server::login::SLogin;
 use pumpkin_world::CURRENT_BEDROCK_MC_PROTOCOL;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 /// The login `AuthenticationType` the official client sends (0, "Full").
 /// Offline, the server only checks that it's a known value.
@@ -38,6 +42,19 @@ pub fn host_token(name: &str, xid: &str) -> String {
         "xid": xid,
         "cpk": placeholder_cpk(),
     }))
+}
+
+/// The UUID the server gives the host, read the way the server reads it:
+/// pumpkin-auth's own parser, over the token the host sends. So the two can't
+/// drift apart. It depends on the `xid` alone.
+///
+/// # Errors
+/// If the parser can't read the token or its UUID, which would stop the
+/// server's login too.
+pub fn host_uuid(name: &str, xid: &str) -> Result<Uuid, String> {
+    let claims = extract_oidc_token_player_claims(&host_token(name, xid))
+        .map_err(|err| format!("the server can't read the host's token: {err}"))?;
+    Uuid::parse_str(&claims.uuid).map_err(|err| format!("the host's UUID `{}` isn't one: {err}", claims.uuid))
 }
 
 /// The `ClientData` claims: the 10 fields the server requires.
@@ -77,9 +94,7 @@ fn placeholder_cpk() -> String {
 
 #[cfg(test)]
 mod tests {
-    use pumpkin_auth::jwt::{
-        decode_b64_url_nopad, extract_cpk_from_token, extract_oidc_token_player_claims,
-    };
+    use pumpkin_auth::jwt::{decode_b64_url_nopad, extract_cpk_from_token};
     use pumpkin_protocol::bedrock::server::login::ClientData;
 
     use super::*;
@@ -98,6 +113,16 @@ mod tests {
         let claims = extract_oidc_token_player_claims(&token(&host_login("Limonite", XID))).unwrap();
         assert_eq!(claims.display_name, "Limonite");
         assert_eq!(claims.xuid, XID);
+    }
+
+    #[test]
+    fn the_hosts_uuid_is_the_one_the_server_gave_it() {
+        // The server saved M4's dev host, which logged in with this xid, as
+        // run/client/world/players/data/eb9cf2d5-8d1a-3340-b297-a4713ed878e4.dat.
+        let uuid = host_uuid("Limonite", XID).unwrap();
+        assert_eq!(uuid.to_string(), "eb9cf2d5-8d1a-3340-b297-a4713ed878e4");
+        assert_eq!(host_uuid("Someone Else", XID).unwrap(), uuid, "the name doesn't change it");
+        assert_ne!(host_uuid("Limonite", "1000000000000002").unwrap(), uuid);
     }
 
     #[test]

@@ -5,8 +5,10 @@
 
 use pumpkin_core::{net::bedrock::level_chunk::CLevelChunk, server::Server};
 use pumpkin_data::{Block, BlockState, BlockStateId, biome::Biome};
+use pumpkin_util::PermissionLvl;
 use pumpkin_world::chunk::{ChunkData, palette::bedrock_water_state};
 use tracing::{error, info};
+use uuid::Uuid;
 
 use crate::{
     session::{Session, Spawn},
@@ -61,6 +63,39 @@ pub fn movement(server: &Server, spawn: &Spawn) -> Check {
             "the server's player moved {moved:.2} blocks east (needs {MIN_MOVE}); \
              feet y {start_feet_y:.2} -> {:.2}",
             now.y
+        ),
+    )
+}
+
+/// Whether the server knows the host by the UUID the client worked out for
+/// it, and made it an operator at level 4 from `data/ops.json` (m5-plan
+/// Decision 18).
+pub fn operator(server: &Server, expected: Result<Uuid, String>) -> Check {
+    const NAME: &str = "operator";
+    let expected = match expected {
+        Ok(uuid) => uuid,
+        Err(err) => return Check::new(NAME, false, format!("no UUID for the host: {err}")),
+    };
+    let players = server.get_all_players();
+    let Some(player) = players.first() else {
+        return Check::new(NAME, false, "server has no player".to_string());
+    };
+    let uuid = player.gameprofile.id;
+    let level = player.permission_lvl.load();
+    if uuid != expected {
+        return Check::new(
+            NAME,
+            false,
+            format!("the server's host is {uuid}, but the client worked out {expected}"),
+        );
+    }
+    Check::new(
+        NAME,
+        level == PermissionLvl::Four,
+        format!(
+            "the server knows the host by the UUID the client worked out, at permission level {} \
+             (needs 4)",
+            level as u8
         ),
     )
 }

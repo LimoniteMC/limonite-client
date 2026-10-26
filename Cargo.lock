@@ -2093,6 +2093,7 @@ dependencies = [
  "toml",
  "tracing",
  "tracing-subscriber",
+ "uuid",
  "wgpu",
  "winit",
 ]

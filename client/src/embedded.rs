@@ -5,19 +5,25 @@
 //! just as Pumpkin's own `main` would run it, and the two sides talk only
 //! through a `LocalChannel` and a few shared handles.
 
-use std::{num::NonZero, sync::Arc, sync::mpsc, thread, time::Duration};
+use std::{fs, io, num::NonZero, path::Path, sync::Arc, sync::mpsc, thread, time::Duration};
 
-use pumpkin_config::PumpkinConfig;
+use pumpkin_config::{PumpkinConfig, op::Op};
 use pumpkin_core::{
-    PumpkinServer, data::VanillaData, net::bedrock::local::LocalConnector, server::Server,
+    PumpkinServer,
+    data::{VanillaData, op::OperatorConfig},
+    net::bedrock::local::LocalConnector,
+    server::Server,
 };
+use pumpkin_util::PermissionLvl;
 use tokio::runtime::Runtime;
 use tracing::{error, info};
 
-use crate::settings::Settings;
+use crate::{home::save_atomically, login, settings::Settings};
 
 /// How long shutdown waits for the runtime's leftover tasks after the world is saved.
 const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
+/// Where Pumpkin keeps a world's operators, under its data directory.
+const OPERATORS: &str = "data/ops.json";
 
 /// The embedded server's configuration, built in code: no config file is read
 /// or written.
@@ -28,6 +34,9 @@ pub fn config(settings: &Settings) -> PumpkinConfig {
     let mut config = PumpkinConfig::default();
     // Only for players without saved data; a saved host keeps its mode.
     config.basic.default_gamemode = settings.gamemode;
+    // Bedrock worlds have no spawn protection. Pumpkin's default, 16 blocks,
+    // would stop anyone who isn't an operator building near spawn.
+    config.basic.spawn_protection = 0;
     let networking = &mut config.advanced.networking;
     // No UDP or TCP 19132, and no LAN discovery on 7551.
     networking.bedrock.nethernet.enabled = false;
@@ -45,6 +54,69 @@ pub fn config(settings: &Settings) -> PumpkinConfig {
     config.advanced.commands.use_console = false;
     config.advanced.commands.use_tty = false;
     config
+}
+
+/// Whether the host had to be added to the operators.
+#[derive(Debug, PartialEq, Eq)]
+pub enum HostOperator {
+    /// Added at level 4.
+    Added,
+    /// Already listed, at this level. That's left alone: the player may have
+    /// chosen it with `/op` or `/deop`.
+    Listed(PermissionLvl),
+}
+
+/// Makes the host an operator of the world in `data_dir` at level 4: a world
+/// owner's power on Bedrock with cheats on, every command (m5-plan
+/// Decision 18).
+///
+/// It must run before the server starts, which reads `data/ops.json` once,
+/// at startup. The entry is Pumpkin's own `Op`, under the UUID and the name
+/// the server will give the host, so the file stays in Pumpkin's format.
+///
+/// # Errors
+/// If the list can't be read, isn't Pumpkin's format, or can't be written.
+/// The file is then left as it was.
+pub fn make_host_operator(
+    data_dir: &Path,
+    config: &PumpkinConfig,
+    name: &str,
+    xid: &str,
+) -> Result<HostOperator, String> {
+    let uuid = login::host_uuid(name, xid)?;
+    let path = data_dir.join(OPERATORS);
+    let mut operators = match fs::read_to_string(&path) {
+        Ok(text) => serde_json::from_str::<OperatorConfig>(&text)
+            .map_err(|err| format!("{} isn't a list of operators: {err}", path.display()))?,
+        Err(err) if err.kind() == io::ErrorKind::NotFound => OperatorConfig::default(),
+        Err(err) => return Err(format!("can't read {}: {err}", path.display())),
+    };
+    if let Some(entry) = operators.get_entry(&uuid) {
+        return Ok(HostOperator::Listed(entry.level));
+    }
+    operators
+        .ops
+        .push(Op::new(uuid, server_name(config, name), PermissionLvl::Four, false));
+    let json = serde_json::to_string_pretty(&operators).map_err(|err| format!("can't write the operators: {err}"))?;
+    if let Some(folder) = path.parent() {
+        fs::create_dir_all(folder).map_err(|err| format!("can't create {}: {err}", folder.display()))?;
+    }
+    save_atomically(&path, json.as_bytes()).map_err(|err| format!("can't write {}: {err}", path.display()))?;
+    Ok(HostOperator::Added)
+}
+
+/// The name the server will know the host by, built as Pumpkin's Bedrock
+/// login builds it: the configured prefix, then the name with its spaces made
+/// underscores if the config says so. `/deop <name>` finds an operator who
+/// isn't online by it.
+fn server_name(config: &PumpkinConfig, name: &str) -> String {
+    let bedrock = &config.advanced.networking.bedrock;
+    let name = if bedrock.replace_username_spaces {
+        name.replace(' ', "_")
+    } else {
+        name.to_string()
+    };
+    format!("{}{name}", bedrock.username_prefix)
 }
 
 /// A running embedded server.
@@ -161,4 +233,80 @@ fn shut_down(runtime: Runtime) {
     // Tasks still parked on the runtime (e.g. timers) are dropped; the world
     // has already been saved by `start` returning.
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN_TIMEOUT);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_util::TempDir;
+
+    const XID: &str = "1000000000000001";
+
+    fn operators(dir: &TempDir) -> OperatorConfig {
+        serde_json::from_str(&fs::read_to_string(dir.path().join(OPERATORS)).unwrap()).unwrap()
+    }
+
+    #[test]
+    fn the_host_is_added_once_and_then_kept() {
+        let dir = TempDir::new("ops-added");
+        let config = config(&Settings::default());
+        assert_eq!(
+            make_host_operator(dir.path(), &config, "Limonite", XID),
+            Ok(HostOperator::Added)
+        );
+        let list = operators(&dir);
+        assert_eq!(list.ops.len(), 1);
+        let entry = &list.ops[0];
+        assert_eq!(entry.uuid, login::host_uuid("Limonite", XID).unwrap());
+        assert_eq!((entry.name.as_str(), entry.level), ("Limonite", PermissionLvl::Four));
+        assert!(!entry.bypasses_player_limit);
+
+        // Again, and after the player lowered their own level: kept as is.
+        let first = fs::read_to_string(dir.path().join(OPERATORS)).unwrap();
+        assert_eq!(
+            make_host_operator(dir.path(), &config, "Limonite", XID),
+            Ok(HostOperator::Listed(PermissionLvl::Four))
+        );
+        let lowered = first.replace("\"level\": 4", "\"level\": 2");
+        assert_ne!(lowered, first);
+        fs::write(dir.path().join(OPERATORS), &lowered).unwrap();
+        assert_eq!(
+            make_host_operator(dir.path(), &config, "Limonite", XID),
+            Ok(HostOperator::Listed(PermissionLvl::Two))
+        );
+        assert_eq!(fs::read_to_string(dir.path().join(OPERATORS)).unwrap(), lowered);
+    }
+
+    #[test]
+    fn other_operators_stay() {
+        let dir = TempDir::new("ops-others");
+        dir.write(
+            OPERATORS,
+            br#"[{"uuid":"00000000-0000-0000-0000-000000000001","name":"Friend","level":3,"bypassesPlayerLimit":true}]"#,
+        );
+        let config = config(&Settings::default());
+        assert_eq!(
+            make_host_operator(dir.path(), &config, "Mr Q", XID),
+            Ok(HostOperator::Added)
+        );
+        let list = operators(&dir);
+        let names: Vec<_> = list.ops.iter().map(|op| (op.name.as_str(), op.level)).collect();
+        // Spaces become underscores, as in the name the server gives the host.
+        assert_eq!(names, [("Friend", PermissionLvl::Three), ("Mr_Q", PermissionLvl::Four)]);
+        assert!(list.ops[0].bypasses_player_limit);
+    }
+
+    #[test]
+    fn a_damaged_list_is_left_alone() {
+        let dir = TempDir::new("ops-damaged");
+        dir.write(OPERATORS, b"not json");
+        let err = make_host_operator(dir.path(), &config(&Settings::default()), "Limonite", XID).unwrap_err();
+        assert!(err.contains("isn't a list of operators"), "{err}");
+        assert_eq!(fs::read(dir.path().join(OPERATORS)).unwrap(), b"not json");
+    }
+
+    #[test]
+    fn spawn_protection_is_off() {
+        assert_eq!(config(&Settings::default()).basic.spawn_protection, 0);
+    }
 }
