@@ -82,9 +82,9 @@ pub fn build_appearance(palette: &Palette, vanilla: &Vanilla) -> Built {
         warn!("Texture {path} didn't load: {why}");
     }
     info!(
-        "Stand-in cubes: {} block names aren't full cubes in Java but are drawn as one: {}",
-        report.stand_ins.len(),
-        report.stand_ins.iter().map(String::as_str).collect::<Vec<_>>().join(", "),
+        "Approximate shapes: {} block names are drawn as Pumpkin's outline boxes: {}",
+        report.approximate.len(),
+        report.approximate.iter().map(String::as_str).collect::<Vec<_>>().join(", "),
     );
     let textures = &built.textures;
     info!(
@@ -101,26 +101,26 @@ pub fn build_appearance(palette: &Palette, vanilla: &Vanilla) -> Built {
     built
 }
 
-/// The Bedrock ids drawn as stand-in cubes, with their block names.
+/// The Bedrock ids drawn as Pumpkin's outline boxes, with their block names.
 #[must_use]
-pub fn stand_in_ids(palette: &Palette, report: &Report) -> HashMap<u32, String> {
+pub fn approximate_ids(palette: &Palette, report: &Report) -> HashMap<u32, String> {
     palette
         .iter()
-        .filter(|(_, state)| report.stand_ins.contains(&*state.name))
+        .filter(|(_, state)| report.approximate.contains(&*state.name))
         .map(|(id, state)| (id, state.name.to_string()))
         .collect()
 }
 
-/// Logs how many loaded blocks are drawn as stand-in cubes, by name, most
-/// first: the to-do list for a special-shapes pass (owner, M4).
-pub fn log_stand_in_census<'a>(chunks: impl Iterator<Item = &'a Chunk>, stand_ins: &HashMap<u32, String>) {
+/// Logs how many loaded blocks are drawn as approximate shapes, by name, most
+/// first: the to-do list for special shapes (STATUS.md, "Special shapes to do").
+pub fn log_approximate_census<'a>(chunks: impl Iterator<Item = &'a Chunk>, approximate: &HashMap<u32, String>) {
     let start = Instant::now();
     let mut loaded = 0;
-    let census = stand_in_census(chunks.inspect(|_| loaded += 1), stand_ins);
+    let census = approximate_census(chunks.inspect(|_| loaded += 1), approximate);
     let total: u64 = census.iter().map(|(_, count)| count).sum();
     let list: Vec<String> = census.iter().map(|(name, count)| format!("{name} {count}")).collect();
     info!(
-        "Stand-in cubes in the {loaded} loaded chunks: {total} blocks of {} names, most first \
+        "Approximate shapes in the {loaded} loaded chunks: {total} blocks of {} names, most first \
          (counted in {:.0} ms): {}",
         census.len(),
         start.elapsed().as_secs_f64() * 1000.0,
@@ -128,17 +128,17 @@ pub fn log_stand_in_census<'a>(chunks: impl Iterator<Item = &'a Chunk>, stand_in
     );
 }
 
-/// Counts the blocks in `chunks` whose id is in `stand_ins`, by name: most
+/// Counts the blocks in `chunks` whose id is in `approximate`, by name: most
 /// first, then by name. Names with no blocks are left out.
-fn stand_in_census<'a>(chunks: impl Iterator<Item = &'a Chunk>, stand_ins: &HashMap<u32, String>) -> Vec<(String, u64)> {
+fn approximate_census<'a>(chunks: impl Iterator<Item = &'a Chunk>, approximate: &HashMap<u32, String>) -> Vec<(String, u64)> {
     let mut counts: HashMap<&str, u64> = HashMap::new();
     for storage in chunks.flat_map(|chunk| &chunk.sub_chunks).flat_map(|sub_chunk| &sub_chunk.layers) {
-        // Which palette entries are stand-ins. Most storages have none, and
+        // Which palette entries are approximate. Most storages have none, and
         // are skipped without reading their 4,096 positions.
         let names: Vec<Option<&str>> = storage
             .palette()
             .iter()
-            .map(|id| stand_ins.get(id).map(String::as_str))
+            .map(|id| approximate.get(id).map(String::as_str))
             .collect();
         if names.iter().all(Option::is_none) {
             continue;
@@ -184,9 +184,9 @@ mod tests {
     }
 
     #[test]
-    fn the_census_counts_stand_ins_by_name_most_first() {
-        // Two bamboo states, one fence; 1 is stone and 0 air, neither a stand-in.
-        let stand_ins: HashMap<u32, String> = [(10, "bamboo"), (11, "bamboo"), (20, "oak_fence")]
+    fn the_census_counts_approximate_shapes_by_name_most_first() {
+        // Two bamboo states, one fence; 1 is stone and 0 air, neither approximate.
+        let approximate: HashMap<u32, String> = [(10, "bamboo"), (11, "bamboo"), (20, "oak_fence")]
             .into_iter()
             .map(|(id, name)| (id, name.to_string()))
             .collect();
@@ -201,11 +201,11 @@ mod tests {
         stale.set(5, 5, 5, 1);
         let chunks = [all_bamboo, chunk(vec![mixed, Storage::Single(0)]), chunk(vec![stale])];
 
-        let census = stand_in_census(chunks.iter(), &stand_ins);
+        let census = approximate_census(chunks.iter(), &approximate);
         assert_eq!(
             census,
             [("bamboo".to_string(), 4096 + 2), ("oak_fence".to_string(), 3)]
         );
-        assert!(stand_in_census(chunks[2..].iter(), &stand_ins).is_empty(), "unused entries count nothing");
+        assert!(approximate_census(chunks[2..].iter(), &approximate).is_empty(), "unused entries count nothing");
     }
 }

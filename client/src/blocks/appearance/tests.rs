@@ -450,7 +450,7 @@ fn the_real_install_looks_right() {
     assert_eq!(bamboo.face(Face::South).class, RenderClass::Cutout, "the small leaves");
 
     let report = &built.report;
-    assert!(!report.stand_ins.contains("bamboo"));
+    assert!(!report.approximate.contains("bamboo"));
     assert!(report.failed_textures.is_empty(), "{:?}", report.failed_textures);
     // Java's game-test blocks are the only ones sent as Bedrock's `unknown`.
     assert_eq!(report.no_entry_sent.iter().collect::<Vec<_>>(), ["unknown"]);

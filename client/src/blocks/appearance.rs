@@ -6,9 +6,10 @@
 //!   variant 0 of a key, the default.
 //! - **Shapes, tints and the blend list** come from the tables below, keyed
 //!   by Bedrock name. The install has no geometry for vanilla blocks
-//!   (Finding 8), so a client has to know the shapes itself. Any block not in
-//!   a table is drawn as a cube, and the log names the ones that aren't
-//!   really cubes.
+//!   (Finding 8), so a client has to know the shapes itself. A block not in a
+//!   table is drawn as a cube, unless its Java state isn't one: then it's
+//!   Pumpkin's outline boxes (m5-plan Decision 7), approximate, and counted
+//!   in the log.
 //! - **Render classes** come from the textures' alpha: a face whose texture
 //!   has a see-through texel is alpha-tested.
 //!
@@ -23,10 +24,16 @@ use limonite_packs::{
 };
 use pumpkin_data::{BlockState as JavaState, BlockStateId};
 
-use super::palette::{BedrockState, Palette};
-use crate::render::{
-    textures::{self, AlphaUse, TextureArray},
-    tint::Tint,
+use super::{
+    palette::{BedrockState, Palette},
+    shapes,
+};
+use crate::{
+    render::{
+        textures::{self, AlphaUse, TextureArray},
+        tint::Tint,
+    },
+    world::BlockTable,
 };
 
 /// Blocks renamed since `blocks.json` was keyed, which it still knows by the
@@ -123,8 +130,8 @@ const CROSS: &[&str] = &[
 ];
 
 /// Families of crossed planes, by name suffix: every sapling, and the coral
-/// plants and floor fans, dead or alive. (Wall fans hang on a side; they
-/// stay stand-in cubes.)
+/// plants and floor fans, dead or alive. (Wall fans hang on a side; they're
+/// drawn as Pumpkin's boxes.)
 const CROSS_SUFFIXES: &[&str] = &["_sapling", "_coral", "_coral_fan"];
 
 /// Two-tall plants: crossed planes, with the `down` texture on the lower
@@ -246,6 +253,11 @@ pub enum Shape {
     /// the face slots as a bag of textures, and the table keeps three: the
     /// stem in north, the large leaves in up, and the small ones in south.
     Bamboo { thick: bool, leaves: BambooLeaves },
+    /// The outline boxes of this Java state (`blocks/shapes.rs`): stairs,
+    /// fences, doors, torches and the other blocks M4 drew as stand-in
+    /// cubes. Each face shows the block's texture for that face, cut by its
+    /// position, as a slab's does.
+    Boxes { state: BlockStateId },
 }
 
 /// How a face's texels are drawn.
@@ -359,8 +371,9 @@ pub struct Report {
     pub no_entry_sent: BTreeSet<String>,
     /// Names with an entry whose textures don't all resolve, and why.
     pub unresolved: BTreeMap<String, String>,
-    /// Names drawn as cubes whose Java shape isn't a full cube.
-    pub stand_ins: BTreeSet<String>,
+    /// Names drawn as Pumpkin's outline boxes: close, but not the official
+    /// client's own models (rails are flat, beds and chests are boxes).
+    pub approximate: BTreeSet<String>,
     /// Texture files that couldn't be loaded, and why.
     pub failed_textures: Vec<(String, String)>,
 }
@@ -412,7 +425,8 @@ pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, 
 
     let loaded = textures::load(stack, &resolver.requests);
     let mut failed_names: HashMap<&str, String> = HashMap::new();
-    let java_full_cube = java_full_cubes();
+    // The same Java states physics collides with.
+    let java = BlockTable::build();
     let mut by_id = HashMap::with_capacity(plans.len());
     for (id, name, plan) in plans {
         let mut faces = [Appearance::MISSING.faces[0]; 6];
@@ -440,17 +454,24 @@ pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, 
             look.turns = face.turns;
             look.isotropic = face.isotropic;
         }
-        let occludes = plan.shape == Shape::Cube
+        // A cube in the tables whose Java state isn't one is drawn as its
+        // boxes. An id Pumpkin never sends has no Java state, and stays a cube.
+        let mut shape = plan.shape;
+        if shape == Shape::Cube
+            && let Some(state) = java.shape_state(id)
+            && !shapes::is_full_cube(state)
+        {
+            shape = Shape::Boxes { state };
+            report.approximate.insert(name.to_string());
+        }
+        let occludes = shape == Shape::Cube
             && faces
                 .iter()
                 .all(|face| matches!(face.class, RenderClass::Opaque | RenderClass::Overlay));
-        if plan.shape == Shape::Cube && java_full_cube.get(&id) == Some(&false) {
-            report.stand_ins.insert(name.to_string());
-        }
         by_id.insert(
             id,
             Appearance {
-                shape: plan.shape,
+                shape,
                 tint: plan.tint,
                 faces,
                 occludes,
@@ -738,25 +759,6 @@ fn pillar_keys<'a>(state: &BedrockState, textures: &'a FaceTextures) -> [(Option
         ],
         _ => Face::ALL.map(own),
     }
-}
-
-/// For each Bedrock id Pumpkin can send, whether its Java block is drawn as
-/// a full cube: an outline that is exactly one whole block. True if any of
-/// the Java states sharing the id is.
-fn java_full_cubes() -> HashMap<u32, bool> {
-    let mut full = HashMap::new();
-    for state in (0..BlockStateId::COUNT).filter_map(BlockStateId::new) {
-        let is_full = state.to_state().get_block_outline_shapes().any(|shape| {
-            shape.min.x == 0.0
-                && shape.min.y == 0.0
-                && shape.min.z == 0.0
-                && shape.max.x == 1.0
-                && shape.max.y == 1.0
-                && shape.max.z == 1.0
-        });
-        *full.entry(JavaState::to_be_network_id(state)).or_insert(false) |= is_full;
-    }
-    full
 }
 
 /// The names of the blocks Pumpkin can send.

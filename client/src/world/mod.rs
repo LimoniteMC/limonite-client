@@ -12,7 +12,7 @@ pub mod chunk;
 pub mod level_chunk;
 pub mod storage;
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::{HashMap, HashSet, hash_map::Entry};
 
 use pumpkin_core::net::bedrock::level_chunk::CLevelChunk;
 use pumpkin_data::{Block, BlockState, BlockStateId};
@@ -274,8 +274,8 @@ impl World {
     }
 }
 
-/// Maps Bedrock block network ids back to Java block states, for map colours
-/// and for naming blocks in logs.
+/// Maps Bedrock block network ids back to Java block states, for map colours,
+/// for naming blocks in logs, and for their shapes.
 ///
 /// It isn't a true inverse. Several Java states can share one Bedrock id:
 /// Java-only properties such as leaves' `distance` or `waterlogged` collapse.
@@ -283,6 +283,9 @@ impl World {
 /// the lowest Java state wins, so it's the same on every run.
 pub struct BlockTable {
     java_by_bedrock: HashMap<u32, BlockStateId>,
+    /// The Bedrock ids whose Java states don't all have the same boxes, each
+    /// with the state shapes take instead ([`Self::shape_state`]).
+    shape_by_bedrock: HashMap<u32, BlockStateId>,
     /// Java states whose Bedrock id an earlier (lower) state already had.
     collisions: usize,
     /// A few of them, as (Bedrock id, kept, dropped), for the debug log.
@@ -295,6 +298,7 @@ impl BlockTable {
         let mut java_by_bedrock = HashMap::new();
         let mut collisions = 0;
         let mut examples = Vec::new();
+        let mut differing = HashSet::new();
         for raw in 0..BlockStateId::COUNT {
             let Some(state) = BlockStateId::new(raw) else {
                 continue;
@@ -309,14 +313,48 @@ impl BlockTable {
                     if examples.len() < 5 {
                         examples.push((bedrock, *entry.get(), state));
                     }
+                    if !same_boxes(*entry.get(), state) {
+                        differing.insert(bedrock);
+                    }
+                }
+            }
+        }
+        let mut groups: HashMap<u32, Vec<BlockStateId>> = HashMap::new();
+        if !differing.is_empty() {
+            for state in (0..BlockStateId::COUNT).filter_map(BlockStateId::new) {
+                let bedrock = BlockState::to_be_network_id(state);
+                if differing.contains(&bedrock) {
+                    groups.entry(bedrock).or_default().push(state);
                 }
             }
         }
         Self {
             java_by_bedrock,
+            shape_by_bedrock: groups
+                .into_iter()
+                .map(|(bedrock, states)| (bedrock, nearest_default(&states)))
+                .collect(),
             collisions,
             examples,
         }
+    }
+
+    /// The Java state whose boxes the block with Bedrock id `bedrock` has
+    /// (`blocks/shapes.rs`; worth teaching).
+    ///
+    /// Usually the lowest state, as for [`Self::java_state`]. But where the
+    /// states sharing the id don't have the same boxes, Bedrock keeps the
+    /// property that differs somewhere else, or works it out itself: whether
+    /// a piston is pushed out lives in its block actor, a chest's pairing
+    /// too. Then the shape is the state nearest its block's default: the
+    /// lowest piston state is pushed out, which would draw every piston
+    /// short, while its default is the common case, drawn back.
+    #[must_use]
+    pub fn shape_state(&self, bedrock: u32) -> Option<BlockStateId> {
+        self.shape_by_bedrock
+            .get(&bedrock)
+            .copied()
+            .or_else(|| self.java_state(bedrock))
     }
 
     fn log(&self) {
@@ -354,6 +392,34 @@ impl BlockTable {
 
 fn block_name(state: BlockStateId) -> &'static str {
     Block::from_state_id(state).name
+}
+
+/// Whether two Java states have the same collision and outline boxes.
+fn same_boxes(a: BlockStateId, b: BlockStateId) -> bool {
+    let (a, b) = (a.to_state(), b.to_state());
+    a.collision_shapes == b.collision_shapes && a.outline_shapes == b.outline_shapes
+}
+
+/// Of `states`, the one with the most properties at its block's default
+/// values; the lowest of those.
+fn nearest_default(states: &[BlockStateId]) -> BlockStateId {
+    let matching = |state: BlockStateId| {
+        let block = Block::from_state_id(state);
+        match (block.properties(state), block.properties(block.default_state.id)) {
+            (Some(props), Some(default)) => props
+                .to_props()
+                .iter()
+                .zip(default.to_props())
+                .filter(|(prop, default)| **prop == *default)
+                .count(),
+            _ => 0,
+        }
+    };
+    states
+        .iter()
+        .copied()
+        .max_by_key(|&state| (matching(state), std::cmp::Reverse(state)))
+        .unwrap_or(states[0])
 }
 
 #[cfg(test)]

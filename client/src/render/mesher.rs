@@ -24,7 +24,10 @@ use std::collections::HashMap;
 use limonite_packs::registry::Face;
 
 use crate::{
-    blocks::appearance::{Appearance, AppearanceTable, BambooLeaves, FaceLook, Liquid, RenderClass, Shape},
+    blocks::{
+        appearance::{Appearance, AppearanceTable, BambooLeaves, FaceLook, Liquid, RenderClass, Shape},
+        shapes,
+    },
     render::tint::{Tint, Tints},
     world::{AIR, World},
 };
@@ -329,6 +332,27 @@ impl Block<'_> {
                 }
             }
             Shape::Bamboo { thick, leaves } => self.bamboo(thick, leaves, tints, mesh),
+            Shape::Boxes { state } => {
+                let [x, y, z] = self.world_position();
+                for (min, max) in shapes::outline(state, x, y, z) {
+                    for face in Face::ALL {
+                        // A face on the block's edge is hidden by an opaque
+                        // neighbour, as a cube's is; one inside the block
+                        // never is.
+                        let on_edge = match face {
+                            Face::Down => min[1] == 0,
+                            Face::Up => max[1] == 16,
+                            Face::North => min[2] == 0,
+                            Face::South => max[2] == 16,
+                            Face::West => min[0] == 0,
+                            Face::East => max[0] == 16,
+                        };
+                        if !(on_edge && self.neighbour_occludes(face)) {
+                            self.quad(face, min, max, tints, mesh);
+                        }
+                    }
+                }
+            }
         }
     }
 

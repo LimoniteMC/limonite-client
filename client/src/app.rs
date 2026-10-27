@@ -59,8 +59,8 @@ pub struct Assets {
     /// Uploaded when the GPU comes up, then freed.
     pub textures: TextureArray,
     pub tints: Tints,
-    /// The ids drawn as stand-in cubes, for the census once the join settles.
-    pub stand_ins: HashMap<u32, String>,
+    /// The ids drawn as approximate shapes, for the census once the join settles.
+    pub approximate: HashMap<u32, String>,
 }
 
 /// The longest step the bench's camera takes in one frame, so a hitch doesn't
@@ -124,7 +124,7 @@ pub struct App<'a> {
     textures: Option<TextureArray>,
     tints: Tints,
     /// Until the census is logged.
-    stand_ins: Option<HashMap<u32, String>>,
+    approximate: Option<HashMap<u32, String>>,
     meshes: Meshes,
     terrain: Option<Terrain>,
     /// Placed where `StartGame` put the host, once it has spawned. It draws
@@ -167,7 +167,7 @@ impl<'a> App<'a> {
             table: assets.table,
             textures: Some(assets.textures),
             tints: assets.tints,
-            stand_ins: Some(assets.stand_ins),
+            approximate: Some(assets.approximate),
             meshes: Meshes::default(),
             terrain: None,
             camera: None,
@@ -533,11 +533,11 @@ impl ApplicationHandler for App<'_> {
                 meshes::BUDGET,
             );
         }
-        // Once, when the join's meshing has settled: the stand-in cubes it loaded.
+        // Once, when the join's meshing has settled: the approximate shapes it loaded.
         if self.meshes.settled()
-            && let Some(stand_ins) = self.stand_ins.take()
+            && let Some(approximate) = self.approximate.take()
         {
-            blocks::log_stand_in_census(self.session.world().chunks(), &stand_ins);
+            blocks::log_approximate_census(self.session.world().chunks(), &approximate);
         }
         if let (Some(bench), Some(camera), Some(gpu)) = (&mut self.bench, &mut self.camera, &self.gpu)
             && bench.waiting()

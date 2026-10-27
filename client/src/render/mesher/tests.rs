@@ -26,6 +26,8 @@ const SAND: u32 = 9;
 const BAMBOO: u32 = 10;
 const BAMBOO_THICK_LARGE: u32 = 11;
 const BAMBOO_SMALL: u32 = 12;
+const TORCH: u32 = 13;
+const STAIRS: u32 = 14;
 
 /// The texture layers of a bamboo look, as the table keeps them.
 const STEM: u16 = 20;
@@ -88,7 +90,36 @@ fn table() -> AppearanceTable {
         (BAMBOO, bamboo(false, BambooLeaves::None)),
         (BAMBOO_THICK_LARGE, bamboo(true, BambooLeaves::Large)),
         (BAMBOO_SMALL, bamboo(false, BambooLeaves::Small)),
+        (TORCH, boxes(JavaBlock::TORCH.default_state.id, 13)),
+        (STAIRS, boxes(east_stairs(), 14)),
     ])
+}
+
+/// Pumpkin's outline boxes of a Java state, in texture layer `layer`.
+fn boxes(state: pumpkin_data::BlockStateId, layer: u16) -> Appearance {
+    look(Shape::Boxes { state }, RenderClass::Cutout, Tint::None, layer)
+}
+
+/// Oak stairs climbing to the east: a slab, and a step on its east half.
+fn east_stairs() -> pumpkin_data::BlockStateId {
+    JavaBlock::OAK_STAIRS
+        .states
+        .iter()
+        .map(|state| state.id)
+        .find(|&state| {
+            JavaBlock::OAK_STAIRS.properties(state).is_some_and(|props| {
+                let props: Vec<_> = props.to_props().iter().map(|p| (p.key().to_str(), p.value_str())).collect();
+                [("facing", "east"), ("half", "bottom"), ("shape", "straight")]
+                    .iter()
+                    .all(|wanted| props.contains(wanted))
+            })
+        })
+        .expect("east-facing stairs")
+}
+
+/// The quads in texture layer `layer`.
+fn layer_quads(vertices: &[Vertex], layer: u16) -> Vec<&[Vertex]> {
+    quads(vertices).into_iter().filter(|quad| quad[0].layer == layer).collect()
 }
 
 fn tints() -> Tints {
@@ -216,6 +247,23 @@ fn water_under_air_gets_a_lowered_top() {
         .any(|quad| quad.iter().any(|v| v.position[1] == 6 * 16));
     assert!(lower_sides_reach_the_top);
     assert!(!has_quad_at(&stacked.blend, 1, 5 * 16 + 14));
+}
+
+#[test]
+fn boxes_hide_only_the_faces_on_their_blocks_edge() {
+    // A torch on stone: its box sits in the middle of the block, so only its
+    // bottom, on the block's floor, is hidden by the stone.
+    let torch = mesh_of(&[(5, 5, 5, TORCH), (5, 4, 5, STONE)], &[]);
+    let torch_quads = layer_quads(&torch.opaque, 13);
+    assert_eq!(torch_quads.len(), 5);
+    assert!(has_quad_at(&torch.opaque, 1, 5 * 16 + 10), "its top, 10 sixteenths up");
+    assert!(has_quad_at(&torch.opaque, 0, 5 * 16 + 6), "its west side, 6 in");
+
+    // Stairs on stone, against stone to the east: the slab's bottom and both
+    // east faces are hidden. The step's bottom, inside the block, isn't.
+    let stairs = mesh_of(&[(5, 5, 5, STAIRS), (5, 4, 5, STONE), (6, 5, 5, STONE)], &[]);
+    assert_eq!(layer_quads(&stairs.opaque, 14).len(), 2 * 6 - 3);
+    assert!(has_quad_at(&stairs.opaque, 1, 5 * 16 + 8), "the slab's top and the step's bottom");
 }
 
 #[test]

@@ -291,7 +291,7 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
         }
     };
     let looks = blocks::build_appearance(&palette, &vanilla);
-    let stand_ins = blocks::stand_in_ids(&palette, &looks.report);
+    let approximate = blocks::approximate_ids(&palette, &looks.report);
     let tints = render::load_tints(&vanilla.stack);
 
     let server = match start_server(args, &settings, identity) {
@@ -309,7 +309,7 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
         table: looks.table,
         textures: looks.textures,
         tints,
-        stand_ins,
+        approximate,
     };
     let result = app::run(&server, settings, identity.xid(), needs, assets, args.bench);
     server.stop();
