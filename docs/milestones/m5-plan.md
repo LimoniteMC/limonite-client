@@ -1133,6 +1133,15 @@ The questions as they were asked:
 20. **The scripted walk stays a script** (Step 6). The headless session still moves 0.2 a tick past
     physics, as M2's transport check did: its world is generated terrain, where a real walk can
     meet a hill. Standing still, and falling after the teleport check, go through physics.
+21. **Shapes take the Java state nearest its block's default** (Step 7), not M3's lowest, for the
+    184 Bedrock ids whose Java states differ in their boxes (`BlockTable::shape_state`).
+    - **The reason:** the lowest piston state is pushed out (Java orders `extended` true first), so
+      every piston would have been drawn, and collided with, a quarter short.
+    - **What doesn't change:** map colours and names still use the lowest state.
+22. **The consistency check's exceptions are explained in the test, not yet with the owner**
+    (Step 7). The plan has each one looked at with the owner. All 184 come from 7 reasons, listed in
+    Results, and they're in the test with their reasons, so a new one still fails. They're for the
+    owner to confirm at the checkpoint.
 
 ## Results (filled in during execution)
 
@@ -1399,3 +1408,50 @@ by Pumpkin's own reader with no bytes left over.
   - the client's tests went from 113 to 132: physics 11, movement 4, the traces 1, the shapes 2,
     and the player 1;
   - clippy is clean.
+
+### Step 7: Pumpkin's shapes for the stand-in cubes (2026-10-27)
+
+- **Commit:** `9a6fdf1` "Draw Pumpkin's block shapes where M4 drew stand-in cubes".
+- **`Shape::Boxes`:** a block the tables draw as a cube, whose Java state isn't one, is drawn as
+  that state's outline boxes, rounded to sixteenths.
+  - **Textures:** each face shows the block's texture for that face, cut by its position, as a
+    slab's does.
+  - **Culling:** a face on the block's edge is hidden by an opaque neighbour; one inside the block
+    never is.
+  - **What it covers:** 493 block names: stairs, fences, doors, ladders, torches, trapdoors,
+    buttons, signs, rails and the rest.
+- **One state for both:** `BlockTable::shape_state` is the Java state physics collides with and the
+  mesher draws (Deviation 21).
+- **The check of every Bedrock id** (owner, at approval): 184 ids have Java states with different
+  boxes. All of them come from properties Java keeps in the block state and Bedrock keeps somewhere
+  else, or works out itself:
+
+  | Ids | Blocks | Why |
+  | --- | --- | --- |
+  | 60 | every button | Java turns a floor or ceiling button with `facing`; Bedrock's don't turn. Only the outline differs, a small box |
+  | 49 | fire, redstone wire, chorus plants, vines | connections, which Bedrock works out from the blocks around |
+  | 40 | every chest | Java's `type` pairs chests; Bedrock keeps the pairing in the block actor. Shapes take a single chest |
+  | 12 | pistons, sticky pistons | Java's `extended`: Bedrock keeps the push in the block actor. Shapes take the piston drawn back |
+  | 12 | piston heads | Java's `short` arm, a frame of a piston's push |
+  | 8 | scaffolding | Java's `bottom` only adds to the outline; the collision is the same |
+  | 3 | kelp, weeping and twisting vines | Java's head and body are two blocks, Bedrock's one. Drawn as crossed planes, with no collision |
+
+  They're in the test with these reasons, for the owner to confirm (Deviation 22).
+- **The shapes, through the Bedrock ids:**
+  - a stair is two boxes, and an inner corner three;
+  - an east-connected fence is one box, from its post to the east edge, since Pumpkin's shapes
+    come merged;
+  - an open door and a closed one are each a box 3 sixteenths thick, in different places;
+  - a torch is one box (6, 0, 6 to 10, 10, 10), and a ladder a plate on its wall;
+  - a piston is drawn back.
+- **The window,** on a copy of the M4 template world:
+  - the join meshed as before (1,269,618 quads);
+  - the census of approximate shapes counted pointed dripstone 11,516, leaf litter 2,082, chests
+    15 and wildflowers 3.
+- **Checks:**
+  - **Headless:** all seven checks pass.
+  - **Tests:** the client's went from 132 to 136. The real-install test, which reads the vanilla
+    packs, passes too.
+  - **Clippy** is clean.
+- **Not tried yet:** walking the shapes in a window, over stairs and fences and through doors. That's
+  the owner checkpoint.

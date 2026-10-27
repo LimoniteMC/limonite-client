@@ -31,7 +31,11 @@ _Last updated: 2026-10-26._
   - **Step 6 is done (2026-10-27):** the player walks, swims, climbs and flies under physics, and
     all 12 of the official client's traces replay within 0.000015 blocks, flag for flag (`895c7c5`,
     `3dd914f`). Where Bedrock's rules differ from Java's is m5-plan Deviation 17.
-  - **Next:** Step 7, Pumpkin's shapes for the stand-in cubes; then the owner checkpoint.
+  - **Step 7 is done (2026-10-27):** the blocks M4 drew as stand-in cubes are drawn as Pumpkin's
+    outline boxes, the same boxes physics collides with (`9a6fdf1`). Every Bedrock id's Java
+    states have the same boxes, or one of the reasons in m5-plan Results, Step 7.
+  - **Next:** the owner checkpoint after Step 7: walk a fresh world in survival and in creative,
+    over stairs and fences and through doors (about 10 minutes). Then Step 8, the UI and the HUD.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -532,9 +536,14 @@ Found earlier:
 ## Special shapes to do (found in M4)
 
 M4 draws cubes; slabs, snow layers, carpets and lily pads; crossed planes for plants; thin planes
-for vines and lichen; liquids; and bamboo. Every other block whose Java shape isn't a full cube is
-a stand-in cube. The owner asked for this list, sorted by frequency, as the to-do list for a
+for vines and lichen; liquids; and bamboo. Every other block whose Java shape isn't a full cube
+was a stand-in cube. The owner asked for this list, sorted by frequency, as the to-do list for a
 special-shapes pass.
+
+**Since M5 Step 7,** those blocks are drawn as Pumpkin's outline boxes, so stairs, fences, doors,
+ladders, torches and trapdoors have their own shape (m5-plan Decision 7). That's still approximate:
+leaf litter is a flat box, a chain a thin column, a rail a slab. So the list below stays the to-do
+list for proper models, and the window's census, now of approximate shapes, keeps counting them.
 
 **The census:** the stand-in blocks in the acceptance world (m4-plan Results). It covers 3,725
 chunks at radius 32 around the comparison pose, at a jungle edge by the ocean, with lush caves,
