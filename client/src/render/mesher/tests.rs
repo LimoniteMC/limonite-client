@@ -449,3 +449,56 @@ fn borders_read_the_neighbour_and_a_missing_one_stops_meshing() {
     let incomplete = world_with(&[((0, 0), &[]), ((1, 0), &[]), ((0, -1), &[]), ((-1, 0), &[])]);
     assert!(Neighbourhood::gather(&incomplete, &table, 0, 8, 0).is_none());
 }
+
+/// A table of one extra look, on the usual air and stone.
+fn with_look(id: u32, extra: Appearance) -> AppearanceTable {
+    AppearanceTable::from_looks([
+        (AIR, look(Shape::Invisible, RenderClass::Opaque, Tint::None, 0)),
+        (STONE, look(Shape::Cube, RenderClass::Opaque, Tint::None, 1)),
+        (id, extra),
+    ])
+}
+
+fn mesh_in(table: &AppearanceTable, blocks: &[(i32, i32, i32, u32)]) -> Mesh {
+    let n = Neighbourhood::from_fn(table, [0, 0, 0], 1, |x, y, z, layer| {
+        if layer == 0 {
+            blocks
+                .iter()
+                .find(|&&(bx, by, bz, _)| (bx, by, bz) == (x, y, z))
+                .map_or(AIR, |&(.., id)| id)
+        } else {
+            AIR
+        }
+    });
+    mesh(&n, &tints())
+}
+
+#[test]
+fn a_model_copies_its_quads_and_a_neighbour_hides_those_on_the_edge() {
+    use crate::blocks::models::{Part, Turn, bake};
+    // A plate on the floor, reaching a sixteenth below its block, as a crop
+    // does, with a texture of its own in South.
+    let mut quads = Vec::new();
+    bake(
+        &[
+            Part::solid([0, 0, 0], [16, 2, 16], Face::North),
+            Part::open([4, -1, 8], [12, 15, 8]).rect(Face::North, Face::South, [0, 0, 16, 16]),
+        ],
+        Turn::NONE,
+        &mut quads,
+    );
+    let mut model = look(Shape::Model { quads: quads.leak() }, RenderClass::Cutout, Tint::None, 7);
+    model.faces[Face::South as usize].layer = 8;
+    let table = with_look(20, model);
+
+    let alone = mesh_in(&table, &[(5, 0, 5, 20)]);
+    assert_eq!(alone.quads(), 7);
+    assert_eq!(layer_quads(&alone.opaque, 8).len(), 1, "the plane shows its own slot");
+    let lowest = alone.opaque.iter().map(|vertex| vertex.position[1]).min();
+    assert_eq!(lowest, Some(-1), "a model can reach below its sub-chunk");
+    assert_eq!(alone.opaque[0].position[0], 5 * 16);
+
+    // Stone below and beside: the bottom and the west side go, the rest stays.
+    let boxed = mesh_in(&table, &[(5, 5, 5, 20), (5, 4, 5, STONE), (4, 5, 5, STONE)]);
+    assert_eq!(layer_quads(&boxed.opaque, 7).len(), 4);
+}

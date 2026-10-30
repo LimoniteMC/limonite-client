@@ -26,6 +26,7 @@ use limonite_packs::registry::Face;
 use crate::{
     blocks::{
         appearance::{Appearance, AppearanceTable, BambooLeaves, FaceLook, Liquid, RenderClass, Shape},
+        models::{box_face, face_uv, quarter_turn},
         shapes,
     },
     render::tint::{Tint, Tints},
@@ -67,7 +68,7 @@ pub const DIAGONAL: u8 = 6;
 pub struct Vertex {
     /// The position in the sub-chunk, in sixteenths of a block: 0 to 256, and
     /// a little either side, for a model that reaches out of its block. The
-    /// GPU reads it with `layer`, as four signed numbers; there are never
+    /// GPU reads it with layer, as four signed numbers; there are never
     /// 32,768 textures.
     pub position: [i16; 3],
     /// The texture's layer in the array.
@@ -356,6 +357,13 @@ impl Block<'_> {
                     }
                 }
             }
+            Shape::Model { quads } => {
+                for quad in quads {
+                    if !quad.cull.is_some_and(|face| self.neighbour_occludes(face)) {
+                        self.push(quad.corners, quad.uvs, quad.face, self.look.face(quad.slot), tints, mesh);
+                    }
+                }
+            }
         }
     }
 
@@ -524,40 +532,6 @@ impl Block<'_> {
     fn world_position(&self) -> [i32; 3] {
         [0, 1, 2].map(|axis| self.n.origin[axis] + i32::from(self.local[axis]))
     }
-}
-
-/// A box face's four corners, counter-clockwise seen from outside, starting
-/// at the texture's top left. Counter-clockwise is the front face the GPU
-/// keeps; it culls the back of every quad.
-const fn box_face(face: Face, min: [i8; 3], max: [i8; 3]) -> [[i8; 3]; 4] {
-    let ([x0, y0, z0], [x1, y1, z1]) = (min, max);
-    match face {
-        Face::Up => [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
-        Face::Down => [[x0, y0, z1], [x0, y0, z0], [x1, y0, z0], [x1, y0, z1]],
-        Face::North => [[x1, y1, z0], [x1, y0, z0], [x0, y0, z0], [x0, y1, z0]],
-        Face::South => [[x0, y1, z1], [x0, y0, z1], [x1, y0, z1], [x1, y1, z1]],
-        Face::West => [[x0, y1, z0], [x0, y0, z0], [x0, y0, z1], [x0, y1, z1]],
-        Face::East => [[x1, y1, z1], [x1, y0, z1], [x1, y0, z0], [x1, y1, z0]],
-    }
-}
-
-/// A corner's texture coordinates on `face`, from its position: a slab's
-/// side shows the matching part of the texture.
-const fn face_uv(face: Face, [x, y, z]: [i8; 3]) -> [u8; 2] {
-    let (u, v) = match face {
-        Face::Up => (x, z),
-        Face::Down => (x, 16 - z),
-        Face::North => (16 - x, 16 - y),
-        Face::South => (x, 16 - y),
-        Face::West => (z, 16 - y),
-        Face::East => (16 - z, 16 - y),
-    };
-    [u as u8, v as u8]
-}
-
-/// Turns texture coordinates a quarter around the texture's centre.
-const fn quarter_turn([u, v]: [u8; 2]) -> [u8; 2] {
-    [16 - v, u]
 }
 
 /// Java's `Mth.getSeed`: a position mixed into a number that's the same on

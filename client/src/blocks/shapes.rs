@@ -1,7 +1,7 @@
 //! Block shapes by Bedrock id, from pumpkin-data (m5-plan Decision 7,
 //! Finding 9): the collision boxes physics walks on, and the outline boxes
-//! the mesher draws where M4 drew stand-in cubes. Step 10's aiming reads the
-//! outlines too.
+//! the mesher draws for blocks with no model of their own (`blocks/models.rs`).
+//! Step 10's aiming reads the outlines too.
 //!
 //! A Bedrock id's boxes are its Java state's, the one
 //! [`BlockTable::shape_state`] picks. The tests check that the Java states

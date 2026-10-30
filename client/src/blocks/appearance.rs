@@ -2,14 +2,16 @@
 //! texture on each face, how each face is drawn, and its tint.
 //!
 //! - **Textures** come from the packs. `blocks.json` names a texture key for
-//!   each face, and `terrain_texture.json` a path for each key. M4 takes
-//!   variant 0 of a key, the default.
+//!   each face, and `terrain_texture.json` a path for each key, variant 0
+//!   being the default.
+//! - **Rules** (`blocks/rules.rs`) overrule that for the blocks whose slots
+//!   aren't faces, or whose variants go by state: m5-plan Step 7b.
 //! - **Shapes, tints and the blend list** come from the tables below, keyed
-//!   by Bedrock name. The install has no geometry for vanilla blocks
-//!   (Finding 8), so a client has to know the shapes itself. A block not in a
-//!   table is drawn as a cube, unless its Java state isn't one: then it's
-//!   Pumpkin's outline boxes (m5-plan Decision 7), approximate, and counted
-//!   in the log.
+//!   by Bedrock name, and from the rules' models (`blocks/models.rs`). The
+//!   install has no geometry for vanilla blocks (Finding 8), so a client has
+//!   to know the shapes itself. A block with neither is drawn as a cube, unless
+//!   its Java state isn't one: then it's Pumpkin's outline boxes (m5-plan
+//!   Decision 7), and counted in the log.
 //! - **Render classes** come from the textures' alpha: a face whose texture
 //!   has a see-through texel is alpha-tested.
 //!
@@ -25,7 +27,9 @@ use limonite_packs::{
 use pumpkin_data::{BlockState as JavaState, BlockStateId};
 
 use super::{
+    models::ModelQuad,
     palette::{BedrockState, Palette},
+    rules::{self, JavaBlock, Models, Pick},
     shapes,
 };
 use crate::{
@@ -38,7 +42,9 @@ use crate::{
 
 /// Blocks renamed since `blocks.json` was keyed, which it still knows by the
 /// old name (Finding 6).
-const ALIASES: [(&str, &str); 8] = [
+const ALIASES: [(&str, &str); 9] = [
+    // Bubbles are particles: the block itself is drawn as water.
+    ("bubble_column", "water"),
     ("grass_block", "grass"),
     ("sea_lantern", "seaLantern"),
     ("iron_chain", "chain"),
@@ -83,6 +89,7 @@ const CROSS: &[&str] = &[
     "short_dry_grass",
     "tall_dry_grass",
     "dandelion",
+    "golden_dandelion",
     "poppy",
     "blue_orchid",
     "allium",
@@ -150,7 +157,7 @@ const TWO_TALL: &[&str] = &[
 /// Thin planes against the faces a state names: vines by
 /// `vine_direction_bits`, the others by `multi_face_direction_bits`.
 const VINE: &str = "vine";
-const MULTI_FACE: &[&str] = &["glow_lichen", "sculk_vein"];
+const MULTI_FACE: &[&str] = &["glow_lichen", "resin_clump", "sculk_vein"];
 
 /// The faces `vine_direction_bits` names, bit by bit. Checked against
 /// Pumpkin's Java-to-Bedrock table in the tests.
@@ -185,16 +192,17 @@ const SNOW_LAYER: &str = "snow_layer";
 const BAMBOO: &str = "bamboo";
 
 /// Liquids, by name.
-const LIQUIDS: [(&str, Liquid); 4] = [
+const LIQUIDS: [(&str, Liquid); 5] = [
     ("water", Liquid::Water),
     ("flowing_water", Liquid::Water),
+    ("bubble_column", Liquid::Water),
     ("lava", Liquid::Lava),
     ("flowing_lava", Liquid::Lava),
 ];
 
 /// Drawn with alpha blending, back to front, in the second pass. Stained
 /// glass, and its panes, by suffix.
-const BLEND: &[&str] = &["water", "flowing_water", "ice", "slime", "honey_block"];
+const BLEND: &[&str] = &["water", "flowing_water", "bubble_column", "ice", "slime", "honey_block"];
 const BLEND_SUFFIXES: &[&str] = &["stained_glass", "stained_glass_pane"];
 
 /// What each tinted block is tinted by.
@@ -215,6 +223,7 @@ const TINTS: &[(&str, Tint)] = &[
     ("spruce_leaves", Tint::Evergreen),
     ("water", Tint::Water),
     ("flowing_water", Tint::Water),
+    ("bubble_column", Tint::Water),
     // Java's colour, the same everywhere. Bedrock's texture is grey too.
     ("waterlily", Tint::Fixed([0x20, 0x80, 0x30])),
 ];
@@ -222,6 +231,7 @@ const TINTS: &[(&str, Tint)] = &[
 /// Blocks whose sides are drawn opaque, their texture's alpha marking the
 /// texels to tint, and whose bottom isn't tinted (Finding 5).
 const GRASS_SIDES: &str = "grass_block";
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Liquid {
@@ -258,8 +268,12 @@ pub enum Shape {
     /// The outline boxes of this Java state (`blocks/shapes.rs`): stairs,
     /// fences, doors, torches and the other blocks M4 drew as stand-in
     /// cubes. Each face shows the block's texture for that face, cut by its
-    /// position, as a slab's does.
+    /// position, as a slab's does. A block whose model is its outline stays
+    /// this; the others have models.
     Boxes { state: BlockStateId },
+    /// A hand-made model, baked (`blocks/models.rs`): each quad shows one of
+    /// the look's six slots.
+    Model { quads: &'static [ModelQuad] },
 }
 
 /// How a face's texels are drawn.
@@ -373,8 +387,9 @@ pub struct Report {
     pub no_entry_sent: BTreeSet<String>,
     /// Names with an entry whose textures don't all resolve, and why.
     pub unresolved: BTreeMap<String, String>,
-    /// Names drawn as Pumpkin's outline boxes: close, but not the official
-    /// client's own models (rails are flat, beds and chests are boxes).
+    /// Names drawn as Pumpkin's outline boxes. For stairs, walls and buttons
+    /// that's their model. For the block entities it's a stand-in until M8:
+    /// beds, chests and signs are boxes.
     pub approximate: BTreeSet<String>,
     /// Texture files that couldn't be loaded, and why.
     pub failed_textures: Vec<(String, String)>,
@@ -417,8 +432,12 @@ pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, 
     let mut report = Report::default();
     let mut plans = Vec::with_capacity(palette.len());
     let mut problems: HashMap<&str, String> = HashMap::new();
+    // The same Java states physics collides with.
+    let java = BlockTable::build();
+    let mut models = Models::default();
     for (id, state) in palette.iter() {
-        let (plan, problem) = resolver.plan(state);
+        let java_block = java.shape_state(id).map(JavaBlock::of);
+        let (plan, problem) = resolver.plan(state, java_block.as_ref(), &mut models);
         if let Some(problem) = problem {
             problems.entry(&*state.name).or_insert(problem);
         }
@@ -427,8 +446,6 @@ pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, 
 
     let loaded = textures::load(stack, &resolver.requests);
     let mut failed_names: HashMap<&str, String> = HashMap::new();
-    // The same Java states physics collides with.
-    let java = BlockTable::build();
     let mut by_id = HashMap::with_capacity(plans.len());
     for (id, name, plan) in plans {
         let mut faces = [Appearance::MISSING.faces[0]; 6];
@@ -524,7 +541,12 @@ struct Resolver<'a> {
 
 impl Resolver<'_> {
     /// One state's plan, and the first problem resolving its textures.
-    fn plan(&mut self, state: &BedrockState) -> (Plan, Option<String>) {
+    fn plan(
+        &mut self,
+        state: &BedrockState,
+        java: Option<&JavaBlock>,
+        models: &mut Models,
+    ) -> (Plan, Option<String>) {
         let name = &*state.name;
         let shape = shape_of(state);
         let tint = TINTS
@@ -542,7 +564,9 @@ impl Resolver<'_> {
             return (plan, None);
         }
 
-        let entry = self.blocks.blocks.get(blocks_json_key(name));
+        // A clone, to outlive the borrows of `self` below.
+        let blocks = self.blocks;
+        let entry = blocks.blocks.get(blocks_json_key(name));
         let Some(textures) = entry.and_then(|entry| entry.textures.as_ref()) else {
             let problem = if entry.is_some() {
                 "its blocks.json entry has no textures"
@@ -554,30 +578,36 @@ impl Resolver<'_> {
         let isotropic = entry.and_then(|entry| entry.isotropic.as_ref());
 
         let mut problem = None;
-        // Which key each face shows, and how far it's turned.
-        let keys: [(Option<&str>, u8); 6] = match shape {
-            Shape::Cross | Shape::Planes { .. } => {
-                let key = cross_key(state, textures);
-                [(key, 0); 6]
+        // What each slot shows: a rule's say, or the tables'.
+        let picks: [Pick; 6] = if let Some(rule) = rules::rule(state, java, textures, models) {
+            plan.shape = rule.shape;
+            if let Some(tint) = rule.tint {
+                plan.tint = tint;
             }
-            Shape::Cube => pillar_keys(state, textures),
-            Shape::Bamboo { .. } => {
-                // The stem everywhere but the two leaf slots. The entry's
-                // other slots (the sapling and a single leaf) go unused.
-                let stem = (textures.key(Face::North), 0);
-                let mut keys = [stem; 6];
-                for leaves in [Face::Up, Face::South] {
-                    keys[leaves as usize] = (textures.key(leaves), 0);
+            rule.slots
+        } else {
+            match shape {
+                Shape::Cross | Shape::Planes { .. } => [Pick::key(cross_key(state, textures)); 6],
+                Shape::Cube => pillar_keys(state, textures),
+                Shape::Bamboo { .. } => {
+                    // The stem everywhere but the two leaf slots. The entry's
+                    // other slots (the sapling and a single leaf) go unused.
+                    let mut picks = [Pick::key(textures.key(Face::North)); 6];
+                    for leaves in [Face::Up, Face::South] {
+                        picks[leaves as usize] = Pick::key(textures.key(leaves));
+                    }
+                    picks
                 }
-                keys
+                _ => Face::ALL.map(|face| Pick::key(textures.key(face))),
             }
-            _ => Face::ALL.map(|face| (textures.key(face), 0)),
         };
-        for (face, (key, turns)) in Face::ALL.into_iter().zip(keys) {
+        for (face, pick) in Face::ALL.into_iter().zip(picks) {
             let overlay = name == GRASS_SIDES && face.is_side();
-            let tinted = tint != Tint::None && !(name == GRASS_SIDES && face == Face::Down);
+            let tinted = pick
+                .tinted
+                .unwrap_or(plan.tint != Tint::None && !(name == GRASS_SIDES && face == Face::Down));
             let alpha = if overlay { AlphaUse::Mask } else { AlphaUse::Coverage };
-            let texture = match key.map(|key| (key, self.path(key))) {
+            let texture = match pick.key.map(|key| (key, self.path(key, pick.variant))) {
                 Some((_, Ok(path))) => Some(self.request(path, alpha)),
                 Some((key, Err(err))) => {
                     problem.get_or_insert(format!("texture key `{key}`: {err}"));
@@ -592,19 +622,22 @@ impl Resolver<'_> {
                 texture,
                 overlay,
                 tinted,
-                turns,
+                turns: pick.turns,
                 isotropic: isotropic.is_some_and(|iso| iso.applies(face)),
             };
         }
         (plan, problem)
     }
 
-    /// A texture key's path: variant 0 of its `terrain_texture.json` entry.
-    fn path(&self, key: &str) -> Result<String, &'static str> {
+    /// A texture key's path: this variant of its `terrain_texture.json` entry.
+    /// A list shorter than that shows its first.
+    fn path(&self, key: &str, variant: usize) -> Result<String, &'static str> {
         let entry = self.terrain.textures.get(key).ok_or("not in terrain_texture.json")?;
         entry
             .textures
-            .first()
+            .as_slice()
+            .get(variant)
+            .or_else(|| entry.textures.first())
             .map(|texture| texture.path.clone())
             .ok_or("has no variants")
     }
@@ -620,7 +653,7 @@ impl Resolver<'_> {
 }
 
 /// The key a block has in `blocks.json`.
-fn blocks_json_key(name: &str) -> &str {
+pub(super) fn blocks_json_key(name: &str) -> &str {
     ALIASES
         .iter()
         .find(|(renamed, _)| *renamed == name)
@@ -739,10 +772,9 @@ fn cross_key<'a>(state: &BedrockState, textures: &'a FaceTextures) -> Option<&'a
 /// and the four around the length show the side, turned a quarter where
 /// that runs the grain along the length. Which faces need the turn follows
 /// from the mesher's texture orientation (`render::mesher`).
-fn pillar_keys<'a>(state: &BedrockState, textures: &'a FaceTextures) -> [(Option<&'a str>, u8); 6] {
+fn pillar_keys<'a>(state: &BedrockState, textures: &'a FaceTextures) -> [Pick<'a>; 6] {
     let side = textures.key(Face::North);
-    let own = |face| (textures.key(face), 0);
-    match state.string("pillar_axis") {
+    let keys: [(Option<&'a str>, u8); 6] = match state.string("pillar_axis") {
         Some("x") => [
             (side, 1),                     // down
             (side, 1),                     // up
@@ -759,8 +791,12 @@ fn pillar_keys<'a>(state: &BedrockState, textures: &'a FaceTextures) -> [(Option
             (side, 1),                     // west
             (side, 1),                     // east
         ],
-        _ => Face::ALL.map(own),
-    }
+        _ => Face::ALL.map(|face| (textures.key(face), 0)),
+    };
+    keys.map(|(key, turns)| Pick {
+        turns,
+        ..Pick::key(key)
+    })
 }
 
 /// The names of the blocks Pumpkin can send.
