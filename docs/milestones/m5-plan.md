@@ -1602,6 +1602,23 @@ by Pumpkin's own reader with no bytes left over.
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
 
+### Step 7d: Animated textures, fluids that flow, and a debug world (2026-10-31)
+
+- **One code commit,** not one per concern as usual: the session ended before it could be split.
+- **Animation:** 46 layers move, with 650 frames, 3.5 MB. The bench's average frame stays 0.32 ms, and
+  its p99 goes from about 0.70 ms to 0.76 ms.
+- **The irregular lava,** seen on a sheet first: each block turned its texture at random, as `isotropic`
+  says for a cube, and a flow was flat steps with gaps. Now a pool tiles evenly, and a flow slopes from
+  block to block with its texture running downhill.
+- **The debug world:** 15,958 places to go, 16,402 blocks in 265 chunks, written in about 150 ms, with
+  no change to the fork. Typed searches and `--goto` went to the right place, and a jump held still, with
+  the camera and the server's player agreeing.
+- **Checks:** 191 client tests, headless not re-run on this commit.
+- **Not verified:** nobody has seen the moving textures or the debug world in the window yet, or beside
+  the official client. Flow follows Java's rules, so Bedrock may differ.
+- **Left:** a corner of liquid beside a chunk that isn't loaded is a little off until its next mesh, a
+  water surface can't be seen from below, and the debug world's time stays at sunrise.
+
 ### Step 7c: Block models from the user's own Java jar (2026-10-31)
 
 - **Commits:**

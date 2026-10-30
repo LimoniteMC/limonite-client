@@ -46,8 +46,10 @@ _Last updated: 2026-10-26._
     and drawn in Bedrock's textures where they fit. All 24,714 quads of 2,519 models agree with what
     Blockbench builds from the same files. Without a jar, Step 7b's models draw, the same to the byte.
     Nothing derived from a jar goes in the repo (CLAUDE.md, Rules).
-  - **Next:** the owner asked for a debug world with every block state, and for animated textures and
-    fluids. Then the owner's walk beside the official client, and Step 8, the UI and the HUD.
+  - **Step 7d is done (2026-10-31):** flipbooks animate (`render/animation.rs`), fluids slope and flow,
+    and `--debug-world` holds every block state (`debug_world.rs`).
+  - **Next:** the owner's walk, in the debug world and beside the official client, and Step 8, the UI and
+    the HUD.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -228,6 +230,14 @@ cargo run -p limonite-client
     M4's 70-degree field of view, whatever the settings say.
 - **Dev builds** compile the client crate at `opt-level = 1` (root `Cargo.toml`), so meshing keeps
   up after a join. Overflow checks and debug assertions stay on.
+
+**The debug world** (m5-plan Step 7d): every block state in a grid, and water and lava set out beside it,
+in `run/debug-world`. `]` and `[` go to the next and last block, `.` and `,` to the next and last state, and
+typing in the terminal goes to what matches, such as `oak_door` or `door upper`. `--goto <text>` starts there.
+
+```bash
+cargo run --release -p limonite-client -- --debug-world
+```
 
 **The Java jar** (m5-plan Step 7c): the client looks for `--java-jar <file>`, then
 `%APPDATA%\.minecraft\versions\26.3\26.3.jar`, then `%APPDATA%\Blockbench\minecraft_assets_cache\26.3.jar`,
@@ -599,7 +609,6 @@ census is in m4-plan's Results.
 | Redstone wire | A dot, coloured by its power | Its connections, which Bedrock works out from the blocks around |
 | Chorus plants, fire and repeaters | A stem, fire on the floor, and never locked | The same |
 | Lily pads and the like | One turn of each | Java's turn by position. Bedrock's way isn't known |
-| Fire, and everything with a flipbook | Its first frame | Animation |
 
 **Without a jar,** Step 7b's hand-made models draw (`blocks/models.rs`), and these are also left:
 

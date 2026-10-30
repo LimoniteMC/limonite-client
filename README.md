@@ -149,6 +149,8 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
   they're laid out the same. Doors, fences, stairs, torches, lanterns, rails, crops, leaf litter,
   dripstone, beds and signs all come out exact. Without a jar, hand-made models stand in for most of
   them. Chests, banners, heads and shulker boxes stay simple boxes until entity models arrive.
+- **Textures and fluids that move.** Flipbooks animate, and water and lava slope and flow.
+- **A debug world.** `--debug-world` holds every block state in a grid, and you can jump to any of them.
 - **Bedrock-native world state.** Chunks decode straight into Bedrock's own palette format, and
   the client's world equals the server's, block for block and biome for biome. That's checked on
   all 3,725 chunks of a radius-32 view.
