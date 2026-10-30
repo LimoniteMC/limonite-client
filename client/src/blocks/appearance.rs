@@ -64,15 +64,22 @@ const ALIASES: [(&str, &str); 9] = [
     ("trip_wire", "tripWire"),
 ];
 
-/// Java's textures that Bedrock calls something else and draws a little
-/// differently, so their pixels can't say they're the same picture. All other
-/// textures go by their own name, or draw Java's picture if Bedrock's has the
-/// same pixels. Each is checked against the install when it's used.
-const BEDROCK_ART: [(&str, &str); 11] = [
+/// Java's textures whose Bedrock picture can't be found from its pixels: it goes by
+/// another name and is drawn a little differently, or it's see-through in a few other
+/// places. Each was compared by eye, and only has to be the same size in the install.
+/// Every other texture goes by its own name, and has to be see-through in the same
+/// places, or Java's is drawn: if Bedrock has the same pixels, that's the same thing.
+const BEDROCK_ART: [(&str, &str); 16] = [
+    ("cactus_side", "cactus_side"),
+    ("cocoa_stage2", "cocoa_stage_2"),
     ("lilac_bottom", "double_plant_syringa_bottom"),
     ("lilac_top", "double_plant_syringa_top"),
     ("piston_top", "piston_top_normal"),
     ("pumpkin_stem", "pumpkin_stem_disconnected"),
+    // Java's head is square, and Bedrock's a smaller cross with a yellow middle.
+    ("redstone_torch", "redstone_torch_on"),
+    ("scaffolding_side", "scaffolding_side"),
+    ("soul_fire_1", "soul_fire_1"),
     ("spruce_planks", "planks_spruce"),
     // `stonecutter_` is Bedrock's older block.
     ("stonecutter_bottom", "stonecutter2_bottom"),
@@ -797,14 +804,15 @@ impl Resolver<'_> {
             return path.clone();
         }
         let short = name.rsplit('/').next().unwrap_or(name);
-        let bedrock = BEDROCK_ART
-            .iter()
-            .find(|(java, _)| *java == short)
-            .map_or(short, |&(_, bedrock)| bedrock);
-        let fits = self.names.get(bedrock).copied().filter(|path| {
+        let chosen = BEDROCK_ART.iter().find(|(java, _)| *java == short).map(|&(_, bedrock)| bedrock);
+        let fits = self.names.get(chosen.unwrap_or(short)).copied().filter(|path| {
             let java = self.jar.as_deref_mut().map(|jar| textures::read_java_frame(jar, name));
             let bedrock = textures::read_pack_frame(self.stack, path);
-            matches!((java, bedrock), (Some(Ok(java)), Ok(bedrock)) if same_layout(&java, &bedrock))
+            match (java, bedrock) {
+                (Some(Ok(java)), Ok(bedrock)) if chosen.is_some() => java.dimensions() == bedrock.dimensions(),
+                (Some(Ok(java)), Ok(bedrock)) => same_layout(&java, &bedrock),
+                _ => false,
+            }
         });
         let path = fits.map_or_else(|| format!("{JAVA_TEXTURE}{name}"), str::to_string);
         self.art.insert(name.clone(), path.clone());
