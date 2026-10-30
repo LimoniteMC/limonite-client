@@ -780,6 +780,56 @@ Added on 2026-10-30, when the owner's walk found the physics right and the speci
   draws as entity models with entity textures. They stay boxes until then, but face the right way.
 - **Owner checkpoint:** a dripstone cave, a village and a forest, beside the official client.
 
+## Step 7c: Block models from the user's own Java jar (client; the owner's idea, 2026-10-30)
+
+The owner pointed at Blockbench's Asset Browser plugin, which turns the jar's files into working
+models of every block, and asked for the misc models to be encoded better, within the law, and checked
+against it (Deviation 26).
+
+- **The law, as read from Mojang's EULA and Usage Guidelines on 2026-10-30.** This is an engineer's
+  reading: Mojang says it won't advise on a project, and to ask an attorney.
+  - **Re-encoding changes nothing.** The guidelines name models among Mojang's assets, and the EULA
+    keeps copies and derivatives Mojang's, down to one block's look. A tighter format is still a copy,
+    and the GPL can't cover it. So nothing derived from the jar goes in the repo or the binary, generated
+    or typed by hand.
+  - **What's fine is what the plugin does, and what we already do with textures:** it ships no assets
+    and reads the user's own copy on the user's machine. The EULA cares about giving copies to others,
+    and the guidelines are relaxed about what people do for themselves.
+  - **The copy has to come from Mojang,** because the EULA wants game downloads from a source it
+    authorises: the launcher's folder, or a file the user fetched from Mojang. Never a third-party
+    mirror such as mcasset.cloud, and never one as a dependency.
+- **The compiler** (`blocks/java_models.rs`), at startup, in memory, for the states the palette has:
+  jar → block state files → model files, parents followed → baked quads.
+  - **Finding the jar:** `--java-jar`, then the launcher's `versions/26.3/26.3.jar`, then the copy
+    Blockbench's plugin keeps. **With none, Step 7b's hand-made models draw,** so a jar makes the blocks
+    exact but isn't needed to play.
+  - **The encoding** (worth teaching): quads are shared between blocks that only differ by texture.
+    A quad holds a slot, not a texture, so all oak and spruce fences use the same quads. Measured on
+    26.3: 2.4 MB of JSON and 80,099 baked quads become about 12,000. Nothing is written to disk.
+  - **Finer vertices:** the jar's models have half and quarter sixteenths and tilted planes, so a
+    position goes from a sixteenth of a block to a 1,024th, and texture coordinates from a sixteenth
+    to a 128th. The vertex stays 16 bytes.
+- **Textures:** a model names Java's textures, and Bedrock's art comes first.
+  - **Bedrock's where it fits:** the same name (or a short table of names), and the same see-through
+    texels, which is how we know a texture's laid out for the same shape.
+  - **Java's where it doesn't,** read from the jar: 26.3 has block models for beds and signs, and
+    Bedrock only has entity atlases for those, so they stop being planks now, not at M8.
+  - **One layer per picture:** two textures with the same pixels share a layer. Of the 831 textures the
+    misc models use, 615 have the same pixels in the install.
+- **What keeps its own path:** full cubes (`blocks.json` and the rules know them, overlays and all),
+  liquids, bamboo, plants whose tip depends on the block beyond, and anything the jar draws nothing for:
+  chests, shulker boxes, banners, heads, decorated pots and conduits still wait for M8. Tints stay ours:
+  the jar says which faces take a tint, and the block's colour comes from Bedrock's maps.
+- **Checks:**
+  - unit tests on made-up model files of our own, so no test needs or holds Mojang's;
+  - an ignored test over every block state, with `LIMONITE_JAVA_JAR`, that lists what breaks an
+    assumption;
+  - the contact sheets, with and without the jar;
+  - the owner's asset browser as the reference: Blockbench's own code reads the same files, and a
+    script compares what it builds with what we baked.
+- **The wall:** what looks at the jar writes only to gitignored `run/`. Corrections to Step 7b's tables
+  don't come from it.
+
 ## Step 8: The UI, and the HUD (client)
 
 - **`ui/`:** `atlas.rs` (sprites and nine-slices), `font.rs`, `lang.rs`, `tree.rs` and `layout.rs`,
@@ -1187,6 +1237,12 @@ The questions as they were asked:
 25. **Vertex positions are signed** (Step 7b), not the unsigned sixteenths of m4-plan Decision 6, so a
     model can reach outside its block as Java's do. A crop reaches a sixteenth below itself, to meet
     the farmland. The vertex is still 16 bytes.
+
+26. **A new Step 7c, models from the user's jar** (owner, 2026-10-30). Step 7b wrote 60-odd models by
+    hand because the install has no geometry (m4-plan Finding 8), and Step 7b's Deviation 23 kept block
+    entities for M8. The owner pointed out that the Java jar has every model and asked for a better
+    encoding within the law. That adds a second, optional source of assets beside the Bedrock install,
+    read the same way: at runtime, from the user's copy, and never bundled.
 
 ## Results (filled in during execution)
 
