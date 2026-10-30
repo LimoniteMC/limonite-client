@@ -805,7 +805,8 @@ against it (Deviation 26).
     exact but isn't needed to play.
   - **The encoding** (worth teaching): quads are shared between blocks that only differ by texture.
     A quad holds a slot, not a texture, so all oak and spruce fences use the same quads. Measured on
-    26.3: 2.4 MB of JSON and 80,099 baked quads become about 12,000. Nothing is written to disk.
+    26.3, for the states Bedrock has: 2.3 MB of JSON, and 72,917 quads if each model were baked apart,
+    become 16,730. It takes 112 ms, so nothing needs writing to disk.
   - **Finer vertices:** the jar's models have half and quarter sixteenths and tilted planes, so a
     position goes from a sixteenth of a block to a 1,024th, and texture coordinates from a sixteenth
     to a 128th. The vertex stays 16 bytes.
@@ -1244,6 +1245,15 @@ The questions as they were asked:
     encoding within the law. That adds a second, optional source of assets beside the Bedrock install,
     read the same way: at runtime, from the user's copy, and never bundled.
 
+27. **The Java state nearest its default now stands for every Bedrock id** (Step 7c), not only those
+    whose boxes differ (Deviation 21). Laying the jar's models beside Blockbench's showed every repeater
+    locked: Bedrock doesn't keep `locked`, and Java numbers `true` first, so the lowest state had it. No
+    box changes, since states that differ in boxes already took this route.
+28. **With a jar, beds and signs don't wait for M8** (Step 7c). Java 26.3 draws them as block models,
+    so Step 7b's list for M8 shrinks to what the jar has nothing for: chests, shulker boxes, banners,
+    heads, decorated pots, conduits and copper golem statues. A bed's colour still waits, as Bedrock
+    keeps it in the block actor, so every bed is white until then.
+
 ## Results (filled in during execution)
 
 ### Step 1: what the official client sends (2026-10-26)
@@ -1559,6 +1569,81 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 7c: Block models from the user's own Java jar (2026-10-31)
+
+- **Commits:**
+  - `b1e4e85` "Give vertices 1,024ths of a block and 128ths of a texture";
+  - `4301c30` "Stand for a Bedrock id with the Java state nearest its default";
+  - `c7e6e5b` "Find the user's Java jar, and compile block models from it";
+  - `ac2f3c5` "Load textures from the jar, and give one picture one layer";
+  - `dd87269` "Draw the jar's models, in Bedrock's textures where they fit";
+  - `ee3076e` "Add a script that compares compiled models with Blockbench's";
+  - `3585e05` "Choose Bedrock's art by name where it's nearly the same picture".
+- **The law:** PLAN.md, "Resource packs", has the reading and the rules. In short, a tighter encoding
+  of Mojang's models would still be a copy, so the client reads the user's own jar at runtime, as the
+  plugin does, and keeps the result in memory only.
+- **The encoding,** for the 15,953 states Bedrock has, on 26.3:
+
+  | | |
+  | --- | --- |
+  | Read from the jar | 3,850 files, 2.3 MB of JSON |
+  | Every model baked on its own | 73,029 quads |
+  | Kept, sharing quads between blocks that differ only by texture | 16,826 quads in 1,201 shapes, 606 KB |
+  | Time | 108 ms in a release build, at every startup |
+
+  At 108 ms a cache on disk isn't worth having, so nothing derived from the jar is ever written.
+- **The window,** on one copy of the M4 template world, in a release build:
+
+  | | With the jar | Without |
+  | --- | --- | --- |
+  | Everything before the server starts | 595 ms | 411 ms |
+  | Average frame | 0.33 ms | 0.32 ms |
+  | Faces on the GPU at the end | 1,508,927 | 1,522,132 |
+  | Texture array | 1,182 layers, 6.5 MB | 1,133 layers, 6.2 MB |
+  | Block names drawn as Pumpkin's boxes | 64 | 288 |
+
+  Without a jar, the contact sheets are the same as Step 7b's to the byte.
+- **The double check against the Asset Browser's program:** `scripts/compare-models-with-blockbench.mjs`
+  starts Blockbench with a throwaway profile and has it load every model with the call the plugin
+  makes, then compares its meshes with what we bake.
+  - **Of 2,519 models, all 24,714 quads agree:** corners, texture coordinates, cull faces and tint
+    indexes, with no face over on either side. That covers tilted and rescaled boxes, and the two with
+    rotations about several axes.
+  - **What it can't check:** a block state's turn and `uvlock`, since Blockbench opens one model at a
+    time. The next check covers those.
+  - **A picture of 37 models from each,** with the same camera, was how the locked repeaters showed
+    (Deviation 27). The numbers couldn't see that, as the wrong state's model was built correctly.
+- **Every Java state against a real jar** (ignored tests, with `LIMONITE_JAVA_JAR`):
+  - **All 35,723 compile,** with no missing file, no state needing more than 7 textures, and every
+    texture in the jar.
+  - **Doors, trapdoors, stairs, slabs, buttons, pressure plates, fences, panes, bars and shelves** lie
+    within half a sixteenth of Pumpkin's outlines in every state, which only holds if they're turned
+    the right way. The other 335 blocks that differ are printed; the differences are of the expected
+    kinds, such as plants and flames sticking out of small hitboxes, and open gates.
+  - **83 blocks have states that share a Bedrock id and look different.** A new one fails the test:
+
+    | Blocks | Why |
+    | --- | --- |
+    | Beds, and flower pots with something in them | Bedrock keeps the colour and the plant in the block actor |
+    | Pistons, sticky pistons and piston heads | The same, for whether it's pushed out |
+    | Redstone wire, chorus plants, fire, vines, repeaters, scaffolding | Bedrock works out their connections, `locked` and bottoms from the blocks around |
+    | Buttons and levers | Java turns them on the floor and ceiling, and Bedrock doesn't |
+    | Kelp and the three vines | Java's head and body are two blocks, and Bedrock's one |
+
+- **Textures:** 347 of the ones models name are Bedrock's, and 331 Java's.
+  - **Most of Java's have the same pixels in the install** under another name, so they share its layer:
+    the array only grows by 49 layers.
+  - **Java's own are what Bedrock lays out differently:** signs and beds, which it only has as entity
+    atlases; pane edges, chains and redstone dust; the bamboo gate; and dried ghasts.
+- **What's left:**
+  - **No model in the jar, so boxes until M8:** chests, shulker boxes, banners, heads, decorated pots,
+    conduits and copper golem statues.
+  - **Worked out from the blocks around, and not done:** redstone wire draws as a dot, chorus plants as
+    a stem, repeaters never lock, and fire only burns on the floor.
+  - **Weighted models show their first:** Java picks by position, and Bedrock's way isn't known.
+  - **Not yet beside the official client.** The jar is Java's, so where Bedrock's engine draws a block
+    differently, this will too. Lit redstone torches are the first to check: they keep Java's glow boxes.
 
 ### Step 7b: Bedrock's textures and shapes for the blocks Step 7 got wrong (2026-10-30)
 

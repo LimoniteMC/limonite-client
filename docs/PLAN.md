@@ -243,6 +243,16 @@ Iris packs (the Java Edition format, OptiFine-derived) load by drag and drop. A 
 
 Bedrock resource packs are loaded through a layered virtual filesystem; Molang is the one genuinely hard dependency. Vanilla assets are loaded from the user's own Bedrock install at runtime and never shipped in the binary. Mojang's public `bedrock-samples` repo is the format reference.
 
+**Block models come from the user's own Java jar, if there is one** (m5-plan Step 7c). Bedrock's engine draws vanilla blocks from its own code, so its install has no shapes for them. Java's jar has them all, as data. The client compiles them at startup, in memory, from the launcher's copy or a path the user gives, and draws them with Bedrock's textures wherever those are laid out the same. With no jar, hand-made models draw (`client/src/blocks/models.rs`), so a jar makes blocks exact but isn't needed to play.
+
+**Mojang's terms, as read on 2026-10-30.** An engineer's reading, not legal advice: Mojang says it won't advise on a project, and to ask an attorney.
+
+- **Nothing of Mojang's in the repo or the binary, in any encoding.** The Usage Guidelines name models among its assets, and the EULA keeps copies and derivatives its own, down to one block's look. So re-encoding a model doesn't make it ours, and the GPL can't cover it.
+- **Reading the user's own copy on the user's machine is fine:** the EULA's limit is on giving copies to others, and the guidelines are relaxed about what people do for themselves. It's what launchers and Blockbench's Asset Browser do.
+- **The copy has to come from Mojang,** since the EULA wants game downloads from a source it authorises. Never a third-party mirror.
+- **The hand-made models are the soft spot.** They're our own simple shapes, fitted to the textures, and hold nothing read from a jar. But they were written in the terms of Java's models, and the EULA's claim on a block's "look and feel" is broad. So they stay small, and nothing read from a jar corrects them.
+- **Also required:** nothing may look official, and the disclaimer stays in the README.
+
 **Layered VFS**
 
 - The pack stack is an ordered list; lookups walk it top-down and return the first hit.
@@ -391,7 +401,7 @@ The biggest risk is upstream Pumpkin's Bedrock support being incomplete; the big
 | The client binary embeds the Bedrock block palette (M4) | 3.9 MB of BDS-mined block names and states, from the fork's `assets/bedrock/block_states.nbt` (CloudburstMC's dump, vendored with Geyser's notice), ship inside the client. It's interoperability data, not assets, but it's Mojang-derived | Dev builds only until decided, together with the datapack row above. `blocks/palette_source.rs` is the one module that knows the source, so a runtime read or a generated table can replace it without touching the renderer |
 | Bedrock auto-updates past Pumpkin's exact protocol | The official client, our control, can't join at all: Pumpkin accepts one exact protocol | Record the client version in each milestone's test; take upstream's protocol bumps at a weekly sync, with the owner, ideally between milestones; avoid updating the test client mid-milestone |
 | Pumpkin trusts what a Bedrock client reports (found while planning M5) | Pumpkin takes a Bedrock player's position as sent, with no speed or collision check, and places whatever item the client says it holds. That's harmless for the host, who owns the world. But a LAN guest's client (M7) could fly, pass through walls, or place blocks it doesn't have | M7 decides how to treat guests before LAN opens: accept it on a trusted LAN, add checks through a seam, or upstream checks to Pumpkin. Details: `docs/milestones/m5-plan.md`, Findings 1 and 3 |
-| Asset and licence issues | Can't distribute | Load vanilla assets from the user's install; client is GPL-3.0; never bundle packs |
+| Asset and licence issues | Can't distribute | Load vanilla assets from the user's install, and block models from their Java jar, never anything derived from them in the repo ("Resource packs"); client is GPL-3.0; never bundle packs |
 | Public servers and Realms | Custom clients can trip anti-cheat or break terms | Out of scope; test only on the embedded server and own LAN |
 
 **Open questions**
@@ -402,7 +412,7 @@ The biggest risk is upstream Pumpkin's Bedrock support being incomplete; the big
 - [ ] Exact form of the control API: function calls on a handle, or a dedicated control channel?
 - [x] How does the host's identity work when there's no Xbox login on `LocalChannel`? **The host sends an unsigned token: a fixed dev identity now, a per-install one saved with the settings in M5** (M2; recon §6).
 - [ ] What permission level does the host get? Pumpkin's Bedrock `StartGame` hard-codes 2 with a TODO. Decide in M5.
-- [ ] How does the embedded server get Mojang's vanilla datapack without the binary bundling it? (Found in M0; see the Risks table. Must be settled before any release.)
+- [ ] How does the embedded server get Mojang's vanilla datapack without the binary bundling it? (Found in M0; see the Risks table. Must be settled before any release. The client jar holds `data/` too, so the route block models took in m5-plan Step 7c may answer this as well.)
 - [x] Which Bedrock protocol version is upstream Pumpkin targeting right now? **1.26.51, protocol 2193, exact match only** (fork commit `aac0a82`, M0).
 
 **References**

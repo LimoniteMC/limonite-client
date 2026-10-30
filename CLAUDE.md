@@ -70,6 +70,14 @@ All three transports implement the `Transport` trait. The host never touches the
   folders, except the gameplay screenshots the owner picks for the README, which live in
   `docs/readme/screenshots/` (the owner's call on 2026-10-25: Mojang's terms allow gameplay
   screenshots).
+  - **That covers anything derived from them, in any encoding.** Mojang's terms name models among
+    its assets and keep derivatives its own, so a tighter format is still a copy. Block models come
+    from the user's own Java jar at runtime (`client/src/blocks/jar.rs`, m5-plan Step 7c).
+  - **What looks at a jar writes only to gitignored `run/`.** Tests use model files made up for
+    them, and nothing read from a jar goes into the repo, generated or typed by hand: not even a
+    fix to the hand-made models in `blocks/models.rs`.
+  - **Never read Mojang's files from a third-party mirror,** such as mcasset.cloud. The copy has to
+    come from Mojang: the launcher's folder, or a file the user fetched from Mojang.
 - Never connect to public servers or Realms while testing. Embedded server and own LAN only.
 - Never attempt to decrypt Marketplace content.
 - Always update the readme regarding any info that needs to be shared.

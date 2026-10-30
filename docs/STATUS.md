@@ -41,8 +41,13 @@ _Last updated: 2026-10-26._
     textures are picked by its state (`blocks/rules.rs`), and 60-odd blocks have hand-made models
     (`blocks/models.rs`). Tests check every block Pumpkin can send, and every state of each model
     family against Pumpkin's outlines.
-  - **Next:** the owner's walk beside the official client: a dripstone cave, a village and a forest.
-    Then Step 8, the UI and the HUD.
+  - **Step 7c is done (2026-10-31):** the owner's idea (m5-plan Deviation 26). With the user's own
+    Java jar, every block's real model is compiled at startup, in memory (`blocks/java_models.rs`),
+    and drawn in Bedrock's textures where they fit. All 24,714 quads of 2,519 models agree with what
+    Blockbench builds from the same files. Without a jar, Step 7b's models draw, the same to the byte.
+    Nothing derived from a jar goes in the repo (CLAUDE.md, Rules).
+  - **Next:** the owner asked for a debug world with every block state, and for animated textures and
+    fluids. Then the owner's walk beside the official client, and Step 8, the UI and the HUD.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -183,7 +188,8 @@ Windows 11, with Git Bash and PowerShell both used.
 
 **Toolchain**
 - rustc/cargo **1.99.1** stable (MSVC), with clippy.
-- VS 2022 C toolchain and CMake are installed. There is **no Python**; use PowerShell for JSON.
+- VS 2022 C toolchain and CMake are installed. Python 3.14 is there too, with Pillow, for throwaway
+  scripts.
 
 **Pumpkin fork: `pumpkin/`**
 - A git submodule of `https://github.com/Doodle-Studios/Pumpkin`, branch **`limonite`**, at
@@ -223,6 +229,28 @@ cargo run -p limonite-client
 - **Dev builds** compile the client crate at `opt-level = 1` (root `Cargo.toml`), so meshing keeps
   up after a join. Overflow checks and debug assertions stay on.
 
+**The Java jar** (m5-plan Step 7c): the client looks for `--java-jar <file>`, then
+`%APPDATA%\.minecraft\versions\26.3\26.3.jar`, then `%APPDATA%\Blockbench\minecraft_assets_cache\26.3.jar`,
+where the owner's is. It logs what it found. Tests and sheets take `LIMONITE_JAVA_JAR`.
+
+```bash
+LIMONITE_JAVA_JAR="$APPDATA/Blockbench/minecraft_assets_cache/26.3.jar" LIMONITE_BEDROCK="C:/XboxGames/Minecraft for Windows/Content" cargo test -p limonite-client --bin limonite-client -- --ignored --skip contact_sheets --skip dump_every --nocapture
+```
+
+- **What those print:** every Java state against the jar, against Pumpkin's outlines, and against the
+  states it shares a Bedrock id with, in names and counts.
+- **Comparing with Blockbench,** after a version bump. It starts Blockbench with a throwaway profile,
+  and leaves your own alone. `run/` is gitignored, and this must stay there, as it's derived from
+  Mojang's files:
+
+  ```bash
+  LIMONITE_JAVA_JAR="$APPDATA/Blockbench/minecraft_assets_cache/26.3.jar" LIMONITE_MODEL_DUMP=run/step7c/models cargo test -p limonite-client --bin limonite-client dump_every_model -- --ignored
+  ```
+
+  ```bash
+  node scripts/compare-models-with-blockbench.mjs run/step7c/models
+  ```
+
 **The contact sheets** (m5-plan Step 7b): block states drawn through the real mesher, texture array
 and shader, with no window, into labelled PNGs in `run/sheets`. Each tile is one state on a stone
 floor, from the south-east and the north-west. They show Mojang's textures, so they stay gitignored.
@@ -233,6 +261,8 @@ LIMONITE_BEDROCK="C:/XboxGames/Minecraft for Windows/Content" cargo test -p limo
 
 - `LIMONITE_SHEETS=doors,flat` draws only these sheets, and an empty value none (`SHEETS` in
   `render/sheet.rs` lists them).
+- With `LIMONITE_JAVA_JAR` set, they show the jar's models, and otherwise the hand-made ones. A filter
+  can ask about the Java state: `java.facing=south`.
 - `LIMONITE_TEXTURES=door_lower,candle` draws those terrain keys' textures large, with a grid, into
   `textures.png`, for reading off a model's texture rectangles.
 **Run the client: the scripted session** (`--headless`, the M2 and M3 acceptance run; no GPU and
@@ -559,26 +589,37 @@ M5's Step 7 drew them as Pumpkin's outline boxes, and Step 7b, after the owner's
 them models of their own (`blocks/models.rs`) and the right textures (`blocks/rules.rs`). The M4
 census is in m4-plan's Results.
 
-**What's left:**
+**What's left, with a jar** (m5-plan Step 7c, which compiles every other block's model from it):
 
 | Blocks | What they are now | What they want |
 | --- | --- | --- |
-| Chests, ender chests, beds, signs, hanging signs, banners, heads and decorated pots | Boxes, turned the right way. Beds and banners show plain planks | Entity models and entity textures, and their block actors: a bed's colour, a pot's sherds, two chests joined. M8 |
+| Chests, ender chests, shulker boxes, banners, heads, decorated pots, conduits and copper golem statues | Boxes, turned the right way. The jar has no model for them | Entity models and entity textures, and their block actors. M8 |
+| Beds | White, all of them | Their colour, in the block actor. M8 |
 | What's in a flower pot | An empty pot | Its block actor. M8 |
-| Redstone wire | A plain cross, coloured by its power | Its connections, which Bedrock works out from the blocks around |
-| Chorus plants | A box | The same. They only grow in the End |
+| Redstone wire | A dot, coloured by its power | Its connections, which Bedrock works out from the blocks around |
+| Chorus plants, fire and repeaters | A stem, fire on the floor, and never locked | The same |
+| Lily pads and the like | One turn of each | Java's turn by position. Bedrock's way isn't known |
+| Fire, and everything with a flipbook | Its first frame | Animation |
+
+**Without a jar,** Step 7b's hand-made models draw (`blocks/models.rs`), and these are also left:
+
+| Blocks | What they are now | What they want |
+| --- | --- | --- |
+| Beds, signs and hanging signs | Boxes. Beds show plain planks | The jar, or M8 |
 | Tripwire and its hook | Plain strips, and a simple plate and hook | Java's small tilted parts |
-| Scaffolding, dragon eggs, shelves, copper golem statues, conduits and heavy cores | Pumpkin's boxes | Models of their own |
+| Scaffolding, dragon eggs, shelves and heavy cores | Pumpkin's boxes | Models of their own |
 | Sculk sensors | A box without its tendrils | Four tendril planes |
 | Open eyeblossoms, firefly bushes | Without their glow | A second, unlit layer |
 | Pale moss carpet | A carpet | Its sides, which climb walls |
 | Pitcher crops | Stages not drawn right | A model. Only grown from a sniffer's seed |
 | Jigsaw blocks | Not turned | Their orientation. Only placed by a command |
-| Fire, and everything with a flipbook | Its first frame | Animation. M8 |
 
-**Written from Java's models, and not yet compared with the official client:** leaf litter's and
-petals' quarters, the tilt of wall torches and levers, lectern tops, dripleaf leaves as they tilt, and
-which way trapdoor and glazed terracotta textures turn.
+**Not yet compared with the official client,** with or without a jar: the jar is Java's, so where
+Bedrock's engine draws a block differently, this will too. Lit redstone torches are the first to check,
+as they keep Java's glow boxes. The hand-made models were written from Java's, and are likeliest to
+differ in leaf litter's and petals' quarters, the tilt of wall torches and levers, lectern tops, dripleaf
+leaves as they tilt, and which way trapdoor and glazed terracotta textures turn. Nothing read from a jar
+goes back into them (CLAUDE.md, Rules).
 
 **How to look at them:** the contact sheets (Dev environment).
 

@@ -144,9 +144,11 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
   within 0.000015 blocks: walking, sprinting, jumps, falls, water, ladders and flight.
 - **Vanilla textures from your install.** The `packs` crate stacks all 55 vanilla resource packs
   at runtime, from loose folders and `__brarchive` archives alike.
-- **Blocks that look like themselves.** Doors, fences, torches, lanterns, rails, crops, leaf litter
-  and dripstone have models of their own, and textures that follow their state. Chests, beds and
-  signs stay simple boxes until entity models arrive.
+- **Blocks that look like themselves.** If you have Minecraft: Java Edition's jar, Limonite compiles
+  every block's real model from it at startup, in memory, and wears Bedrock's textures on them wherever
+  they're laid out the same. Doors, fences, stairs, torches, lanterns, rails, crops, leaf litter,
+  dripstone, beds and signs all come out exact. Without a jar, hand-made models stand in for most of
+  them. Chests, banners, heads and shulker boxes stay simple boxes until entity models arrive.
 - **Bedrock-native world state.** Chunks decode straight into Bedrock's own palette format, and
   the client's world equals the server's, block for block and biome for biome. That's checked on
   all 3,725 chunks of a radius-32 view.
@@ -188,6 +190,11 @@ colour and fog; clouds, weather and reflective water aren't part of it.</sub>
 - **Minecraft: Bedrock Edition**, installed the usual way, so that it lands in
   `<drive>:\XboxGames\Minecraft for Windows`. Limonite reads the vanilla textures from it while it
   runs. Headless mode doesn't need it.
+- **Optional: Minecraft: Java Edition 26.3's jar,** for exact block models. Play 26.3 once in the
+  launcher, and Limonite finds it in `.minecraft\versions`, or pass `--java-jar <file>`. If you use
+  Blockbench's Asset Browser, the copy it fetched from Mojang is found as well. It's only read, in
+  memory. Without one, Limonite uses hand-made models. Minecraft for PC has included both editions
+  since 2022.
 - **[Rust](https://rustup.rs/)**, stable 1.96 or newer. The repo's `rust-toolchain.toml` picks
   stable for you.
 - **The MSVC C++ build tools** (Visual Studio 2022, or its Build Tools), which Rust needs on Windows
@@ -435,7 +442,8 @@ The rules Claude works by are in [CLAUDE.md](CLAUDE.md).
 Limonite is for your own worlds and your own LAN.
 
 - **No Mojang assets or third-party packs bundled.** Vanilla assets are only ever read at runtime
-  from your own install. The only Mojang imagery in the repo is the README's gameplay
+  from your own install, and block models from your own Java jar. Nothing derived from them is kept,
+  in the repo or on your disk. The only Mojang imagery in the repo is the README's gameplay
   screenshots.
 - **Not for public servers or Realms.** Custom clients can trip anti-cheat or break terms of
   service, so Limonite is only tested on its embedded server and its owner's LAN.
