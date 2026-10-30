@@ -18,9 +18,18 @@ use std::{collections::HashMap, time::Instant};
 use image::RgbaImage;
 use limonite_packs::{ImageFormat, PackStack, TextureFile};
 
+use crate::blocks::jar::Jar;
+
 /// Bedrock's own texture for anything that can't be resolved. It's always
 /// layer 0.
 pub const MISSING_TEXTURE: &str = "textures/misc/missing_texture";
+/// A path with this in front names a texture in the Java jar, the way models name
+/// it: `java:block/lantern`.
+pub const JAVA_TEXTURE: &str = "java:";
+/// The largest a texture from the jar is kept. Every layer is as big as the
+/// biggest, so the one 64-texel texture in 26.3, on a block few will meet, would
+/// make the whole array four times the memory.
+const JAVA_TEXTURE_MAX: u32 = 32;
 
 /// What a texture's alpha channel means. It decides how mipmaps average the
 /// colour.
@@ -75,20 +84,23 @@ pub struct Loaded {
 /// Loads every texture in `requests` (a path without its extension, and
 /// how its alpha is used) into one array, after the missing texture.
 #[must_use]
-pub fn load(stack: &PackStack, requests: &[(String, AlphaUse)]) -> Loaded {
+pub fn load(stack: &PackStack, mut jar: Option<&mut Jar>, requests: &[(String, AlphaUse)]) -> Loaded {
     let start = Instant::now();
     let mut failed = Vec::new();
     let mut frames = Vec::new();
 
     // Layer 0. Should the install lack it, a checkerboard of our own stands
     // in: nothing Mojang's is ever bundled.
-    let missing = match read_frame(stack, MISSING_TEXTURE) {
+    let missing = match read_pack_frame(stack, MISSING_TEXTURE) {
         Ok(frame) => frame,
         Err(reason) => {
             failed.push((MISSING_TEXTURE.to_string(), reason));
             checkerboard()
         }
     };
+    // Two textures with the same pixels share a layer: Bedrock and Java call many
+    // of the same pictures by different names.
+    let mut by_pixels = HashMap::from([((missing.dimensions(), missing.as_raw().clone(), AlphaUse::Coverage), 0u16)]);
     frames.push((missing, AlphaUse::Coverage));
 
     // The same path can be asked for more than once; it gets one layer.
@@ -96,10 +108,16 @@ pub fn load(stack: &PackStack, requests: &[(String, AlphaUse)]) -> Loaded {
     let mut layer_of = Vec::with_capacity(requests.len());
     for (path, alpha) in requests {
         let index = *by_request.entry((path.as_str(), *alpha)).or_insert_with(|| {
-            match read_frame(stack, path) {
+            match read_frame(stack, jar.as_deref_mut(), path) {
                 Ok(frame) => {
-                    frames.push((frame, *alpha));
-                    Some((frames.len() - 1) as u16)
+                    let next = frames.len() as u16;
+                    let index = *by_pixels
+                        .entry((frame.dimensions(), frame.as_raw().clone(), *alpha))
+                        .or_insert(next);
+                    if index == next {
+                        frames.push((frame, *alpha));
+                    }
+                    Some(index)
                 }
                 Err(reason) => {
                     failed.push((path.clone(), reason));
@@ -152,9 +170,39 @@ pub fn load(stack: &PackStack, requests: &[(String, AlphaUse)]) -> Loaded {
     }
 }
 
+/// Finds a texture, in the jar if its path says so and otherwise in the stack.
+fn read_frame(stack: &PackStack, jar: Option<&mut Jar>, path: &str) -> Result<RgbaImage, String> {
+    match path.strip_prefix(JAVA_TEXTURE) {
+        Some(name) => read_java_frame(jar.ok_or("there's no Java jar")?, name),
+        None => read_pack_frame(stack, path),
+    }
+}
+
 /// Finds a texture in the stack, decodes it, and takes its first frame.
-fn read_frame(stack: &PackStack, path: &str) -> Result<RgbaImage, String> {
+///
+/// # Errors
+/// If no pack has it, or it can't be decoded.
+pub fn read_pack_frame(stack: &PackStack, path: &str) -> Result<RgbaImage, String> {
     read_image(stack, path).map(first_frame)
+}
+
+/// Finds a texture in the jar, by the name models give it, decodes it, and takes
+/// its first frame.
+///
+/// # Errors
+/// If the jar hasn't got it, or it can't be decoded.
+pub fn read_java_frame(jar: &mut Jar, name: &str) -> Result<RgbaImage, String> {
+    let bytes = jar
+        .read(&format!("assets/minecraft/textures/{name}.png"))
+        .ok_or("not in the jar")?;
+    let frame = image::load_from_memory_with_format(&bytes, image::ImageFormat::Png)
+        .map(|image| first_frame(image.to_rgba8()))
+        .map_err(|err| format!("can't decode it as png: {err}"))?;
+    Ok(if frame.width().max(frame.height()) > JAVA_TEXTURE_MAX {
+        image::imageops::resize(&frame, JAVA_TEXTURE_MAX, JAVA_TEXTURE_MAX, image::imageops::FilterType::Nearest)
+    } else {
+        frame
+    })
 }
 
 /// Finds an image in the stack (a path without its extension) and decodes
@@ -286,6 +334,7 @@ mod tests {
 
         let loaded = load(
             &stack(&dir),
+            None,
             &[
                 ("textures/blocks/water_still".to_string(), AlphaUse::Coverage),
                 ("textures/blocks/shelf".to_string(), AlphaUse::Coverage),
@@ -312,7 +361,7 @@ mod tests {
         let dir = TempDir::new("mips");
         let grey = RgbaImage::from_pixel(16, 16, Rgba([100, 150, 200, 255]));
         dir.write("textures/blocks/a.tga", &tga(&grey));
-        let loaded = load(&stack(&dir), &[("textures/blocks/a".to_string(), AlphaUse::Coverage)]);
+        let loaded = load(&stack(&dir), None, &[("textures/blocks/a".to_string(), AlphaUse::Coverage)]);
         // The missing texture isn't in this pack, so the checkerboard stands in.
         assert_eq!(loaded.failed[0].0, MISSING_TEXTURE);
         assert_eq!(loaded.array.size, 16);
@@ -338,11 +387,42 @@ mod tests {
     }
 
     #[test]
+    fn textures_with_the_same_pixels_share_a_layer() {
+        let dir = TempDir::new("same_pixels");
+        let grey = RgbaImage::from_pixel(16, 16, Rgba([100, 150, 200, 255]));
+        let red = RgbaImage::from_pixel(16, 16, Rgba([255, 0, 0, 255]));
+        dir.write("textures/blocks/a.tga", &tga(&grey));
+        dir.write("textures/blocks/b.tga", &tga(&grey));
+        dir.write("textures/blocks/c.tga", &tga(&red));
+        let requests = ["a", "b", "c"].map(|name| (format!("textures/blocks/{name}"), AlphaUse::Coverage));
+        let loaded = load(&stack(&dir), None, &requests);
+        let layer = |i: usize| loaded.layers[i].unwrap().index;
+        assert_eq!(layer(0), layer(1));
+        assert_ne!(layer(0), layer(2));
+        assert_eq!(loaded.array.layers, 3, "with the missing texture");
+        // A mask averages differently, so it isn't the same layer.
+        let requests = [
+            ("textures/blocks/a".to_string(), AlphaUse::Coverage),
+            ("textures/blocks/b".to_string(), AlphaUse::Mask),
+        ];
+        let loaded = load(&stack(&dir), None, &requests);
+        assert_ne!(loaded.layers[0], loaded.layers[1]);
+    }
+
+    #[test]
+    fn a_java_texture_with_no_jar_is_a_failure_not_a_panic() {
+        let dir = TempDir::new("no_jar");
+        let loaded = load(&stack(&dir), None, &[(format!("{JAVA_TEXTURE}block/a"), AlphaUse::Coverage)]);
+        assert_eq!(loaded.layers[0], None);
+        assert!(loaded.failed.iter().any(|(path, _)| path == "java:block/a"));
+    }
+
+    #[test]
     fn transparency_is_reported_per_texture() {
         let dir = TempDir::new("alpha");
         let leaves = RgbaImage::from_fn(16, 16, |x, _| Rgba([0, 200, 0, if x % 2 == 0 { 255 } else { 0 }]));
         dir.write("textures/blocks/leaves.tga", &tga(&leaves));
-        let loaded = load(&stack(&dir), &[("textures/blocks/leaves".to_string(), AlphaUse::Coverage)]);
+        let loaded = load(&stack(&dir), None, &[("textures/blocks/leaves".to_string(), AlphaUse::Coverage)]);
         assert!(loaded.layers[0].unwrap().transparent);
     }
 }

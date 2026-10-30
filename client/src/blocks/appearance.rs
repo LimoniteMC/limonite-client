@@ -470,7 +470,7 @@ pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, 
         plans.push((id, &*state.name, plan));
     }
 
-    let loaded = textures::load(stack, &resolver.requests);
+    let loaded = textures::load(stack, None, &resolver.requests);
     let mut failed_names: HashMap<&str, String> = HashMap::new();
     let mut by_id = HashMap::with_capacity(plans.len());
     for (id, name, plan) in plans {
