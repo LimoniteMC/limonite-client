@@ -16,6 +16,7 @@ use tracing::{debug, info, warn};
 
 use self::{
     appearance::{Built, Report},
+    jar::Jar,
     palette::Palette,
 };
 use crate::{install::Vanilla, world::chunk::Chunk};
@@ -58,10 +59,40 @@ pub fn load_palette() -> Result<Palette, String> {
 /// Works out how every block looks and loads the textures that takes,
 /// logging what was found and what's missing.
 #[must_use]
-pub fn build_appearance(palette: &Palette, vanilla: &Vanilla) -> Built {
+pub fn build_appearance(palette: &Palette, vanilla: &Vanilla, jar: Option<&mut Jar>) -> Built {
     let start = Instant::now();
-    let built = appearance::build(palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack);
+    let built = appearance::build(palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack, jar);
     let report = &built.report;
+    if let Some(java) = &built.java {
+        info!(
+            "Java models: {} of {} states drawn by the jar's models, the others being {} cubes and {} with \
+             nothing to draw; {:.1} MB of JSON in {} files came to {} quads in {} shapes, {:.0} KB, where \
+             baking each model apart makes {} quads; {:.0} ms",
+            java.looks,
+            java.states,
+            java.cubes,
+            java.empty,
+            java.json_bytes as f64 / 1e6,
+            java.files,
+            java.kept_quads,
+            java.shapes,
+            (java.kept_quads * size_of::<models::ModelQuad>()) as f64 / 1e3,
+            java.baked_quads,
+            java.seconds * 1000.0,
+        );
+        info!(
+            "Java models' textures: {} are Bedrock's, and {} Java's, since Bedrock has none laid out the same",
+            report.bedrock_art,
+            report.java_art.len(),
+        );
+        debug!("Java's own textures: {:?}", report.java_art);
+        if !java.no_file.is_empty() {
+            info!("The jar has no block state file for: {:?}", java.no_file);
+        }
+        if !java.too_many_textures.is_empty() {
+            warn!("Needing too many textures for a look: {:?}", java.too_many_textures);
+        }
+    }
     info!(
         "Block looks: {} of {} block names drawn with their textures, {} invisible; {} have no \
          blocks.json entry (Education Edition and engine blocks), and Pumpkin can send {} of them",
@@ -103,6 +134,37 @@ pub fn build_appearance(palette: &Palette, vanilla: &Vanilla) -> Built {
         start.elapsed().as_secs_f64() * 1000.0,
     );
     built
+}
+
+/// Finds the user's Java jar, logging what it found. There needn't be one.
+///
+/// # Errors
+/// If `--java-jar` can't be read as a jar.
+pub fn find_jar(flag: Option<&std::path::Path>) -> Result<Option<Jar>, String> {
+    let jar = Jar::find(flag)?;
+    match &jar {
+        Some(jar) => {
+            info!(
+                "Java jar: {} ({}), version {}",
+                jar.path.display(),
+                jar.found_by,
+                jar.version.as_deref().unwrap_or("unknown"),
+            );
+            if jar.version.as_deref() != Some(pumpkin_world::CURRENT_MC_VERSION) {
+                warn!(
+                    "Pumpkin plays Java {}, so blocks this jar doesn't know keep the hand-made models",
+                    pumpkin_world::CURRENT_MC_VERSION,
+                );
+            }
+        }
+        None => info!(
+            "No Java {} jar found, so the hand-made models draw. For the exact ones, play {} once in the \
+             launcher, or pass --java-jar <file>",
+            pumpkin_world::CURRENT_MC_VERSION,
+            pumpkin_world::CURRENT_MC_VERSION,
+        ),
+    }
+    Ok(jar)
 }
 
 /// The Bedrock ids drawn as Pumpkin's outline boxes, with their block names.

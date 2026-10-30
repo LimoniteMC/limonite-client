@@ -45,7 +45,7 @@ use crate::{
     world::World,
 };
 
-const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [--data-dir <path>] \
+const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [--java-jar <path>] [--data-dir <path>] \
                      [--name <name>] [--gamemode <mode>] [--radius <chunks>] [--bench <seconds>]\n       \
                      limonite-client --headless [--home <path>] [--data-dir <path>] [--name <name>] \
                      [--gamemode <mode>] [--radius <chunks>] [--linger <seconds>] [--measure] \
@@ -80,6 +80,9 @@ struct Args {
     headless: bool,
     /// The Bedrock install: the folder that holds `data/resource_packs`.
     bedrock: Option<PathBuf>,
+    /// The user's own Java client jar, for its block models. Without one, the
+    /// usual places are looked in, and it's fine if they're empty.
+    java_jar: Option<PathBuf>,
     /// The home folder: the settings and this install's identity.
     home: PathBuf,
     /// Where the embedded server keeps its world and data files.
@@ -105,6 +108,7 @@ impl Args {
     fn parse(mut args: impl Iterator<Item = String>) -> Result<Self, String> {
         let mut headless = false;
         let mut bedrock = None;
+        let mut java_jar = None;
         let mut home = PathBuf::from("run/home");
         let mut data_dir = PathBuf::from("run/client");
         let mut overrides = Overrides::default();
@@ -123,6 +127,9 @@ impl Args {
                 "--headless" => headless = true,
                 "--bedrock" => {
                     bedrock = Some(PathBuf::from(args.next().ok_or("--bedrock needs a path")?));
+                }
+                "--java-jar" => {
+                    java_jar = Some(PathBuf::from(args.next().ok_or("--java-jar needs a path")?));
                 }
                 "--home" => home = args.next().ok_or("--home needs a path")?.into(),
                 "--data-dir" => {
@@ -199,6 +206,7 @@ impl Args {
         Ok(Self {
             headless,
             bedrock: bedrock.as_deref().map(absolute).transpose()?,
+            java_jar: java_jar.as_deref().map(absolute).transpose()?,
             home: absolute(&home)?,
             data_dir: absolute(&data_dir)?,
             overrides,
@@ -243,8 +251,8 @@ fn main() -> ExitCode {
     };
 
     if args.headless {
-        if args.bedrock.is_some() {
-            warn!("--bedrock is unused: the scripted session reads no assets");
+        if args.bedrock.is_some() || args.java_jar.is_some() {
+            warn!("--bedrock and --java-jar are unused: the scripted session reads no assets");
         }
         headless(&args, &settings, &identity)
     } else {
@@ -290,7 +298,14 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let looks = blocks::build_appearance(&palette, &vanilla);
+    let mut jar = match blocks::find_jar(args.java_jar.as_deref()) {
+        Ok(jar) => jar,
+        Err(err) => {
+            error!("{err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let looks = blocks::build_appearance(&palette, &vanilla, jar.as_mut());
     let approximate = blocks::approximate_ids(&palette, &looks.report);
     let tints = render::load_tints(&vanilla.stack);
 

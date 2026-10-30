@@ -13,6 +13,7 @@ use pumpkin_data::{Block, BlockState as JavaState, BlockStateId};
 use super::*;
 use crate::{
     blocks::{
+        jar::Jar,
         palette::{BedrockState, Palette, StateValue},
         palette_source,
     },
@@ -163,7 +164,7 @@ fn fixture() -> Fixture {
     assert!(problems.is_empty(), "{problems:?}");
     let (terrain, problems) = TerrainTextures::load(&stack);
     assert!(problems.is_empty(), "{problems:?}");
-    let built = build(&palette, &blocks, &terrain, &stack);
+    let built = build(&palette, &blocks, &terrain, &stack, None);
     Fixture { _dir: dir, built }
 }
 
@@ -220,6 +221,16 @@ fn render_classes_come_from_alpha_and_the_tables() {
     let glass = f.look(GLASS);
     assert!(glass.faces.iter().all(|face| face.class == RenderClass::Blend));
     assert!(!glass.occludes);
+}
+
+#[test]
+fn a_texture_fits_if_its_see_through_in_the_same_places() {
+    let with_hole = |r: u8, hole: u32| {
+        RgbaImage::from_fn(16, 16, |x, y| Rgba([r, 0, 0, if x == hole && y == 0 { 0 } else { 255 }]))
+    };
+    assert!(same_layout(&with_hole(10, 3), &with_hole(200, 3)), "whatever its colours");
+    assert!(!same_layout(&with_hole(10, 3), &with_hole(10, 4)));
+    assert!(!same_layout(&with_hole(10, 3), &RgbaImage::from_pixel(32, 32, Rgba([10, 0, 0, 255]))));
 }
 
 #[test]
@@ -399,6 +410,79 @@ fn shapes_follow_states_in_the_real_palette() {
     }
 }
 
+/// The real packs and a real jar, read at runtime; nothing is written. It prints
+/// names and counts, for reading what the jar changes. Run it with `LIMONITE_BEDROCK`
+/// and `LIMONITE_JAVA_JAR` set.
+#[test]
+#[ignore = "needs a Bedrock install and a Java jar; set LIMONITE_BEDROCK and LIMONITE_JAVA_JAR"]
+fn the_jar_draws_what_it_can_on_the_real_install() {
+    let dir = std::env::var_os("LIMONITE_BEDROCK").expect("LIMONITE_BEDROCK is set");
+    let jar = std::env::var_os("LIMONITE_JAVA_JAR").expect("LIMONITE_JAVA_JAR is set");
+    let mut jar = Jar::open(std::path::Path::new(&jar), crate::blocks::jar::FoundBy::Flag).unwrap();
+    let install = crate::install::find(Some(std::path::Path::new(&dir))).unwrap();
+    let vanilla = crate::install::load_vanilla(&install).unwrap();
+    let palette = palette_source::load().unwrap();
+    let built = build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack, Some(&mut jar));
+    let look = |block: &Block| *built.table.get(JavaState::to_be_network_id(block.default_state.id));
+
+    let is_model = |block: &Block| matches!(look(block).shape, Shape::Model { quads } if !quads.is_empty());
+    for block in [
+        &Block::OAK_FENCE,
+        &Block::OAK_DOOR,
+        &Block::LANTERN,
+        &Block::TORCH,
+        &Block::POINTED_DRIPSTONE,
+        &Block::LEAF_LITTER,
+        &Block::OAK_STAIRS,
+        &Block::OAK_SLAB,
+        &Block::SHORT_GRASS,
+        &Block::WHITE_BED,
+        &Block::OAK_SIGN,
+    ] {
+        assert!(is_model(block), "{} has a model from the jar", block.name);
+    }
+    // What keeps its own path.
+    assert_eq!(look(&Block::STONE).shape, Shape::Cube);
+    assert_eq!(look(&Block::GRASS_BLOCK).shape, Shape::Cube);
+    assert_eq!(look(&Block::FURNACE).shape, Shape::Cube);
+    assert_eq!(look(&Block::OAK_LEAVES).shape, Shape::Cube);
+    assert!(look(&Block::WATER).liquid().is_some());
+    assert!(matches!(look(&Block::BAMBOO).shape, Shape::Bamboo { .. }));
+    assert!(matches!(look(&Block::KELP).shape, Shape::Stalk { .. }));
+    assert!(matches!(look(&Block::CHEST).shape, Shape::Boxes { .. }), "the jar draws nothing for it");
+    // Tints still come from the tables and the rules.
+    assert_eq!(look(&Block::SHORT_GRASS).tint, Tint::Grass);
+    assert!(look(&Block::SHORT_GRASS).face(Face::Down).tinted);
+    assert_eq!(look(&Block::LEAF_LITTER).tint, Tint::DryFoliage);
+
+    let report = &built.report;
+    let java = built.java.as_ref().expect("a jar was given");
+    assert!(report.failed_textures.is_empty(), "{:?}", report.failed_textures);
+    assert!(java.no_file.is_empty(), "{:?}", java.no_file);
+    assert!(java.too_many_textures.is_empty(), "{:?}", java.too_many_textures);
+    let tinted_without_a_tint: BTreeSet<&str> = palette
+        .iter()
+        .filter(|&(id, _)| {
+            let look = built.table.get(id);
+            look.tint == Tint::None && matches!(look.shape, Shape::Model { .. }) && look.faces.iter().any(|face| face.tinted)
+        })
+        .map(|(_, state)| &*state.name)
+        .collect();
+    println!("{java:#?}");
+    println!(
+        "{} of {} names textured; {} layers of {}, {:.1} MB; textures loaded in {:.0} ms",
+        report.textured,
+        report.names,
+        built.textures.layers,
+        built.textures.size,
+        built.textures.bytes() as f64 / 1e6,
+        built.texture_seconds * 1000.0,
+    );
+    println!("Bedrock's art: {}; Java's: {} {:?}", report.bedrock_art, report.java_art.len(), report.java_art);
+    println!("Still Pumpkin's boxes: {} {:?}", report.approximate.len(), report.approximate);
+    println!("Tinted faces with no tint to take: {tinted_without_a_tint:?}");
+}
+
 /// The real vanilla packs, read at runtime; nothing is written. Run it with
 /// `LIMONITE_BEDROCK` set to the folder that holds `data/resource_packs`.
 #[test]
@@ -408,7 +492,7 @@ fn the_real_install_looks_right() {
     let install = crate::install::find(Some(std::path::Path::new(&dir))).unwrap();
     let vanilla = crate::install::load_vanilla(&install).unwrap();
     let palette = palette_source::load().unwrap();
-    let built = build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack);
+    let built = build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack, None);
     let look = |block: &Block| *built.table.get(JavaState::to_be_network_id(block.default_state.id));
 
     let grass = look(&Block::GRASS_BLOCK);

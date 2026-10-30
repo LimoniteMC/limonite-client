@@ -37,8 +37,10 @@ use super::{
 use crate::{
     blocks::{
         appearance::{self, AppearanceTable},
+        jar::{FoundBy, Jar},
         palette::{BedrockState, Palette, StateValue},
         palette_source,
+        rules::JavaBlock,
     },
     install::{self, Vanilla},
     world::{AIR, BlockTable},
@@ -257,6 +259,69 @@ const SHEETS: &[(&str, &[(&str, &str)])] = &[
             ("cactus", "age=0"),
         ],
     ),
+    // Models the jar doesn't turn in these states, to lay beside what Blockbench's
+    // Asset Browser shows for the same file (m5-plan Step 7c).
+    (
+        "browser",
+        &[
+            ("lantern", "java.hanging=false"),
+            ("soul_lantern", "java.hanging=true"),
+            ("torch", "torch_facing_direction=top"),
+            ("campfire", "java.facing=south,java.lit=true"),
+            ("cauldron", "cauldron_liquid=water,fill_level=0"),
+            ("hopper", "java.facing=down,toggle_bit=false"),
+            ("anvil", "java.facing=south"),
+            ("stonecutter_block", "java.facing=north"),
+            ("lectern", "java.facing=north,powered_bit=false"),
+            ("grindstone", "java.face=floor,java.facing=north"),
+            ("end_portal_frame", "java.eye=true,java.facing=south"),
+            ("big_dripleaf", "java.facing=north,java.tilt=partial"),
+            ("pointed_dripstone", "java.thickness=tip,java.vertical_direction=up"),
+            ("iron_chain", "java.axis=y"),
+            ("candle", "java.candles=4,java.lit=true"),
+            ("turtle_egg", "java.eggs=4,java.hatch=0"),
+            ("cake", "java.bites=2"),
+            ("flower_pot", "update_bit=false"),
+            ("oak_stairs", "java.facing=east,java.half=bottom,java.shape=straight"),
+            ("oak_stairs", "java.facing=east,java.half=bottom,java.shape=inner_right"),
+            ("oak_stairs", "java.facing=east,java.half=bottom,java.shape=outer_right"),
+            ("fence_gate", "java.facing=south,java.in_wall=false,java.open=false"),
+            ("bell", "java.attachment=floor,java.facing=north,toggle_bit=false"),
+            ("unpowered_repeater", "java.delay=1,java.facing=south"),
+            ("unpowered_comparator", "java.facing=south,java.mode=compare"),
+            ("standing_sign", "java.rotation=0"),
+            ("bed", "java.part=head,java.facing=north,occupied_bit=false"),
+            ("sculk_sensor", "java.sculk_sensor_phase=inactive"),
+            ("beacon", ""),
+            ("enchanting_table", ""),
+            ("dragon_egg", ""),
+            ("daylight_detector", "redstone_signal=0"),
+            ("lever", "java.face=floor,java.facing=north,java.powered=false"),
+            ("cocoa", "java.age=2,java.facing=south"),
+            ("amethyst_cluster", "java.facing=up"),
+            ("oak_hanging_sign", "java.attached=false,java.rotation=3"),
+            ("sea_pickle", "java.pickles=4,java.waterlogged=true"),
+        ],
+    ),
+    (
+        "signs",
+        &[
+            ("bed", "occupied_bit=false"),
+            ("straw_bed", ""),
+            ("standing_sign", "ground_sign_direction=0"),
+            ("standing_sign", "ground_sign_direction=2"),
+            ("standing_sign", "ground_sign_direction=3"),
+            ("standing_sign", "ground_sign_direction=4"),
+            ("standing_sign", "ground_sign_direction=6"),
+            ("spruce_standing_sign", "ground_sign_direction=8"),
+            ("wall_sign", ""),
+            ("oak_hanging_sign", "hanging=true,attached_bit=false,ground_sign_direction=0"),
+            ("oak_hanging_sign", "hanging=true,attached_bit=true,ground_sign_direction=0"),
+            ("oak_hanging_sign", "hanging=true,attached_bit=true,ground_sign_direction=2"),
+            ("oak_hanging_sign", "hanging=true,attached_bit=true,ground_sign_direction=3"),
+            ("oak_hanging_sign", "hanging=false,attached_bit=false,ground_sign_direction=0"),
+        ],
+    ),
     (
         "furniture",
         &[
@@ -322,10 +387,14 @@ fn value_text(value: &StateValue) -> String {
     }
 }
 
-/// Whether a state has every `key=value` of `filter`.
-fn matches(state: &BedrockState, filter: &str) -> bool {
+/// Whether a state has every `key=value` of `filter`, or for a `java.key=value`, its
+/// Java state does.
+fn matches(state: &BedrockState, java: Option<&JavaBlock>, filter: &str) -> bool {
     filter.split(',').filter(|pair| !pair.is_empty()).all(|pair| {
         let (key, wanted) = pair.split_once('=').expect("key=value");
+        if let Some(key) = key.strip_prefix("java.") {
+            return java.is_some_and(|java| java.get(key) == Some(wanted));
+        }
         state.get(key).is_some_and(|value| match value {
             StateValue::Bool(value) => value.to_string() == wanted,
             value => value_text(value) == wanted,
@@ -350,7 +419,10 @@ fn tiles(palette: &Palette, wanted: &[(&str, &str)]) -> Vec<Tile> {
         // A state Pumpkin can't send never gets drawn.
         let mut states: Vec<(u32, &BedrockState)> = palette
             .iter()
-            .filter(|&(id, state)| &*state.name == *name && matches(state, filter) && java.shape_state(id).is_some())
+            .filter(|&(id, state)| {
+                let java = java.shape_state(id).map(JavaBlock::of);
+                &*state.name == *name && java.is_some() && matches(state, java.as_ref(), filter)
+            })
             .collect();
         states.sort_by_cached_key(|(_, state)| {
             state.states.iter().map(|(key, value)| format!("{key}={}", value_text(value))).collect::<Vec<_>>()
@@ -656,7 +728,10 @@ fn contact_sheets() {
     let install = install::find(Some(std::path::Path::new(&dir))).unwrap();
     let vanilla = install::load_vanilla(&install).unwrap();
     let palette = palette_source::load().unwrap();
-    let built = appearance::build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack);
+    // With a jar, the sheets show its models; without, the hand-made ones.
+    let mut jar = std::env::var_os("LIMONITE_JAVA_JAR")
+        .map(|path| Jar::open(std::path::Path::new(&path), FoundBy::Flag).expect("LIMONITE_JAVA_JAR is a jar"));
+    let built = appearance::build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack, jar.as_mut());
     let (tints, _) = Tints::load(&vanilla.stack);
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../run/sheets");
     std::fs::create_dir_all(&out).unwrap();

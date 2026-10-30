@@ -133,10 +133,16 @@ pub struct Rule<'a> {
 #[derive(Default)]
 pub struct Models {
     seen: HashMap<Vec<ModelQuad>, &'static [ModelQuad]>,
+    /// Whether to leave the models out: a model from the jar takes their place,
+    /// and only the rest of the rule is wanted.
+    pub skip: bool,
 }
 
 impl Models {
     fn shape(&mut self, parts: &[(&[Part], Turn)]) -> Shape {
+        if self.skip {
+            return Shape::Model { quads: &[] };
+        }
         let mut quads = Vec::new();
         for (parts, turn) in parts {
             bake(parts, *turn, &mut quads);

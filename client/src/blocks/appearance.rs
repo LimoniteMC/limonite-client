@@ -6,6 +6,9 @@
 //!   being the default.
 //! - **Rules** (`blocks/rules.rs`) overrule that for the blocks whose slots
 //!   aren't faces, or whose variants go by state: m5-plan Step 7b.
+//! - **Models from the user's Java jar** overrule both for anything that isn't a
+//!   full cube, if there's a jar (`blocks/java_models.rs`, m5-plan Step 7c). Their
+//!   textures are Bedrock's where one fits, and Java's where none does.
 //! - **Shapes, tints and the blend list** come from the tables below, keyed
 //!   by Bedrock name, and from the rules' models (`blocks/models.rs`). The
 //!   install has no geometry for vanilla blocks (Finding 8), so a client has
@@ -18,8 +21,12 @@
 //! The table is built once at startup, for every id in the palette, and the
 //! mesher looks ids up in it.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::{
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
+    rc::Rc,
+};
 
+use image::RgbaImage;
 use limonite_packs::{
     PackStack,
     registry::{BlocksJson, Face, FaceTextures, TerrainTextures},
@@ -27,6 +34,8 @@ use limonite_packs::{
 use pumpkin_data::{BlockState as JavaState, BlockStateId};
 
 use super::{
+    jar::Jar,
+    java_models::{self, JavaLook, Stats},
     models::ModelQuad,
     palette::{BedrockState, Palette},
     rules::{self, JavaBlock, Models, Pick},
@@ -34,7 +43,7 @@ use super::{
 };
 use crate::{
     render::{
-        textures::{self, AlphaUse, TextureArray},
+        textures::{self, AlphaUse, JAVA_TEXTURE, TextureArray},
         tint::Tint,
     },
     world::BlockTable,
@@ -53,6 +62,26 @@ const ALIASES: [(&str, &str); 9] = [
     ("piston_arm_collision", "pistonArmCollision"),
     ("sticky_piston_arm_collision", "stickyPistonArmCollision"),
     ("trip_wire", "tripWire"),
+];
+
+/// Java's textures that Bedrock calls something else and draws a little
+/// differently, so their pixels can't say they're the same picture. All other
+/// textures go by their own name, or draw Java's picture if Bedrock's has the
+/// same pixels. Each is checked against the install when it's used.
+const BEDROCK_ART: [(&str, &str); 11] = [
+    ("lilac_bottom", "double_plant_syringa_bottom"),
+    ("lilac_top", "double_plant_syringa_top"),
+    ("piston_top", "piston_top_normal"),
+    ("pumpkin_stem", "pumpkin_stem_disconnected"),
+    ("spruce_planks", "planks_spruce"),
+    // `stonecutter_` is Bedrock's older block.
+    ("stonecutter_bottom", "stonecutter2_bottom"),
+    ("stonecutter_saw", "stonecutter2_saw"),
+    ("stonecutter_side", "stonecutter2_side"),
+    ("stonecutter_top", "stonecutter2_top"),
+    // Tinted by the biome, as Java's is. `water_still` already is blue.
+    ("water_flow", "water_flow_grey"),
+    ("water_still", "water_still_grey"),
 ];
 
 /// Never drawn.
@@ -281,8 +310,8 @@ pub enum Shape {
     /// position, as a slab's does. A block whose model is its outline stays
     /// this; the others have models.
     Boxes { state: BlockStateId },
-    /// A hand-made model, baked (`blocks/models.rs`): each quad shows one of
-    /// the look's six slots.
+    /// A model, baked, hand-made (`blocks/models.rs`) or from the jar
+    /// (`blocks/java_models.rs`): each quad shows one of the look's slots.
     Model { quads: &'static [ModelQuad] },
     /// Crossed planes that show their body in north, or their growing tip in
     /// up if no more of the plant lies the way it grows: kelp and vines.
@@ -417,6 +446,10 @@ pub struct Report {
     pub approximate: BTreeSet<String>,
     /// Texture files that couldn't be loaded, and why.
     pub failed_textures: Vec<(String, String)>,
+    /// What the jar's models were given: how many Bedrock textures, and which of
+    /// Java's own, because Bedrock has none laid out the same.
+    pub bedrock_art: usize,
+    pub java_art: BTreeSet<String>,
 }
 
 /// The table, its texture array, and the report.
@@ -425,6 +458,8 @@ pub struct Built {
     pub textures: TextureArray,
     pub texture_seconds: f64,
     pub report: Report,
+    /// What the jar came to, if there was one.
+    pub java: Option<Stats>,
 }
 
 /// One face before textures are loaded: which requested texture, if any.
@@ -448,29 +483,57 @@ struct Plan {
 
 /// Builds the table for every palette id, and loads the textures it uses.
 #[must_use]
-pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, stack: &PackStack) -> Built {
+pub fn build(
+    palette: &Palette,
+    blocks: &BlocksJson,
+    terrain: &TerrainTextures,
+    stack: &PackStack,
+    mut jar: Option<&mut Jar>,
+) -> Built {
+    // The same Java states physics collides with.
+    let java = BlockTable::build();
+    let states: Vec<(u32, &BedrockState, Option<JavaBlock>)> = palette
+        .iter()
+        .map(|(id, state)| (id, state, java.shape_state(id).map(JavaBlock::of)))
+        .collect();
+    let compiled = jar.as_deref_mut().map(|jar| {
+        java_models::compile(
+            |entry| jar.read(entry),
+            states.iter().filter_map(|(id, _, block)| Some((*id, block.as_ref()?))),
+        )
+    });
     let mut resolver = Resolver {
         blocks,
         terrain,
+        stack,
+        jar,
+        names: bedrock_textures_by_name(terrain),
+        art: HashMap::new(),
         requests: Vec::new(),
         requested: HashMap::new(),
     };
     let mut report = Report::default();
     let mut plans = Vec::with_capacity(palette.len());
     let mut problems: HashMap<&str, String> = HashMap::new();
-    // The same Java states physics collides with.
-    let java = BlockTable::build();
     let mut models = Models::default();
-    for (id, state) in palette.iter() {
-        let java_block = java.shape_state(id).map(JavaBlock::of);
-        let (plan, problem) = resolver.plan(state, java_block.as_ref(), &mut models);
+    for (id, state, java_block) in &states {
+        let java_look = compiled.as_ref().and_then(|models| models.look(*id));
+        let (plan, problem) = resolver.plan(state, java_block.as_ref(), java_look, &mut models);
         if let Some(problem) = problem {
             problems.entry(&*state.name).or_insert(problem);
         }
-        plans.push((id, &*state.name, plan));
+        plans.push((*id, &*state.name, plan));
+    }
+    for path in resolver.art.values() {
+        match path.strip_prefix(JAVA_TEXTURE) {
+            Some(name) => {
+                report.java_art.insert(name.to_string());
+            }
+            None => report.bedrock_art += 1,
+        }
     }
 
-    let loaded = textures::load(stack, None, &resolver.requests);
+    let loaded = textures::load(stack, resolver.jar.as_deref_mut(), &resolver.requests);
     let mut failed_names: HashMap<&str, String> = HashMap::new();
     let mut by_id = HashMap::with_capacity(plans.len());
     for (id, name, plan) in plans {
@@ -563,13 +626,38 @@ pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, 
         textures: loaded.array,
         texture_seconds: loaded.seconds,
         report,
+        java: compiled.map(|models| models.stats),
     }
+}
+
+/// Every texture `terrain_texture.json` knows, by the last part of its path.
+fn bedrock_textures_by_name(terrain: &TerrainTextures) -> HashMap<&str, &str> {
+    let mut names = HashMap::new();
+    for entry in terrain.textures.values() {
+        for texture in entry.textures.as_slice() {
+            let path = texture.path.as_str();
+            names.entry(path.rsplit('/').next().unwrap_or(path)).or_insert(path);
+        }
+    }
+    names
+}
+
+/// Whether two textures are laid out for the same shape: they're see-through in
+/// the same places. Colours can differ, and often do between the two editions.
+fn same_layout(a: &RgbaImage, b: &RgbaImage) -> bool {
+    a.dimensions() == b.dimensions() && a.pixels().zip(b.pixels()).all(|(a, b)| (a[3] > 0) == (b[3] > 0))
 }
 
 /// Resolves block names to texture paths, and collects the textures to load.
 struct Resolver<'a> {
     blocks: &'a BlocksJson,
     terrain: &'a TerrainTextures,
+    stack: &'a PackStack,
+    jar: Option<&'a mut Jar>,
+    /// `bedrock_textures_by_name`.
+    names: HashMap<&'a str, &'a str>,
+    /// What to load for each texture the jar's models name.
+    art: HashMap<Rc<str>, String>,
     requests: Vec<(String, AlphaUse)>,
     requested: HashMap<(String, AlphaUse), usize>,
 }
@@ -580,6 +668,7 @@ impl Resolver<'_> {
         &mut self,
         state: &BedrockState,
         java: Option<&JavaBlock>,
+        java_look: Option<&JavaLook>,
         models: &mut Models,
     ) -> (Plan, Option<String>) {
         let name = &*state.name;
@@ -603,7 +692,37 @@ impl Resolver<'_> {
         // A clone, to outlive the borrows of `self` below.
         let blocks = self.blocks;
         let entry = blocks.blocks.get(blocks_json_key(name));
-        let Some(textures) = entry.and_then(|entry| entry.textures.as_ref()) else {
+        let textures = entry.and_then(|entry| entry.textures.as_ref());
+        // A model from the jar still takes its tint from the rules.
+        models.skip = java_look.is_some();
+        let rule = textures.and_then(|textures| rules::rule(state, java, textures, models));
+        if let Some(tint) = rule.as_ref().and_then(|rule| rule.tint) {
+            plan.tint = tint;
+        }
+        // Bamboo is the owner's own (M4), and a plant's tip depends on the block
+        // beyond, which Java keeps in a state Bedrock hasn't got. Cave vines with
+        // berries are what a stalk looks for beyond it.
+        let keeps_its_shape = matches!(shape, Shape::Bamboo { .. })
+            || matches!(rule.as_ref().map(|rule| rule.shape), Some(Shape::Stalk { .. }))
+            || name.starts_with("cave_vines");
+        if let Some(look) = java_look
+            && !keeps_its_shape
+        {
+            plan.shape = Shape::Model { quads: look.quads };
+            for (face, slot) in plan.faces.iter_mut().zip(&look.slots) {
+                let path = self.art(&slot.texture);
+                *face = FacePlan {
+                    texture: Some(self.request(path, AlphaUse::Coverage)),
+                    overlay: false,
+                    tinted: slot.tinted,
+                    turns: 0,
+                    isotropic: false,
+                };
+            }
+            return (plan, None);
+        }
+
+        let Some(textures) = textures else {
             let problem = if entry.is_some() {
                 "its blocks.json entry has no textures"
             } else {
@@ -615,11 +734,8 @@ impl Resolver<'_> {
 
         let mut problem = None;
         // What each slot shows: a rule's say, or the tables'.
-        let picks: [Pick; 6] = if let Some(rule) = rules::rule(state, java, textures, models) {
+        let picks: [Pick; 6] = if let Some(rule) = rule {
             plan.shape = rule.shape;
-            if let Some(tint) = rule.tint {
-                plan.tint = tint;
-            }
             rule.slots
         } else {
             match shape {
@@ -671,6 +787,28 @@ impl Resolver<'_> {
             plan.under_snow = Some(self.request(path, AlphaUse::Coverage));
         }
         (plan, problem)
+    }
+
+    /// What to load for a texture a Java model names: Bedrock's picture if it has
+    /// one laid out the same, as the official client is the one to look like, and
+    /// otherwise Java's own.
+    fn art(&mut self, name: &Rc<str>) -> String {
+        if let Some(path) = self.art.get(name) {
+            return path.clone();
+        }
+        let short = name.rsplit('/').next().unwrap_or(name);
+        let bedrock = BEDROCK_ART
+            .iter()
+            .find(|(java, _)| *java == short)
+            .map_or(short, |&(_, bedrock)| bedrock);
+        let fits = self.names.get(bedrock).copied().filter(|path| {
+            let java = self.jar.as_deref_mut().map(|jar| textures::read_java_frame(jar, name));
+            let bedrock = textures::read_pack_frame(self.stack, path);
+            matches!((java, bedrock), (Some(Ok(java)), Ok(bedrock)) if same_layout(&java, &bedrock))
+        });
+        let path = fits.map_or_else(|| format!("{JAVA_TEXTURE}{name}"), str::to_string);
+        self.art.insert(name.clone(), path.clone());
+        path
     }
 
     /// A texture key's path: this variant of its `terrain_texture.json` entry.
