@@ -37,8 +37,12 @@ _Last updated: 2026-10-26._
   - **Checkpoint 1 (2026-10-30):** the owner's walk found the physics right and the special models
     broken: dripstone, doors, leaf litter, chests and more. For many blocks `blocks.json`'s slots
     are a bag of textures picked by state, and Pumpkin's outline boxes aren't models.
-  - **Next:** Step 7b, added at the checkpoint (m5-plan Deviation 23): textures picked by state, and
-    hand-made shapes. Then Step 8, the UI and the HUD.
+  - **Step 7b is done (2026-10-30):** added at the checkpoint (m5-plan Deviation 23). Each block's
+    textures are picked by its state (`blocks/rules.rs`), and 60-odd blocks have hand-made models
+    (`blocks/models.rs`). Tests check every block Pumpkin can send, and every state of each model
+    family against Pumpkin's outlines.
+  - **Next:** the owner's walk beside the official client: a dripstone cave, a village and a forest.
+    Then Step 8, the UI and the HUD.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -219,6 +223,18 @@ cargo run -p limonite-client
 - **Dev builds** compile the client crate at `opt-level = 1` (root `Cargo.toml`), so meshing keeps
   up after a join. Overflow checks and debug assertions stay on.
 
+**The contact sheets** (m5-plan Step 7b): block states drawn through the real mesher, texture array
+and shader, with no window, into labelled PNGs in `run/sheets`. Each tile is one state on a stone
+floor, from the south-east and the north-west. They show Mojang's textures, so they stay gitignored.
+
+```bash
+LIMONITE_BEDROCK="C:/XboxGames/Minecraft for Windows/Content" cargo test -p limonite-client --bin limonite-client contact_sheets -- --ignored --nocapture
+```
+
+- `LIMONITE_SHEETS=doors,flat` draws only these sheets, and an empty value none (`SHEETS` in
+  `render/sheet.rs` lists them).
+- `LIMONITE_TEXTURES=door_lower,candle` draws those terrain keys' textures large, with a grid, into
+  `textures.png`, for reading off a model's texture rectangles.
 **Run the client: the scripted session** (`--headless`, the M2 and M3 acceptance run; no GPU and
 no Bedrock install needed):
 
@@ -538,70 +554,33 @@ Found earlier:
 
 ## Special shapes to do (found in M4)
 
-M4 draws cubes; slabs, snow layers, carpets and lily pads; crossed planes for plants; thin planes
-for vines and lichen; liquids; and bamboo. Every other block whose Java shape isn't a full cube
-was a stand-in cube. The owner asked for this list, sorted by frequency, as the to-do list for a
-special-shapes pass.
+M4 drew every block with no shape of its own as a cube, and the owner asked for a to-do list of them.
+M5's Step 7 drew them as Pumpkin's outline boxes, and Step 7b, after the owner's walk, gave most of
+them models of their own (`blocks/models.rs`) and the right textures (`blocks/rules.rs`). The M4
+census is in m4-plan's Results.
 
-**Since M5 Step 7,** those blocks are drawn as Pumpkin's outline boxes, so stairs, fences, doors,
-ladders, torches and trapdoors have their own shape (m5-plan Decision 7). That's still approximate:
-leaf litter is a flat box, a chain a thin column, a rail a slab. So the list below stays the to-do
-list for proper models, and the window's census, now of approximate shapes, keeps counting them.
+**What's left:**
 
-**The census:** the stand-in blocks in the acceptance world (m4-plan Results). It covers 3,725
-chunks at radius 32 around the comparison pose, at a jungle edge by the ocean, with lush caves,
-mineshafts and trial chambers below: 109,881 blocks of 43 names. The window logs the same census
-once a join's meshing settles, so a new world refreshes it.
-
-| Block | Count | Shape to draw |
+| Blocks | What they are now | What they want |
 | --- | --- | --- |
-| `leaf_litter` | 86,229 | Flat segments on the floor, like pink petals |
-| `oak_fence` | 7,235 | A post, with arms toward its neighbours |
-| `pointed_dripstone` | 6,991 | A tapering spike, by thickness |
-| `rail` | 2,994 | A flat plane, or a slope |
-| `iron_chain` | 1,249 | Two thin crossed planes, along its axis |
-| `big_dripleaf` | 1,140 | A leaf platform on a stem |
-| `waxed_oxidized_cut_copper_stairs` | 1,019 | Stairs |
-| `azalea` | 835 | A bush: a box top over crossed planes |
-| `flowering_azalea` | 455 | As `azalea` |
-| `cocoa` | 257 | A small box by age, on a log |
-| `ladder` | 213 | A plane against one face |
-| `chest` | 177 | A smaller box (a block entity) |
-| `waxed_oxidized_copper_trapdoor` | 132 | A thin box, open or shut |
-| `torch` | 124 | A thin stick, or leaning on a wall |
-| `small_dripleaf_block` | 121 | Crossed leaves on stems |
-| `decorated_pot` | 108 | A pot (a block entity) |
-| `spore_blossom` | 73 | Hanging flower planes |
-| `grass_path` | 57 | A cube 15/16 tall |
-| `flower_pot` | 56 | A small pot |
-| `wooden_button` | 55 | A small box on a face |
-| `white_wool_stairs` | 54 | Stairs |
-| `candle` | 52 | One to four small candles |
-| `red_candle` | 34 | As `candle` |
-| `waxed_cut_copper_stairs` | 34 | Stairs |
-| `waxed_oxidized_copper_door` | 34 | A thin box, open or shut |
-| `hopper` | 26 | A funnel |
-| `bed` | 24 | A low box (a block entity) |
-| `farmland` | 20 | A cube 15/16 tall |
-| `acacia_stairs` | 16 | Stairs |
-| `stone_brick_stairs` | 15 | Stairs |
-| `trip_wire` | 10 | A thin line |
-| `acacia_fence` | 9 | As `oak_fence` |
-| `sandstone_stairs` | 7 | Stairs |
-| `straw_bed` | 6 | Not yet known |
-| `stone_button` | 4 | As `wooden_button` |
-| `tripwire_hook` | 4 | A hook on a face |
-| `wooden_pressure_plate` | 4 | A thin slab |
-| `glass_pane` | 2 | A thin pane, with arms toward its neighbours |
-| `waxed_copper_door` | 2 | As the copper door |
-| `acacia_pressure_plate` | 1 | A thin slab |
-| `campfire` | 1 | Crossed logs |
-| `oxidized_copper_chest` | 1 | As `chest` |
-| `stonecutter_block` | 1 | A box 9/16 tall |
+| Chests, ender chests, beds, signs, hanging signs, banners, heads and decorated pots | Boxes, turned the right way. Beds and banners show plain planks | Entity models and entity textures, and their block actors: a bed's colour, a pot's sherds, two chests joined. M8 |
+| What's in a flower pot | An empty pot | Its block actor. M8 |
+| Redstone wire | A plain cross, coloured by its power | Its connections, which Bedrock works out from the blocks around |
+| Chorus plants | A box | The same. They only grow in the End |
+| Tripwire and its hook | Plain strips, and a simple plate and hook | Java's small tilted parts |
+| Scaffolding, dragon eggs, shelves, copper golem statues, conduits and heavy cores | Pumpkin's boxes | Models of their own |
+| Sculk sensors | A box without its tendrils | Four tendril planes |
+| Open eyeblossoms, firefly bushes | Without their glow | A second, unlit layer |
+| Pale moss carpet | A carpet | Its sides, which climb walls |
+| Pitcher crops | Stages not drawn right | A model. Only grown from a sniffer's seed |
+| Jigsaw blocks | Not turned | Their orientation. Only placed by a command |
+| Fire, and everything with a flipbook | Its first frame | Animation. M8 |
 
-- **By family:** stairs are 6 names (1,145 blocks), fences 2, and doors and trapdoors 3. The block
-  entities (chests, pots and beds) want their own models, which M4 leaves out.
-- **Done in M4:** bamboo (m4-plan Deviation 14).
+**Written from Java's models, and not yet compared with the official client:** leaf litter's and
+petals' quarters, the tilt of wall torches and levers, lectern tops, dripleaf leaves as they tilt, and
+which way trapdoor and glazed terracotta textures turn.
+
+**How to look at them:** the contact sheets (Dev environment).
 
 ## Upstream PR candidates
 

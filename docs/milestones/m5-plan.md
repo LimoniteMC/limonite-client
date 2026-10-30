@@ -1176,6 +1176,17 @@ The questions as they were asked:
       shapes for aiming, not models: a fence's outline is a solid wall, and a torch's a hollow tube.
     - **What the plan said to leave:** "Fidelity beyond Pumpkin's data" was out of scope. The owner
       chose to bring Bedrock's shapes in, all but the block entities, which wait for M8.
+24. **Step 7b reached further than the blocks the owner named** (Step 7b). The same two causes broke
+    more than the 493 names Step 7 drew as boxes:
+    - **Cubes with a front:** furnaces, barrels, hives, dispensers, observers, pistons and the like
+      never turned, and an uncarved pumpkin showed a carved face. M4 had these wrong too.
+    - **Textures by state on plain cubes and crosses:** huge mushrooms showed pores all over, every
+      crop showed its first stage, and farmland was always wet.
+    - **What's next door:** kelp and vines have a tip that depends on the block beyond, and grass
+      under snow has a snowy side.
+25. **Vertex positions are signed** (Step 7b), not the unsigned sixteenths of m4-plan Decision 6, so a
+    model can reach outside its block as Java's do. A crop reaches a sixteenth below itself, to meet
+    the farmland. The vertex is still 16 bytes.
 
 ## Results (filled in during execution)
 
@@ -1489,3 +1500,74 @@ by Pumpkin's own reader with no bytes left over.
   - **Clippy** is clean.
 - **Not tried yet:** walking the shapes in a window, over stairs and fences and through doors. That's
   the owner checkpoint.
+- **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
+  broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
+  above.
+
+### Step 7b: Bedrock's textures and shapes for the blocks Step 7 got wrong (2026-10-30)
+
+- **Commits:**
+  - `a5fc3b8` "Draw block states offscreen into contact sheets", then `bc0e9a6`;
+  - `98a8c54` "Add the dry foliage tint, and tints of one fixed colour";
+  - `0650fe8` "Let a block's vertices reach outside it";
+  - `bf19039` "Pick each block's textures and shape by its state";
+  - `10a0f25` "Show plants' tips and snowy sides by the block next to them".
+- **The evidence, before any fix:** the contact sheets (`render/sheet.rs`), 14 PNGs drawn through the
+  real mesher, texture array and shader. They showed the owner's four and much more:
+  - dripstone was a column with a different growth stage on each side, always the hanging ones;
+  - a door's lower half showed its upper half, and spruce, birch, jungle, acacia, dark oak and iron
+    doors were all oak;
+  - every chest and furnace faced south, and an uncarved pumpkin had a face;
+  - leaf litter was white: its texture is grey, and takes the dry-foliage colormap;
+  - a fence was a solid wall, since its outline is; straight rails showed a curve; chains and candles
+    were invisible, since a box showed the see-through part of their textures; a torch was a hollow
+    tube of four sticks.
+- **Why** (Deviation 23): `blocks.json`'s slots aren't always faces, and Pumpkin's outlines are for
+  aiming. There's no geometry for vanilla blocks in the install, and no chest, bed or sign model
+  either: the packs' model archives hold other entities, and those aren't among them.
+- **Part 1, the textures:** `blocks/rules.rs` says which key and variant each slot shows.
+  - **Over every name Pumpkin can send,** 345 have a choice of textures, and the real-install test
+    accounts for each:
+
+    | Names | Why they draw right |
+    | --- | --- |
+    | 212 | a rule in `rules.rs` |
+    | 59 | their slots really are their faces |
+    | 40 | turned by `pillar_axis` |
+    | 14 | leaves: their variants are fancy then fast, and the fancy one draws |
+    | 8 | their first variant is the right one |
+    | 7 | `cross_key` picks these by state |
+    | 1 | bamboo picks its own slots |
+    | 2 | banners, stand-ins until M8 |
+    | 2 | not done, on purpose: the pitcher crop, only grown from a sniffer's seed, and the jigsaw block, only placed by a command |
+
+- **Part 2, the shapes:** `blocks/models.rs` has 60-odd hand-made models, written in the terms of
+  Java's model files, because Bedrock's textures are laid out for the same shapes. Each is baked into
+  flat quads at startup, once, so the mesher only copies them.
+  - **Which way a model turns** comes from the Java state Pumpkin's table gives for the Bedrock id.
+  - **The check:** a test walks every Java state of 30-odd families, and fails if a model leaves
+    Pumpkin's outline for that state. It found the coral fans too long, and confirmed every door,
+    gate, rail, torch, lantern, chain, rod, anvil, bell and campfire. The test can't see what's
+    symmetrical in its outline, such as a repeater's direction: those follow Java's block states.
+- **What's next door:** kelp and vines show their tip where the plant ends, and grass, mycelium and
+  podzol show a snowy side under snow.
+- **Tints:** leaf litter takes `dry_foliage.png`, lily pads and stems a fixed colour, redstone wire
+  one by its power, and bush takes grass's. A census of the install's grey textures with no tint
+  found only bush left.
+- **The window,** on a copy of the M4 template world:
+  - the join meshed 1,262,571 quads, down from 1,269,618;
+  - 288 names are still drawn as Pumpkin's boxes, down from 493. For stairs, walls, buttons,
+    pressure plates and trapdoors, that is their model;
+  - the census counted 15 chests, where Step 7's counted 11,516 pointed dripstone and 2,082 leaf
+    litter.
+- **Checks:**
+  - **Tests:** 150 client tests pass, with the 3 that need the install or a GPU, up from 136.
+  - **Headless:** all seven checks pass.
+  - **Clippy** is clean.
+- **Not checked against the official client:** the owner's walk is next. The models are written from
+  Java's, so these are the likeliest to differ on Bedrock:
+  - leaf litter's and petals' quarters, which way they fill in, and the petals' stems;
+  - the tilt of a wall torch and a lever, and the top of a lectern, each rounded to the grid;
+  - dripleaf leaves, as they tilt;
+  - which way a trapdoor's texture turns, and glazed terracotta's.
+- **Left to do:** STATUS.md's "Special shapes to do" has the list.

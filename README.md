@@ -30,8 +30,8 @@
 
 > [!WARNING]
 > **Limonite is under heavy construction, so expect little to no functionality.** Today you can
-> fly around a singleplayer world drawn with vanilla textures, and that's it: no lighting, sky,
-> mobs or HUD yet.
+> walk and fly around a singleplayer world drawn with vanilla textures, and that's it: no lighting,
+> sky, mobs or HUD yet.
 
 > [!IMPORTANT]
 > **Current phase of development: [Milestone 5, playable singleplayer](docs/milestones/m5-plan.md).**
@@ -136,12 +136,17 @@ transport.
 
 ### What works today
 
-Milestones 0 to 4 are done. Here's what they built:
+Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've built:
 
-- **A window onto a real world.** Fly the host around a world the embedded server generates,
-  drawn with wgpu. Chunks load as you fly, and drop once the server's view has left them.
+- **A window onto a real world.** Walk or fly the host around a world the embedded server
+  generates, drawn with wgpu. Chunks load as you go, and drop once the server's view has left them.
+- **Walking that matches the official client.** All 12 of its recorded runs replay tick by tick,
+  within 0.000015 blocks: walking, sprinting, jumps, falls, water, ladders and flight.
 - **Vanilla textures from your install.** The `packs` crate stacks all 55 vanilla resource packs
   at runtime, from loose folders and `__brarchive` archives alike.
+- **Blocks that look like themselves.** Doors, fences, torches, lanterns, rails, crops, leaf litter
+  and dripstone have models of their own, and textures that follow their state. Chests, beds and
+  signs stay simple boxes until entity models arrive.
 - **Bedrock-native world state.** Chunks decode straight into Bedrock's own palette format, and
   the client's world equals the server's, block for block and biome for biome. That's checked on
   all 3,725 chunks of a radius-32 view.
