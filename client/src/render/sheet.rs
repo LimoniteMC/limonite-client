@@ -16,7 +16,10 @@
 //! comma-separated, and `LIMONITE_TEXTURES` draws these terrain keys' textures,
 //! large and with a grid, into `textures.png`, for reading off a model's UVs.
 
-use std::{collections::BTreeSet, path::PathBuf};
+use std::{
+    collections::BTreeSet,
+    path::{Path, PathBuf},
+};
 
 use glam::DVec3;
 use image::{Rgba, RgbaImage};
@@ -38,7 +41,7 @@ use crate::{
         palette_source,
     },
     install::{self, Vanilla},
-    world::AIR,
+    world::{AIR, BlockTable},
 };
 
 /// One view's width and height, in pixels.
@@ -146,7 +149,7 @@ const SHEETS: &[(&str, &[(&str, &str)])] = &[
             ("daylight_detector_inverted", "redstone_signal=0"),
             ("lever", "open_bit=false"),
             ("tripwire_hook", "attached_bit=false,powered_bit=false"),
-            ("trip_wire", "attached_bit=false,disarmed_bit=false,powered_bit=false,suspended_bit=false,minecraft:connection_east=true,minecraft:connection_west=true,minecraft:connection_north=false,minecraft:connection_south=false"),
+            ("trip_wire", "attached_bit=false,disarmed_bit=false,powered_bit=false,suspended_bit=true,minecraft:connection_east=true,minecraft:connection_west=true,minecraft:connection_north=false,minecraft:connection_south=false"),
         ],
     ),
     (
@@ -236,8 +239,8 @@ const SHEETS: &[(&str, &[(&str, &str)])] = &[
             ("potatoes", "growth=7"),
             ("beetroot", "growth=7"),
             ("nether_wart", "age=3"),
-            ("melon_stem", "growth=7,facing_direction=1"),
-            ("pumpkin_stem", "growth=7,facing_direction=2"),
+            ("melon_stem", "growth=4"),
+            ("pumpkin_stem", "growth=7"),
             ("sweet_berry_bush", "growth=3"),
             ("cave_vines", "growing_plant_age=0"),
             ("cave_vines_body_with_berries", "growing_plant_age=0"),
@@ -336,13 +339,18 @@ fn short_key(key: &str) -> &str {
     key.rsplit('_').next().unwrap_or(key)
 }
 
-/// The tiles of a sheet: a label, and each block's offset from [`AT`] and id.
-fn tiles(palette: &Palette, wanted: &[(&str, &str)]) -> Vec<(String, Vec<([i32; 3], u32)>)> {
+/// One tile: a label, and each block's offset from [`AT`] and id.
+type Tile = (String, Vec<([i32; 3], u32)>);
+
+/// The tiles of a sheet.
+fn tiles(palette: &Palette, wanted: &[(&str, &str)]) -> Vec<Tile> {
+    let java = BlockTable::build();
     let mut tiles = Vec::new();
     for (name, filter) in wanted {
+        // A state Pumpkin can't send never gets drawn.
         let mut states: Vec<(u32, &BedrockState)> = palette
             .iter()
-            .filter(|(_, state)| &*state.name == *name && matches(state, filter))
+            .filter(|&(id, state)| &*state.name == *name && matches(state, filter) && java.shape_state(id).is_some())
             .collect();
         states.sort_by_cached_key(|(_, state)| {
             state.states.iter().map(|(key, value)| format!("{key}={}", value_text(value))).collect::<Vec<_>>()
@@ -528,9 +536,9 @@ impl Offscreen {
 
 /// Lays `tile`s out over as many pages as they need, and writes them.
 fn write_sheet(
-    out: &PathBuf,
+    out: &Path,
     name: &str,
-    tiles: &[(String, Vec<([i32; 3], u32)>)],
+    tiles: &[Tile],
     offscreen: &mut Offscreen,
     table: &AppearanceTable,
     tints: &Tints,
@@ -589,7 +597,7 @@ fn write_sheet(
 }
 
 /// Terrain keys' textures, 10 pixels a texel, with a line every 4 texels.
-fn write_textures(out: &PathBuf, keys: &str, vanilla: &Vanilla, stack: &PackStack) {
+fn write_textures(out: &Path, keys: &str, vanilla: &Vanilla, stack: &PackStack) {
     const TEXEL: u32 = 10;
     const WIDTH: u32 = 16 * TEXEL + 4;
     const HEIGHT: u32 = 16 * TEXEL + LABEL;
