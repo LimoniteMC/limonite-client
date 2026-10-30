@@ -755,6 +755,31 @@ Fork paths are under `pumpkin/crates/`, and client paths under `client/src/`.
   through doors (about 10 minutes).
 - **Commit:** "Draw Pumpkin's block shapes where M4 drew stand-in cubes".
 
+## Step 7b: Bedrock's textures and shapes for the blocks Step 7 got wrong (client; added at checkpoint 1)
+
+Added on 2026-10-30, when the owner's walk found the physics right and the special models broken
+(Deviation 23).
+
+- **The contact sheets** (`render/sheet.rs`, test-only): block states drawn through the real mesher,
+  texture array and shader, with no window, into labelled PNGs in `run/sheets`, gitignored. They're
+  the evidence before and after, and what a model is made against.
+- **Part 1, the textures:** `blocks.json`'s six slots are often a bag of textures, and a key's
+  variants are picked by state. Each block like that gets a rule: which key and variant each face
+  or part shows, by state, and which way a block with a front faces.
+  - **A test walks every block name Pumpkin can send.** A name with more than one texture, or a
+    texture with variants, must have a rule or be on a list of those whose slots really are faces.
+    A new block can't slip through.
+- **Part 2, hand-made shapes:** `Shape::Model`, a block's boxes and planes as a table of parts,
+  with their texture rectangles.
+  - **Which way a model turns** comes from the block's Java state, which Pumpkin's table gives for
+    each Bedrock id, the same state physics collides with.
+  - **A test walks every Java state of each model family,** and checks that the model lies where
+    Pumpkin's outline for that state does. So a door can't hang on the wrong side.
+  - **Collision doesn't change:** physics and aiming keep Pumpkin's boxes.
+- **Left for M8:** block entities (chest lids, beds, signs, banners, heads and pots), which Bedrock
+  draws as entity models with entity textures. They stay boxes until then, but face the right way.
+- **Owner checkpoint:** a dripstone cave, a village and a forest, beside the official client.
+
 ## Step 8: The UI, and the HUD (client)
 
 - **`ui/`:** `atlas.rs` (sprites and nine-slices), `font.rs`, `lang.rs`, `tree.rs` and `layout.rs`,
@@ -1142,6 +1167,15 @@ The questions as they were asked:
     (Step 7). The plan has each one looked at with the owner. All 184 come from 7 reasons, listed in
     Results, and they're in the test with their reasons, so a new one still fails. They're for the
     owner to confirm at the checkpoint.
+23. **A new Step 7b, before Step 8** (owner, at checkpoint 1, 2026-10-30).
+    - **The walk:** the physics felt right. But "most miscellaneous models (like dripstone, doors,
+      leaf litter, chests)" were bugged.
+    - **What the plan had wrong:** Decision 7 had "each box face shows the block's texture for that
+      face". For many blocks `blocks.json`'s slots aren't faces, but a bag of textures Bedrock picks
+      from by state, and a key's variants are picked by state too. And Pumpkin's outline boxes are
+      shapes for aiming, not models: a fence's outline is a solid wall, and a torch's a hollow tube.
+    - **What the plan said to leave:** "Fidelity beyond Pumpkin's data" was out of scope. The owner
+      chose to bring Bedrock's shapes in, all but the block entities, which wait for M8.
 
 ## Results (filled in during execution)
 

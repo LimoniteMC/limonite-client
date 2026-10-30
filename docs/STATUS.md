@@ -34,8 +34,11 @@ _Last updated: 2026-10-26._
   - **Step 7 is done (2026-10-27):** the blocks M4 drew as stand-in cubes are drawn as Pumpkin's
     outline boxes, the same boxes physics collides with (`9a6fdf1`). Every Bedrock id's Java
     states have the same boxes, or one of the reasons in m5-plan Results, Step 7.
-  - **Next:** the owner checkpoint after Step 7: walk a fresh world in survival and in creative,
-    over stairs and fences and through doors (about 10 minutes). Then Step 8, the UI and the HUD.
+  - **Checkpoint 1 (2026-10-30):** the owner's walk found the physics right and the special models
+    broken: dripstone, doors, leaf litter, chests and more. For many blocks `blocks.json`'s slots
+    are a bag of textures picked by state, and Pumpkin's outline boxes aren't models.
+  - **Next:** Step 7b, added at the checkpoint (m5-plan Deviation 23): textures picked by state, and
+    hand-made shapes. Then Step 8, the UI and the HUD.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
