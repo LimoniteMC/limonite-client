@@ -209,6 +209,7 @@ const BLEND_SUFFIXES: &[&str] = &["stained_glass", "stained_glass_pane"];
 const TINTS: &[(&str, Tint)] = &[
     ("grass_block", Tint::Grass),
     ("short_grass", Tint::Grass),
+    ("bush", Tint::Grass),
     ("tall_grass", Tint::Grass),
     ("fern", Tint::Grass),
     ("large_fern", Tint::Grass),

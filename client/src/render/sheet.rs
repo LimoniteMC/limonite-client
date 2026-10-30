@@ -105,7 +105,7 @@ const SHEETS: &[(&str, &[(&str, &str)])] = &[
             ("smoker", "minecraft:cardinal_direction=north"),
             ("carved_pumpkin", ""),
             ("lit_pumpkin", "minecraft:cardinal_direction=south"),
-            ("pumpkin", "minecraft:cardinal_direction=south"),
+            ("pumpkin", ""),
             ("melon_block", ""),
             ("barrel", "open_bit=false"),
             ("barrel", "open_bit=true,facing_direction=1"),
