@@ -345,7 +345,7 @@ impl BlockTable {
     fn log(&self) {
         info!(
             "Block table: {} Bedrock ids for {} Java states; {} Java states share a Bedrock id \
-             with a lower one, which wins",
+             with a lower one",
             self.java_by_bedrock.len(),
             BlockStateId::COUNT,
             self.collisions,
