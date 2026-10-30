@@ -9,6 +9,8 @@
 pub mod camera;
 pub mod mesher;
 pub mod meshes;
+#[cfg(test)]
+mod sheet;
 pub mod terrain;
 pub mod textures;
 pub mod tint;
@@ -33,7 +35,8 @@ pub struct Needs {
 pub struct Gpu {
     pub device: wgpu::Device,
     pub queue: wgpu::Queue,
-    surface: wgpu::Surface<'static>,
+    /// Only the contact sheet (`sheet.rs`) has none: it draws into a texture.
+    surface: Option<wgpu::Surface<'static>>,
     pub config: wgpu::SurfaceConfiguration,
 }
 
@@ -79,29 +82,8 @@ impl Gpu {
             adapter_info.driver_info,
         );
 
-        // The one limit above WebGPU's defaults: a layer per block texture.
-        // WebGPU guarantees 256 layers, and desktop adapters report 2,048 or
-        // more. So ask for the adapter's own limit, and fail with numbers if
-        // it's too small; smaller adapters wait for M6's tiers.
+        let (device, queue) = request_device(&adapter, needs)?;
         let layers = adapter.limits().max_texture_array_layers;
-        if layers < needs.texture_layers {
-            return Err(format!(
-                "this GPU's max_texture_array_layers is {layers}, but the block textures need {}",
-                needs.texture_layers
-            ));
-        }
-        let required_limits = wgpu::Limits {
-            max_texture_array_layers: layers,
-            ..wgpu::Limits::default()
-        };
-        // Everything else M4 uses is core WebGPU: no optional features.
-        let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
-            label: Some("limonite"),
-            required_features: wgpu::Features::empty(),
-            required_limits,
-            ..Default::default()
-        }))
-        .map_err(|err| format!("the GPU adapter wouldn't create a device: {err}"))?;
 
         let capabilities = surface.get_capabilities(&adapter);
         let format = capabilities
@@ -130,7 +112,39 @@ impl Gpu {
         Ok(Self {
             device,
             queue,
-            surface,
+            surface: Some(surface),
+            config,
+        })
+    }
+
+    /// A device with no window, for drawing into textures of this size: the
+    /// contact sheet.
+    #[cfg(test)]
+    pub fn offscreen(width: u32, height: u32, needs: &Needs) -> Result<Self, String> {
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle_from_env());
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            compatible_surface: None,
+            force_fallback_adapter: false,
+            apply_limit_buckets: false,
+        }))
+        .map_err(|err| format!("no GPU adapter: {err}"))?;
+        let (device, queue) = request_device(&adapter, needs)?;
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            color_space: wgpu::SurfaceColorSpace::Auto,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            view_formats: Vec::new(),
+        };
+        Ok(Self {
+            device,
+            queue,
+            surface: None,
             config,
         })
     }
@@ -143,21 +157,26 @@ impl Gpu {
         }
         self.config.width = width;
         self.config.height = height;
-        self.surface.configure(&self.device, &self.config);
+        if let Some(surface) = &self.surface {
+            surface.configure(&self.device, &self.config);
+        }
     }
 
     /// Acquires the next surface texture, lets `draw` record into it, then
     /// submits and presents. A surface that needs reconfiguring is
     /// reconfigured, and the frame skipped.
     pub fn frame(&mut self, draw: impl FnOnce(&Self, &wgpu::TextureView, &mut wgpu::CommandEncoder)) -> Frame {
-        let (texture, suboptimal) = match self.surface.get_current_texture() {
+        let Some(surface) = &self.surface else {
+            return Frame::Skipped;
+        };
+        let (texture, suboptimal) = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(texture) => (texture, false),
             wgpu::CurrentSurfaceTexture::Suboptimal(texture) => (texture, true),
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
                 return Frame::Skipped;
             }
             wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
+                surface.configure(&self.device, &self.config);
                 return Frame::Skipped;
             }
             wgpu::CurrentSurfaceTexture::Validation => {
@@ -173,10 +192,38 @@ impl Gpu {
         self.queue.submit([encoder.finish()]);
         self.queue.present(texture);
         if suboptimal {
-            self.surface.configure(&self.device, &self.config);
+            surface.configure(&self.device, &self.config);
         }
         Frame::Drawn
     }
+}
+
+/// Creates a device that meets `needs`.
+///
+/// The one limit above WebGPU's defaults is a layer per block texture. WebGPU
+/// guarantees 256 layers, and desktop adapters report 2,048 or more. So it asks
+/// for the adapter's own limit, and fails with numbers if that's too small;
+/// smaller adapters wait for M6's tiers.
+fn request_device(adapter: &wgpu::Adapter, needs: &Needs) -> Result<(wgpu::Device, wgpu::Queue), String> {
+    let layers = adapter.limits().max_texture_array_layers;
+    if layers < needs.texture_layers {
+        return Err(format!(
+            "this GPU's max_texture_array_layers is {layers}, but the block textures need {}",
+            needs.texture_layers
+        ));
+    }
+    let required_limits = wgpu::Limits {
+        max_texture_array_layers: layers,
+        ..wgpu::Limits::default()
+    };
+    // Everything else M4 uses is core WebGPU: no optional features.
+    pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
+        label: Some("limonite"),
+        required_features: wgpu::Features::empty(),
+        required_limits,
+        ..Default::default()
+    }))
+    .map_err(|err| format!("the GPU adapter wouldn't create a device: {err}"))
 }
 
 /// Fifo, vsync, is always supported, and the default. Measuring frame times

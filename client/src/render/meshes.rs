@@ -303,7 +303,11 @@ impl Meshes {
             self.remove(key);
             return;
         }
+        self.upload(device, key, mesh);
+    }
 
+    /// Puts a sub-chunk's mesh on the GPU, in place of any it had.
+    pub(super) fn upload(&mut self, device: &wgpu::Device, key: SubChunkKey, mesh: mesher::Mesh) {
         let opaque_quads = (mesh.opaque.len() / 4) as u32;
         let blend_quads = (mesh.blend.len() / 4) as u32;
         let mut vertices = mesh.opaque;
