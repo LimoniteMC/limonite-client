@@ -26,7 +26,7 @@ use limonite_packs::registry::Face;
 use crate::{
     blocks::{
         appearance::{Appearance, AppearanceTable, BambooLeaves, FaceLook, Liquid, RenderClass, Shape},
-        models::{box_face, face_uv, quarter_turn},
+        models::{POSITION_SCALE, UV_SCALE, box_face, face_uv, quarter_turn},
         shapes,
     },
     render::tint::{Tint, Tints},
@@ -66,14 +66,14 @@ pub const DIAGONAL: u8 = 6;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
-    /// The position in the sub-chunk, in sixteenths of a block: 0 to 256, and
-    /// a little either side, for a model that reaches out of its block. The
-    /// GPU reads it with layer, as four signed numbers; there are never
-    /// 32,768 textures.
+    /// The position in the sub-chunk, in 1,024ths of a block
+    /// ([`POSITION_SCALE`]): 0 to 16,384, and a little either side, for a model
+    /// that reaches out of its block. The GPU reads it with layer, as four
+    /// signed numbers; there are never 32,768 textures.
     pub position: [i16; 3],
     /// The texture's layer in the array.
     pub layer: u16,
-    /// Texture coordinates in sixteenths of the texture: 0 to 16.
+    /// Texture coordinates in 128ths of the texture ([`UV_SCALE`]): 0 to 128.
     pub uv: [u8; 2],
     /// The face (bits 0 to 2: [`Face`] order, or [`DIAGONAL`]) and the render
     /// class (bits 3 and 4: opaque, cutout, overlay, blend).
@@ -94,6 +94,20 @@ impl Vertex {
     #[must_use]
     pub const fn class(&self) -> u8 {
         self.face_class >> 3
+    }
+
+    /// The position in sixteenths of a block, for a corner on that grid.
+    #[cfg(test)]
+    #[must_use]
+    pub fn at(&self) -> [i16; 3] {
+        self.position.map(|value| value / POSITION_SCALE)
+    }
+
+    /// The texture coordinates in sixteenths, for a corner on that grid.
+    #[cfg(test)]
+    #[must_use]
+    pub fn tex(&self) -> [u8; 2] {
+        self.uv.map(|value| value / UV_SCALE)
     }
 }
 
@@ -373,7 +387,8 @@ impl Block<'_> {
             Shape::Model { quads } => {
                 for quad in quads {
                     if !quad.cull.is_some_and(|face| self.neighbour_occludes(face)) {
-                        self.push(quad.corners, quad.uvs, quad.face, self.look.face(quad.slot), tints, mesh);
+                        let look = &self.look.faces[usize::from(quad.slot)];
+                        self.push_fine(quad.corners, quad.uvs, quad.face, look, tints, mesh);
                     }
                 }
             }
@@ -516,10 +531,26 @@ impl Block<'_> {
         self.push(back, back_uvs, face as u8, look, tints, mesh);
     }
 
-    /// Adds one quad: block-relative corners in sixteenths.
+    /// Adds one quad: block-relative corners and texture coordinates in
+    /// sixteenths.
     fn push(
         &self,
         corners: [[i8; 3]; 4],
+        uvs: [[u8; 2]; 4],
+        face: u8,
+        look: &FaceLook,
+        tints: &Tints,
+        mesh: &mut Mesh,
+    ) {
+        let corners = corners.map(|corner| corner.map(|value| i16::from(value) * POSITION_SCALE));
+        let uvs = uvs.map(|uv| uv.map(|value| value * UV_SCALE));
+        self.push_fine(corners, uvs, face, look, tints, mesh);
+    }
+
+    /// Adds one quad, already in the vertex's units.
+    fn push_fine(
+        &self,
+        corners: [[i16; 3]; 4],
         uvs: [[u8; 2]; 4],
         face: u8,
         look: &FaceLook,
@@ -536,7 +567,7 @@ impl Block<'_> {
         let out = if look.class == RenderClass::Blend { &mut mesh.blend } else { &mut mesh.opaque };
         for (corner, uv) in corners.into_iter().zip(uvs) {
             out.push(Vertex {
-                position: [0, 1, 2].map(|axis| self.local[axis] as i16 * 16 + i16::from(corner[axis])),
+                position: [0, 1, 2].map(|axis| self.local[axis] as i16 * 16 * POSITION_SCALE + corner[axis]),
                 layer: look.layer,
                 uv,
                 face_class: face | class << 3,

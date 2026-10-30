@@ -15,11 +15,11 @@ struct Frame {
 @group(0) @binding(2) var block_sampler: sampler;
 
 struct Vertex {
-    // x, y and z in sixteenths of a block within the sub-chunk, signed since
-    // a model can reach out of its block, then the texture layer.
+    // x, y and z in 1,024ths of a block within the sub-chunk, signed since a
+    // model can reach out of its block, then the texture layer.
     @location(0) position_layer: vec4<i32>,
-    // u and v in sixteenths of the texture, the face (bits 0 to 2) and
-    // class (bits 3 and 4), and a spare byte.
+    // u and v in 128ths of the texture, the face (bits 0 to 2) and class
+    // (bits 3 and 4), and a spare byte.
     @location(1) uv_face: vec4<u32>,
     // The tint, sRGB-encoded, with the blend opacity in alpha.
     @location(2) tint: vec4<f32>,
@@ -62,9 +62,9 @@ fn srgb_to_linear(c: vec3<f32>) -> vec3<f32> {
 @vertex
 fn vertex_main(v: Vertex) -> Varyings {
     var out: Varyings;
-    let local = vec3<f32>(v.position_layer.xyz) / 16.0;
+    let local = vec3<f32>(v.position_layer.xyz) / 1024.0;
     out.clip = frame.view_projection * vec4<f32>(local + v.offset.xyz, 1.0);
-    out.uv = vec2<f32>(v.uv_face.xy) / 16.0;
+    out.uv = vec2<f32>(v.uv_face.xy) / 128.0;
     out.layer = u32(v.position_layer.w);
     out.render_class = v.uv_face.z >> 3u;
     out.shade = face_shade(v.uv_face.z & 7u);

@@ -156,7 +156,7 @@ fn quads(vertices: &[Vertex]) -> Vec<&[Vertex]> {
 fn has_quad_at(vertices: &[Vertex], axis: usize, at: i16) -> bool {
     quads(vertices)
         .iter()
-        .any(|quad| quad.iter().all(|vertex| vertex.position[axis] == at))
+        .any(|quad| quad.iter().all(|vertex| vertex.at()[axis] == at))
 }
 
 #[test]
@@ -175,7 +175,7 @@ fn one_stone_has_six_faces_and_two_touching_have_ten() {
 fn quads_face_outwards() {
     let mesh = mesh_of(&[(5, 5, 5, STONE)], &[]);
     for quad in quads(&mesh.opaque) {
-        let p = |i: usize| quad[i].position.map(i32::from);
+        let p = |i: usize| quad[i].at().map(i32::from);
         let (a, b, c) = (p(0), p(1), p(2));
         let e1 = [b[0] - a[0], b[1] - a[1], b[2] - a[2]];
         let e2 = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
@@ -203,7 +203,7 @@ fn stone_beside_glass_keeps_the_face_between() {
     // Glass doesn't hide the stone's east face; stone hides the glass's west.
     assert_eq!(mesh.quads(), 6 + 5);
     let stone_east = quads(&mesh.opaque).into_iter().filter(|quad| {
-        quad[0].face() == Face::East as u8 && quad.iter().all(|v| v.position[0] == 6 * 16)
+        quad[0].face() == Face::East as u8 && quad.iter().all(|v| v.at()[0] == 6 * 16)
     });
     assert_eq!(stone_east.count(), 1);
 }
@@ -239,14 +239,14 @@ fn water_beside_water_or_waterlogged_seagrass_has_no_face_between() {
 fn water_under_air_gets_a_lowered_top() {
     let alone = mesh_of(&[(5, 5, 5, WATER)], &[]);
     assert!(has_quad_at(&alone.blend, 1, 5 * 16 + 14), "the surface is 14/16 up");
-    assert!(!alone.blend.iter().any(|vertex| vertex.position[1] == 6 * 16));
+    assert!(!alone.blend.iter().any(|vertex| vertex.at()[1] == 6 * 16));
 
     // With water above, the lower block has no top, and full-height sides.
     let stacked = mesh_of(&[(5, 5, 5, WATER), (5, 6, 5, WATER)], &[]);
     let lower_sides_reach_the_top = quads(&stacked.blend)
         .into_iter()
-        .filter(|quad| quad[0].face() == Face::North as u8 && quad.iter().any(|v| v.position[1] == 5 * 16))
-        .any(|quad| quad.iter().any(|v| v.position[1] == 6 * 16));
+        .filter(|quad| quad[0].face() == Face::North as u8 && quad.iter().any(|v| v.at()[1] == 5 * 16))
+        .any(|quad| quad.iter().any(|v| v.at()[1] == 6 * 16));
     assert!(lower_sides_reach_the_top);
     assert!(!has_quad_at(&stacked.blend, 1, 5 * 16 + 14));
 }
@@ -278,7 +278,7 @@ fn slabs_snow_and_vines() {
         .into_iter()
         .find(|quad| quad[0].face() == Face::South as u8 && quad[0].layer == 6)
         .unwrap();
-    assert!(side.iter().all(|vertex| vertex.uv[1] >= 8));
+    assert!(side.iter().all(|vertex| vertex.tex()[1] >= 8));
 
     let snow = mesh_of(&[(5, 5, 5, SNOW)], &[]);
     assert_eq!(snow.quads(), 6);
@@ -302,7 +302,7 @@ fn the_isotropic_rotation_is_the_same_every_run_and_varies_by_place() {
     let orientations: std::collections::HashSet<[u8; 2]> = quads(&first.opaque)
         .into_iter()
         .filter(|quad| quad[0].face() == Face::Up as u8)
-        .map(|quad| quad[0].uv)
+        .map(|quad| quad[0].tex())
         .collect();
     assert!(orientations.len() > 1, "{orientations:?}");
     assert_eq!(isotropic_turns(10, 64, -3, 1), isotropic_turns(10, 64, -3, 1));
@@ -310,7 +310,7 @@ fn the_isotropic_rotation_is_the_same_every_run_and_varies_by_place() {
 
 /// The smallest and largest of one coordinate over some vertices.
 fn span(vertices: &[Vertex], axis: usize) -> (i16, i16) {
-    let values = vertices.iter().map(|vertex| vertex.position[axis]);
+    let values = vertices.iter().map(|vertex| vertex.at()[axis]);
     (values.clone().min().unwrap(), values.max().unwrap())
 }
 
@@ -325,8 +325,8 @@ fn a_bamboo_stalk_is_a_thin_box_in_the_stem_strips() {
     }
     for quad in quads(&mesh.opaque) {
         assert_eq!(quad[0].layer, STEM);
-        let (u_min, u_max) = (quad.iter().map(|v| v.uv[0]).min().unwrap(), quad.iter().map(|v| v.uv[0]).max().unwrap());
-        let (v_min, v_max) = (quad.iter().map(|v| v.uv[1]).min().unwrap(), quad.iter().map(|v| v.uv[1]).max().unwrap());
+        let (u_min, u_max) = (quad.iter().map(|v| v.tex()[0]).min().unwrap(), quad.iter().map(|v| v.tex()[0]).max().unwrap());
+        let (v_min, v_max) = (quad.iter().map(|v| v.tex()[1]).min().unwrap(), quad.iter().map(|v| v.tex()[1]).max().unwrap());
         assert_eq!(u_max - u_min, 2);
         match quad[0].face() {
             1 => assert_eq!((u_min, v_min, v_max), (13, 0, 2), "the top's cut end"),
@@ -372,7 +372,7 @@ fn a_bamboo_column_stands_straight_and_hides_its_inner_ends() {
             .filter(|quad| {
                 quad[0].layer == STEM
                     && quad[0].face() >= 2
-                    && quad.iter().all(|v| (y * 16..=(y + 1) * 16).contains(&v.position[1]))
+                    && quad.iter().all(|v| (y * 16..=(y + 1) * 16).contains(&v.at()[1]))
             })
             .flatten()
             .copied()
@@ -496,9 +496,9 @@ fn a_model_copies_its_quads_and_a_neighbour_hides_those_on_the_edge() {
     let alone = mesh_in(&table, &[(5, 0, 5, 20)]);
     assert_eq!(alone.quads(), 7);
     assert_eq!(layer_quads(&alone.opaque, 8).len(), 1, "the plane shows its own slot");
-    let lowest = alone.opaque.iter().map(|vertex| vertex.position[1]).min();
+    let lowest = alone.opaque.iter().map(|vertex| vertex.at()[1]).min();
     assert_eq!(lowest, Some(-1), "a model can reach below its sub-chunk");
-    assert_eq!(alone.opaque[0].position[0], 5 * 16);
+    assert_eq!(alone.opaque[0].at()[0], 5 * 16);
 
     // Stone below and beside: the bottom and the west side go, the rest stays.
     let boxed = mesh_in(&table, &[(5, 5, 5, 20), (5, 4, 5, STONE), (4, 5, 5, STONE)]);
@@ -519,14 +519,14 @@ fn a_stalk_shows_its_tip_where_the_plant_ends() {
     assert_eq!(layer_quads(&stack.opaque, body).len(), 4);
     let tips = layer_quads(&stack.opaque, tip);
     assert_eq!(tips.len(), 4);
-    assert!(tips.iter().all(|quad| quad.iter().all(|vertex| vertex.position[1] >= 6 * 16)));
+    assert!(tips.iter().all(|quad| quad.iter().all(|vertex| vertex.at()[1] >= 6 * 16)));
 
     // A vine hanging: its tip is at the bottom.
     let table = with_look(20, vine);
     let stack = mesh_in(&table, &[(5, 5, 5, 20), (5, 6, 5, 20)]);
     let tips = layer_quads(&stack.opaque, tip);
     assert_eq!(tips.len(), 4);
-    assert!(tips.iter().all(|quad| quad.iter().all(|vertex| vertex.position[1] <= 6 * 16)));
+    assert!(tips.iter().all(|quad| quad.iter().all(|vertex| vertex.at()[1] <= 6 * 16)));
 }
 
 #[test]

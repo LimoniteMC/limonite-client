@@ -14,8 +14,9 @@ fn bounds(quads: &[ModelQuad]) -> ([i8; 3], [i8; 3]) {
     let mut max = [i8::MIN; 3];
     for corner in quads.iter().flat_map(|quad| quad.corners) {
         for axis in 0..3 {
-            min[axis] = min[axis].min(corner[axis]);
-            max[axis] = max[axis].max(corner[axis]);
+            let value = (corner[axis] / models::POSITION_SCALE) as i8;
+            min[axis] = min[axis].min(value);
+            max[axis] = max[axis].max(value);
         }
     }
     (min, max)

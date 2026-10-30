@@ -19,15 +19,23 @@
 //! **Slots:** a part names its texture by one of the look's six slots, as bamboo
 //! does. `blocks/rules.rs` says what each block keeps in each slot.
 //!
-//! Positions are in sixteenths of a block and can leave the block: a crop reaches
-//! a sixteenth below it, to meet the farmland. Rotated planes are rounded to
-//! the same grid.
+//! Parts are in sixteenths of a block and can leave the block: a crop reaches a
+//! sixteenth below it, to meet the farmland. Rotated planes are rounded to the
+//! same grid. Baked quads use the vertex's finer units ([`POSITION_SCALE`]).
 
 use limonite_packs::registry::Face::{self, Down, East, North, South, Up, West};
 
 /// The face code of a quad with no face of its own: planes on the diagonal, and
 /// anything else that takes no shade. Faces are 0 to 5, in [`Face`] order.
 pub const DIAGONAL: u8 = 6;
+
+/// Baked positions per sixteenth of a block, so a block is 1,024 wide. Java's
+/// models have halves and quarters of a sixteenth, and tilted planes that land
+/// anywhere; a 1,024th of a block is far less than a pixel from any distance.
+pub const POSITION_SCALE: i16 = 64;
+/// Baked texture coordinates per sixteenth of a texture, so a texture is 128
+/// wide, which still fits a byte. Java's rectangles have halves and quarters.
+pub const UV_SCALE: u8 = 8;
 
 /// A rectangle of a texture, in sixteenths: u0, v0, u1, v1. Reversed
 /// coordinates mirror it, as they do in Java's model files.
@@ -371,16 +379,26 @@ impl Part {
 /// One baked face of a model, ready for the mesher.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ModelQuad {
-    /// Block-relative, in sixteenths.
-    pub corners: [[i8; 3]; 4],
-    /// In sixteenths of the texture.
+    /// Block-relative, in [`POSITION_SCALE`]ths of a sixteenth.
+    pub corners: [[i16; 3]; 4],
+    /// In [`UV_SCALE`]ths of a sixteenth of the texture.
     pub uvs: [[u8; 2]; 4],
     /// What shades it: a [`Face`], or [`DIAGONAL`].
     pub face: u8,
     /// Which of the look's textures it shows.
-    pub slot: Face,
+    pub slot: u8,
     /// The neighbour that hides it, if it lies on the block's edge.
     pub cull: Option<Face>,
+}
+
+/// Sixteenths of a block, in baked units.
+fn fine_corners(corners: [[i8; 3]; 4]) -> [[i16; 3]; 4] {
+    corners.map(|corner| corner.map(|value| i16::from(value) * POSITION_SCALE))
+}
+
+/// Sixteenths of a texture, in baked units.
+fn fine_uvs(uvs: [[u8; 2]; 4]) -> [[u8; 2]; 4] {
+    uvs.map(|uv| uv.map(|value| value * UV_SCALE))
 }
 
 /// A rectangle's coordinates at a quad's corners: top left, bottom left, bottom
@@ -425,10 +443,10 @@ pub fn bake(parts: &[Part], turn: Turn, out: &mut Vec<ModelQuad>) {
                         Uv::Turned(rect, quarters) => rect_uvs(rect, quarters),
                     };
                     out.push(ModelQuad {
-                        corners,
-                        uvs,
+                        corners: fine_corners(corners),
+                        uvs: fine_uvs(uvs),
                         face: if shaded { landed as u8 } else { DIAGONAL },
-                        slot: skin.slot,
+                        slot: skin.slot as u8,
                         cull: on_edge(landed, corners[0]).then_some(landed),
                     });
                 }
@@ -439,13 +457,13 @@ pub fn bake(parts: &[Part], turn: Turn, out: &mut Vec<ModelQuad>) {
                 slot,
                 two_sided,
             } => {
-                let corners = corners.map(|corner| turn.corner(corner));
-                let uvs = rect_uvs(uv, 0);
+                let corners = fine_corners(corners.map(|corner| turn.corner(corner)));
+                let uvs = fine_uvs(rect_uvs(uv, 0));
                 out.push(ModelQuad {
                     corners,
                     uvs,
                     face: DIAGONAL,
-                    slot,
+                    slot: slot as u8,
                     cull: None,
                 });
                 if two_sided {
@@ -454,7 +472,7 @@ pub fn bake(parts: &[Part], turn: Turn, out: &mut Vec<ModelQuad>) {
                         corners: [corners[3], corners[2], corners[1], corners[0]],
                         uvs: [uvs[3], uvs[2], uvs[1], uvs[0]],
                         face: DIAGONAL,
-                        slot,
+                        slot: slot as u8,
                         cull: None,
                     });
                 }
@@ -1271,7 +1289,7 @@ mod tests {
 
     /// The direction a quad faces, from its winding, as unit steps. `None` for
     /// a tilted one.
-    fn wound(corners: [[i8; 3]; 4]) -> [i32; 3] {
+    fn wound(corners: [[i16; 3]; 4]) -> [i32; 3] {
         let p = corners.map(|corner| corner.map(i32::from));
         let e1 = [p[1][0] - p[0][0], p[1][1] - p[0][1], p[1][2] - p[0][2]];
         let e2 = [p[2][0] - p[0][0], p[2][1] - p[0][1], p[2][2] - p[0][2]];
