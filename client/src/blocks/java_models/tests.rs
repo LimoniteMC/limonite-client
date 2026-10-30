@@ -534,8 +534,8 @@ fn models_lie_where_pumpkins_outlines_say() {
         }
         let mut model = ([f32::MAX; 3], [f32::MIN; 3]);
         for corner in look.quads.iter().flat_map(|quad| quad.corners) {
-            for axis in 0..3 {
-                let value = f32::from(corner[axis]) / f32::from(S);
+            for (axis, value) in corner.into_iter().enumerate() {
+                let value = f32::from(value) / f32::from(S);
                 model.0[axis] = model.0[axis].min(value);
                 model.1[axis] = model.1[axis].max(value);
             }
