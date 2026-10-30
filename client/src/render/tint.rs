@@ -35,15 +35,21 @@ pub enum Tint {
     Birch,
     /// Spruce leaves.
     Evergreen,
+    /// Leaf litter.
+    DryFoliage,
     Water,
+    /// One colour wherever it is: lily pads, a stem by its age, wire by its
+    /// power.
+    Fixed([u8; 3]),
 }
 
 /// The colormaps, in the order [`Tints`] keeps their colours.
-const COLORMAPS: [(Tint, &str); 4] = [
+const COLORMAPS: [(Tint, &str); 5] = [
     (Tint::Grass, "textures/colormap/grass"),
     (Tint::Foliage, "textures/colormap/foliage"),
     (Tint::Birch, "textures/colormap/birch"),
     (Tint::Evergreen, "textures/colormap/evergreen"),
+    (Tint::DryFoliage, "textures/colormap/dry_foliage"),
 ];
 
 /// A climate: a Java biome's base temperature and downfall.
@@ -55,9 +61,10 @@ pub struct Climate {
 
 /// The tint colours by Bedrock biome id.
 pub struct Tints {
-    /// For each Bedrock biome id 0 to 255: the grass, foliage, birch and
-    /// evergreen colours. An id with no Java biome gets plains'.
-    colors: Vec<[[u8; 3]; 4]>,
+    /// For each Bedrock biome id 0 to 255: the grass, foliage, birch,
+    /// evergreen and dry foliage colours. An id with no Java biome gets
+    /// plains'.
+    colors: Vec<[[u8; 3]; 5]>,
     /// RGBA: the colour, and the surface transparency as alpha.
     water: [u8; 4],
 }
@@ -87,7 +94,7 @@ impl Tints {
             .iter()
             .map(|(path, map)| (*path, map.as_ref().map(RgbaImage::dimensions).map_err(Clone::clone)))
             .collect();
-        let maps: [Option<&RgbaImage>; 4] = loaded.each_ref().map(|(_, map)| map.as_ref().ok());
+        let maps: [Option<&RgbaImage>; 5] = loaded.each_ref().map(|(_, map)| map.as_ref().ok());
         let plains = Climate {
             temperature: Biome::PLAINS.weather.base_temperature(),
             downfall: Biome::PLAINS.weather.downfall(),
@@ -121,7 +128,7 @@ impl Tints {
     #[must_use]
     pub fn uniform(color: [u8; 3], water: [u8; 4]) -> Self {
         Self {
-            colors: vec![[color; 4]; 256],
+            colors: vec![[color; 5]; 256],
             water,
         }
     }
@@ -142,7 +149,9 @@ impl Tints {
             Tint::Foliage => rgb(colors[1]),
             Tint::Birch => rgb(colors[2]),
             Tint::Evergreen => rgb(colors[3]),
+            Tint::DryFoliage => rgb(colors[4]),
             Tint::Water => self.water,
+            Tint::Fixed(color) => rgb(color),
         }
     }
 }
@@ -289,6 +298,7 @@ mod tests {
         assert_eq!(tints.color(1, Tint::Grass), [50, 173, 0, 255]);
         assert_eq!(tints.color(1, Tint::Foliage), [255; 4]);
         assert_eq!(tints.color(1, Tint::None), [255; 4]);
+        assert_eq!(tints.color(1, Tint::Fixed([1, 2, 3])), [1, 2, 3, 255]);
         // An id beyond the table gets plains.
         assert_eq!(tints.color(9999, Tint::Grass), [50, 173, 0, 255]);
     }

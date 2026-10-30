@@ -215,6 +215,8 @@ const TINTS: &[(&str, Tint)] = &[
     ("spruce_leaves", Tint::Evergreen),
     ("water", Tint::Water),
     ("flowing_water", Tint::Water),
+    // Java's colour, the same everywhere. Bedrock's texture is grey too.
+    ("waterlily", Tint::Fixed([0x20, 0x80, 0x30])),
 ];
 
 /// Blocks whose sides are drawn opaque, their texture's alpha marking the
