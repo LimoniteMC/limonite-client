@@ -15,9 +15,9 @@ struct Frame {
 @group(0) @binding(2) var block_sampler: sampler;
 
 struct Vertex {
-    // x, y and z in sixteenths of a block within the sub-chunk, then the
-    // texture layer.
-    @location(0) position_layer: vec4<u32>,
+    // x, y and z in sixteenths of a block within the sub-chunk, signed since
+    // a model can reach out of its block, then the texture layer.
+    @location(0) position_layer: vec4<i32>,
     // u and v in sixteenths of the texture, the face (bits 0 to 2) and
     // class (bits 3 and 4), and a spare byte.
     @location(1) uv_face: vec4<u32>,
@@ -65,7 +65,7 @@ fn vertex_main(v: Vertex) -> Varyings {
     let local = vec3<f32>(v.position_layer.xyz) / 16.0;
     out.clip = frame.view_projection * vec4<f32>(local + v.offset.xyz, 1.0);
     out.uv = vec2<f32>(v.uv_face.xy) / 16.0;
-    out.layer = v.position_layer.w;
+    out.layer = u32(v.position_layer.w);
     out.render_class = v.uv_face.z >> 3u;
     out.shade = face_shade(v.uv_face.z & 7u);
     out.tint = vec4<f32>(srgb_to_linear(v.tint.rgb), v.tint.a);

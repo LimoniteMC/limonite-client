@@ -311,7 +311,7 @@ fn pipeline(
     format: wgpu::TextureFormat,
     blended: bool,
 ) -> wgpu::RenderPipeline {
-    let vertex_attributes = wgpu::vertex_attr_array![0 => Uint16x4, 1 => Uint8x4, 2 => Unorm8x4];
+    let vertex_attributes = wgpu::vertex_attr_array![0 => Sint16x4, 1 => Uint8x4, 2 => Unorm8x4];
     let instance_attributes = wgpu::vertex_attr_array![3 => Float32x4];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(if blended { "terrain, blended" } else { "terrain" }),

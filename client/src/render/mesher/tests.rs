@@ -151,7 +151,7 @@ fn quads(vertices: &[Vertex]) -> Vec<&[Vertex]> {
 }
 
 /// Whether some quad lies in the plane `axis` = `at` sixteenths.
-fn has_quad_at(vertices: &[Vertex], axis: usize, at: u16) -> bool {
+fn has_quad_at(vertices: &[Vertex], axis: usize, at: i16) -> bool {
     quads(vertices)
         .iter()
         .any(|quad| quad.iter().all(|vertex| vertex.position[axis] == at))
@@ -307,7 +307,7 @@ fn the_isotropic_rotation_is_the_same_every_run_and_varies_by_place() {
 }
 
 /// The smallest and largest of one coordinate over some vertices.
-fn span(vertices: &[Vertex], axis: usize) -> (u16, u16) {
+fn span(vertices: &[Vertex], axis: usize) -> (i16, i16) {
     let values = vertices.iter().map(|vertex| vertex.position[axis]);
     (values.clone().min().unwrap(), values.max().unwrap())
 }
@@ -364,7 +364,7 @@ fn a_bamboo_column_stands_straight_and_hides_its_inner_ends() {
     // has leaves.
     assert_eq!(mesh.quads(), 6 + 4 + 5 + 6 + 4);
     // Both thin segments stand at the same x and z: the offset ignores y.
-    let segment = |y: u16| -> Vec<Vertex> {
+    let segment = |y: i16| -> Vec<Vertex> {
         quads(&mesh.opaque)
             .into_iter()
             .filter(|quad| {

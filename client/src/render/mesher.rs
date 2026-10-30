@@ -65,8 +65,11 @@ pub const DIAGONAL: u8 = 6;
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
-    /// The position in the sub-chunk, in sixteenths of a block: 0 to 256.
-    pub position: [u16; 3],
+    /// The position in the sub-chunk, in sixteenths of a block: 0 to 256, and
+    /// a little either side, for a model that reaches out of its block. The
+    /// GPU reads it with `layer`, as four signed numbers; there are never
+    /// 32,768 textures.
+    pub position: [i16; 3],
     /// The texture's layer in the array.
     pub layer: u16,
     /// Texture coordinates in sixteenths of the texture: 0 to 16.
@@ -310,7 +313,7 @@ impl Block<'_> {
                         _ => true,
                     };
                     if !(on_boundary && self.neighbour_occludes(face)) {
-                        self.quad(face, [0, bottom, 0], [16, top, 16], tints, mesh);
+                        self.quad(face, [0, bottom as i8, 0], [16, top as i8, 16], tints, mesh);
                     }
                 }
             }
@@ -321,7 +324,7 @@ impl Block<'_> {
                     let hidden = self.neighbour_is(face, liquid)
                         || (self.neighbour_occludes(face) && (face != Face::Up || top == 16));
                     if !hidden {
-                        self.quad(face, [0, 0, 0], [16, top, 16], tints, mesh);
+                        self.quad(face, [0, 0, 0], [16, top as i8, 16], tints, mesh);
                     }
                 }
             }
@@ -348,7 +351,7 @@ impl Block<'_> {
                             Face::East => max[0] == 16,
                         };
                         if !(on_edge && self.neighbour_occludes(face)) {
-                            self.quad(face, min, max, tints, mesh);
+                            self.quad(face, min.map(|v| v as i8), max.map(|v| v as i8), tints, mesh);
                         }
                     }
                 }
@@ -382,7 +385,7 @@ impl Block<'_> {
     }
 
     /// One face of a box from `min` to `max`, in sixteenths of the block.
-    fn quad(&self, face: Face, min: [u8; 3], max: [u8; 3], tints: &Tints, mesh: &mut Mesh) {
+    fn quad(&self, face: Face, min: [i8; 3], max: [i8; 3], tints: &Tints, mesh: &mut Mesh) {
         let look = self.look.face(face);
         let corners = box_face(face, min, max);
         let mut uvs = corners.map(|corner| face_uv(face, corner));
@@ -438,7 +441,7 @@ impl Block<'_> {
         // At most 4 sixteenths either way, so the stalk stays in its block.
         let start = |offset: i8| (8 - width / 2).wrapping_add_signed(offset);
         let (x0, z0) = (start(xz_offset(column)), start(xz_offset(column >> 8)));
-        let (min, max) = ([x0, 0, z0], [x0 + width, 16, z0 + width]);
+        let (min, max) = ([x0 as i8, 0, z0 as i8], [(x0 + width) as i8, 16, (z0 + width) as i8]);
         let strip = 3 * (java_seed(x, y, z) & 3) as u8;
         for face in Face::ALL {
             let hidden = matches!(face, Face::Up | Face::Down)
@@ -477,7 +480,7 @@ impl Block<'_> {
             Face::West => (0, 1),
             Face::East => (0, 15),
         };
-        let (mut min, mut max) = ([0u8; 3], [16u8; 3]);
+        let (mut min, mut max) = ([0i8; 3], [16i8; 3]);
         min[axis] = depth;
         max[axis] = depth;
         let corners = box_face(face, min, max);
@@ -491,7 +494,7 @@ impl Block<'_> {
     /// Adds one quad: block-relative corners in sixteenths.
     fn push(
         &self,
-        corners: [[u8; 3]; 4],
+        corners: [[i8; 3]; 4],
         uvs: [[u8; 2]; 4],
         face: u8,
         look: &FaceLook,
@@ -508,7 +511,7 @@ impl Block<'_> {
         let out = if look.class == RenderClass::Blend { &mut mesh.blend } else { &mut mesh.opaque };
         for (corner, uv) in corners.into_iter().zip(uvs) {
             out.push(Vertex {
-                position: [0, 1, 2].map(|axis| self.local[axis] * 16 + u16::from(corner[axis])),
+                position: [0, 1, 2].map(|axis| self.local[axis] as i16 * 16 + i16::from(corner[axis])),
                 layer: look.layer,
                 uv,
                 face_class: face | class << 3,
@@ -526,7 +529,7 @@ impl Block<'_> {
 /// A box face's four corners, counter-clockwise seen from outside, starting
 /// at the texture's top left. Counter-clockwise is the front face the GPU
 /// keeps; it culls the back of every quad.
-const fn box_face(face: Face, min: [u8; 3], max: [u8; 3]) -> [[u8; 3]; 4] {
+const fn box_face(face: Face, min: [i8; 3], max: [i8; 3]) -> [[i8; 3]; 4] {
     let ([x0, y0, z0], [x1, y1, z1]) = (min, max);
     match face {
         Face::Up => [[x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]],
@@ -540,15 +543,16 @@ const fn box_face(face: Face, min: [u8; 3], max: [u8; 3]) -> [[u8; 3]; 4] {
 
 /// A corner's texture coordinates on `face`, from its position: a slab's
 /// side shows the matching part of the texture.
-const fn face_uv(face: Face, [x, y, z]: [u8; 3]) -> [u8; 2] {
-    match face {
-        Face::Up => [x, z],
-        Face::Down => [x, 16 - z],
-        Face::North => [16 - x, 16 - y],
-        Face::South => [x, 16 - y],
-        Face::West => [z, 16 - y],
-        Face::East => [16 - z, 16 - y],
-    }
+const fn face_uv(face: Face, [x, y, z]: [i8; 3]) -> [u8; 2] {
+    let (u, v) = match face {
+        Face::Up => (x, z),
+        Face::Down => (x, 16 - z),
+        Face::North => (16 - x, 16 - y),
+        Face::South => (x, 16 - y),
+        Face::West => (z, 16 - y),
+        Face::East => (16 - z, 16 - y),
+    };
+    [u as u8, v as u8]
 }
 
 /// Turns texture coordinates a quarter around the texture's centre.
