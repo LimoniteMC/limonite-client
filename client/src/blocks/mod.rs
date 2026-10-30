@@ -2,6 +2,8 @@
 //! appearance table says how it looks.
 
 pub mod appearance;
+pub mod jar;
+pub mod java_models;
 pub mod models;
 pub mod palette;
 pub mod palette_source;

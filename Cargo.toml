@@ -30,6 +30,8 @@ base64 = { version = "0.23.1", default-features = false, features = ["std"] }
 serde_json = { version = "1.0", default-features = false, features = ["std"] }
 # The packs crate's manifests and registry JSON. Same spec as pumpkin/Cargo.toml.
 serde = { version = "1.0", default-features = false, features = ["derive", "std"] }
+# Reading the user's own Java jar (M5). Same spec as pumpkin/Cargo.toml.
+zip = { version = "9.0", default-features = false, features = ["deflate-flate2"] }
 # The client's settings and identity files (M5). Same spec as pumpkin/Cargo.toml, which reads its
 # own config with it.
 toml = { version = "1.1", default-features = false, features = ["parse", "display", "serde"] }

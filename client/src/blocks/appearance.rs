@@ -317,14 +317,19 @@ pub struct FaceLook {
     pub isotropic: bool,
 }
 
+/// The textures a look can hold: one for each face, and two more for a model
+/// that needs them (`blocks/java_models.rs`). No state of 26.3 needs more than 7.
+pub const SLOTS: usize = 8;
+
 /// How one block state looks.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Appearance {
     pub shape: Shape,
     pub tint: Tint,
     /// Indexed by `Face as usize`: down, up, north, south, west, east. Crossed
-    /// planes and attached planes use the same look in every slot.
-    pub faces: [FaceLook; 6],
+    /// planes and attached planes use the same look in every slot. A model's quads
+    /// say which slot they show.
+    pub faces: [FaceLook; SLOTS],
     /// A full cube whose faces are all opaque or overlay: it hides the faces
     /// of its neighbours.
     pub occludes: bool,
@@ -345,7 +350,7 @@ impl Appearance {
             tinted: false,
             turns: 0,
             isotropic: false,
-        }; 6],
+        }; SLOTS],
         occludes: true,
         under_snow: None,
         snow: false,
@@ -436,7 +441,7 @@ struct Plan {
     shape: Shape,
     tint: Tint,
     blend: bool,
-    faces: [FacePlan; 6],
+    faces: [FacePlan; SLOTS],
     /// The texture its sides show under snow.
     under_snow: Option<usize>,
 }
@@ -469,7 +474,7 @@ pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, 
     let mut failed_names: HashMap<&str, String> = HashMap::new();
     let mut by_id = HashMap::with_capacity(plans.len());
     for (id, name, plan) in plans {
-        let mut faces = [Appearance::MISSING.faces[0]; 6];
+        let mut faces = Appearance::MISSING.faces;
         for (look, face) in faces.iter_mut().zip(&plan.faces) {
             let layer = face.texture.and_then(|index| {
                 let layer = loaded.layers[index];
@@ -588,7 +593,7 @@ impl Resolver<'_> {
             shape,
             tint,
             blend,
-            faces: [FacePlan::default(); 6],
+            faces: [FacePlan::default(); SLOTS],
             under_snow: None,
         };
         if shape == Shape::Invisible {

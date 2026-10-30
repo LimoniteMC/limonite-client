@@ -36,6 +36,13 @@ pub struct JavaBlock {
 }
 
 impl JavaBlock {
+    /// A made-up state, for tests that don't want Pumpkin's.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn new(name: &'static str, props: Vec<(&'static str, &'static str)>) -> Self {
+        Self { name, props }
+    }
+
     #[must_use]
     pub fn of(state: BlockStateId) -> Self {
         let block = Block::from_state_id(state);
@@ -46,6 +53,13 @@ impl JavaBlock {
                 .map(|props| props.to_props().into_iter().map(|p| (p.key().to_str(), p.value_str())).collect())
                 .unwrap_or_default(),
         }
+    }
+
+    /// Its properties, for a test to print.
+    #[cfg(test)]
+    #[must_use]
+    pub fn props(&self) -> &[(&'static str, &'static str)] {
+        &self.props
     }
 
     #[must_use]

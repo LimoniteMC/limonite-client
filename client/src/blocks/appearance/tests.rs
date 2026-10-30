@@ -229,7 +229,7 @@ fn isotropic_faces_are_flagged() {
     assert!(grass.face(Face::Up).isotropic);
     assert!(grass.face(Face::Down).isotropic);
     assert!(!grass.face(Face::North).isotropic);
-    assert!(f.look(SAND).faces.iter().all(|face| face.isotropic));
+    assert!(f.look(SAND).faces[..6].iter().all(|face| face.isotropic));
     assert!(!f.look(LEAVES).face(Face::Down).isotropic);
 }
 

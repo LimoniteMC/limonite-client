@@ -45,7 +45,7 @@ fn look(shape: Shape, class: RenderClass, tint: Tint, layer: u16) -> Appearance 
     Appearance {
         shape,
         tint,
-        faces: [face; 6],
+        faces: [face; crate::blocks::appearance::SLOTS],
         occludes: shape == Shape::Cube && class == RenderClass::Opaque,
         under_snow: None,
         snow: false,

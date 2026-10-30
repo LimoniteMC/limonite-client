@@ -179,6 +179,23 @@ impl Turn {
         [x, y, z]
     }
 
+    /// Where the turn takes a point in baked units.
+    #[must_use]
+    pub const fn corner_fine(self, [mut x, mut y, mut z]: [i16; 3]) -> [i16; 3] {
+        const WHOLE: i16 = 16 * POSITION_SCALE;
+        let mut i = 0;
+        while i < self.x % 4 {
+            (y, z) = (z, WHOLE - y);
+            i += 1;
+        }
+        let mut i = 0;
+        while i < self.y % 4 {
+            (x, z) = (WHOLE - z, x);
+            i += 1;
+        }
+        [x, y, z]
+    }
+
     /// Where the turn takes a face.
     #[must_use]
     pub const fn face(self, mut face: Face) -> Face {
