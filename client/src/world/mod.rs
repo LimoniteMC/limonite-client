@@ -12,7 +12,7 @@ pub mod chunk;
 pub mod level_chunk;
 pub mod storage;
 
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use std::collections::{HashMap, hash_map::Entry};
 
 use pumpkin_core::net::bedrock::level_chunk::CLevelChunk;
 use pumpkin_data::{Block, BlockState, BlockStateId};
@@ -298,7 +298,7 @@ impl BlockTable {
         let mut java_by_bedrock = HashMap::new();
         let mut collisions = 0;
         let mut examples = Vec::new();
-        let mut differing = HashSet::new();
+        let mut groups: HashMap<u32, Vec<BlockStateId>> = HashMap::new();
         for raw in 0..BlockStateId::COUNT {
             let Some(state) = BlockStateId::new(raw) else {
                 continue;
@@ -313,20 +313,9 @@ impl BlockTable {
                     if examples.len() < 5 {
                         examples.push((bedrock, *entry.get(), state));
                     }
-                    if !same_boxes(*entry.get(), state) {
-                        differing.insert(bedrock);
-                    }
                 }
             }
-        }
-        let mut groups: HashMap<u32, Vec<BlockStateId>> = HashMap::new();
-        if !differing.is_empty() {
-            for state in (0..BlockStateId::COUNT).filter_map(BlockStateId::new) {
-                let bedrock = BlockState::to_be_network_id(state);
-                if differing.contains(&bedrock) {
-                    groups.entry(bedrock).or_default().push(state);
-                }
-            }
+            groups.entry(bedrock).or_default().push(state);
         }
         Self {
             java_by_bedrock,
@@ -339,22 +328,18 @@ impl BlockTable {
         }
     }
 
-    /// The Java state whose boxes the block with Bedrock id `bedrock` has
-    /// (`blocks/shapes.rs`; worth teaching).
+    /// The Java state whose boxes and model the block with Bedrock id `bedrock`
+    /// has (`blocks/shapes.rs`; worth teaching).
     ///
-    /// Usually the lowest state, as for [`Self::java_state`]. But where the
-    /// states sharing the id don't have the same boxes, Bedrock keeps the
-    /// property that differs somewhere else, or works it out itself: whether
-    /// a piston is pushed out lives in its block actor, a chest's pairing
-    /// too. Then the shape is the state nearest its block's default: the
-    /// lowest piston state is pushed out, which would draw every piston
-    /// short, while its default is the common case, drawn back.
+    /// Where several Java states share an id, Bedrock keeps what differs somewhere
+    /// else, or works it out itself: whether a piston is pushed out lives in its
+    /// block actor, and whether a repeater is locked comes from its neighbours. So
+    /// it's the state nearest its block's default. The lowest would be wrong, as
+    /// Java numbers `true` first: every piston would be drawn pushed out, and every
+    /// repeater locked.
     #[must_use]
     pub fn shape_state(&self, bedrock: u32) -> Option<BlockStateId> {
-        self.shape_by_bedrock
-            .get(&bedrock)
-            .copied()
-            .or_else(|| self.java_state(bedrock))
+        self.shape_by_bedrock.get(&bedrock).copied()
     }
 
     fn log(&self) {
@@ -392,12 +377,6 @@ impl BlockTable {
 
 fn block_name(state: BlockStateId) -> &'static str {
     Block::from_state_id(state).name
-}
-
-/// Whether two Java states have the same collision and outline boxes.
-fn same_boxes(a: BlockStateId, b: BlockStateId) -> bool {
-    let (a, b) = (a.to_state(), b.to_state());
-    a.collision_shapes == b.collision_shapes && a.outline_shapes == b.outline_shapes
 }
 
 /// Of `states`, the one with the most properties at its block's default
