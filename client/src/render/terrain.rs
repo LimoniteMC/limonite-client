@@ -15,7 +15,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, Vec3};
 
-use super::{Gpu, SKY, camera::Camera, meshes::Meshes, textures::TextureArray};
+use super::{Gpu, SKY, animation::Animator, camera::Camera, meshes::Meshes, textures::TextureArray};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Six indices per quad: two triangles, 0-1-2 and 0-2-3, counter-clockwise.
@@ -33,6 +33,8 @@ pub struct Terrain {
     opaque: wgpu::RenderPipeline,
     blend: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
+    /// The texture array, which animation writes into.
+    textures: wgpu::Texture,
     frame: wgpu::Buffer,
     depth: wgpu::TextureView,
     depth_size: (u32, u32),
@@ -48,11 +50,38 @@ pub struct Terrain {
 }
 
 impl Terrain {
+    /// Moves the animated textures to `tick`.
+    pub fn animate(&self, gpu: &Gpu, animator: &mut Animator, tick: u64) {
+        animator.advance(tick, &mut |layer, level, size, texels| {
+            gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &self.textures,
+                    mip_level: level,
+                    origin: wgpu::Origin3d { x: 0, y: 0, z: layer },
+                    aspect: wgpu::TextureAspect::All,
+                },
+                texels,
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(4 * size),
+                    rows_per_image: Some(size),
+                },
+                wgpu::Extent3d {
+                    width: size,
+                    height: size,
+                    depth_or_array_layers: 1,
+                },
+            );
+        });
+    }
+}
+
+impl Terrain {
     /// Uploads the texture array and builds the pipelines.
     #[must_use]
     pub fn new(gpu: &Gpu, textures: &TextureArray) -> Self {
         let device = &gpu.device;
-        let texture_view = upload_textures(gpu, textures);
+        let (uploaded, texture_view) = upload_textures(gpu, textures);
         // Nearest texels up close keep the pixel art sharp; between mip
         // levels the blend is linear, so the distance doesn't shimmer as
         // much. Clamping keeps a face's edge from sampling the other edge.
@@ -134,6 +163,7 @@ impl Terrain {
         let instance_capacity = 1024;
         let instances = instance_buffer(device, instance_capacity);
         Self {
+            textures: uploaded,
             opaque,
             blend,
             bind_group,
@@ -257,7 +287,7 @@ impl Terrain {
 }
 
 /// Uploads every layer and mip level, and returns a 2D-array view.
-fn upload_textures(gpu: &Gpu, textures: &TextureArray) -> wgpu::TextureView {
+fn upload_textures(gpu: &Gpu, textures: &TextureArray) -> (wgpu::Texture, wgpu::TextureView) {
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("block textures"),
         size: wgpu::Extent3d {
@@ -296,10 +326,11 @@ fn upload_textures(gpu: &Gpu, textures: &TextureArray) -> wgpu::TextureView {
             },
         );
     }
-    texture.create_view(&wgpu::TextureViewDescriptor {
+    let view = texture.create_view(&wgpu::TextureViewDescriptor {
         dimension: Some(wgpu::TextureViewDimension::D2Array),
         ..Default::default()
-    })
+    });
+    (texture, view)
 }
 
 /// The opaque pipeline writes depth; the blend pipeline blends and doesn't.

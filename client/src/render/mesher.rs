@@ -35,6 +35,10 @@ use crate::{
 
 /// The neighbourhood's width: 16 blocks and a border block on each side.
 pub const PAD: usize = 18;
+/// A whole block, in the vertex's units.
+const WHOLE: i16 = 16 * POSITION_SCALE;
+/// A whole texture, in the vertex's units.
+const UV_WHOLE: u8 = 16 * UV_SCALE;
 const CELLS: usize = PAD * PAD * PAD;
 
 /// A cell's index from padded coordinates, each 0 to 17. x is innermost, so
@@ -228,6 +232,12 @@ impl Neighbourhood {
             }
         }
 
+        // A liquid's corners take in the diagonals, so it's only there that the
+        // border's edges are worth filling in.
+        if n.looks.iter().any(|look| look.liquid().is_some()) {
+            n.fill_edges(world, table, chunk_x, base_y, chunk_z);
+        }
+
         // One biome per column: the sub-chunk's middle.
         for z in 0..16 {
             for x in 0..16 {
@@ -239,9 +249,32 @@ impl Neighbourhood {
         Some(n)
     }
 
+    /// The border's edges and corners. A chunk that isn't loaded leaves them air, and
+    /// a corner of liquid beside it is a little off until the sub-chunk's next meshed.
+    fn fill_edges(&mut self, world: &World, table: &AppearanceTable, chunk_x: i32, base_y: i32, chunk_z: i32) {
+        let on_border = |value: usize| value == 0 || value == PAD - 1;
+        for y in 0..PAD {
+            for z in 0..PAD {
+                for x in 0..PAD {
+                    if usize::from(on_border(x)) + usize::from(on_border(y)) + usize::from(on_border(z)) < 2 {
+                        continue;
+                    }
+                    let (world_x, world_z) = (chunk_x * 16 + x as i32 - 1, chunk_z * 16 + z as i32 - 1);
+                    let Some(chunk) = world.chunk(world_x.div_euclid(16), world_z.div_euclid(16)) else {
+                        continue;
+                    };
+                    let (column_x, column_z) = (world_x.rem_euclid(16) as usize, world_z.rem_euclid(16) as usize);
+                    for layer in 0..2 {
+                        let id = chunk.block(column_x, base_y + y as i32 - 1, column_z, layer);
+                        self.set(table, layer, cell(x, y, z), id);
+                    }
+                }
+            }
+        }
+    }
+
     /// A neighbourhood from a function of block coordinates relative to the
-    /// sub-chunk (-1 to 16 on each axis; the border's edges are never asked
-    /// for) and the layer.
+    /// sub-chunk (-1 to 16 on each axis) and the layer.
     #[cfg(test)]
     pub fn from_fn(
         table: &AppearanceTable,
@@ -255,11 +288,8 @@ impl Neighbourhood {
             for y in 0..PAD {
                 for z in 0..PAD {
                     for x in 0..PAD {
-                        let edges = [x, y, z].iter().filter(|&&c| c == 0 || c == PAD - 1).count();
-                        if edges <= 1 {
-                            let id = id_at(x as i32 - 1, y as i32 - 1, z as i32 - 1, layer);
-                            n.set(table, layer, cell(x, y, z), id);
-                        }
+                        let id = id_at(x as i32 - 1, y as i32 - 1, z as i32 - 1, layer);
+                        n.set(table, layer, cell(x, y, z), id);
                     }
                 }
             }
@@ -339,17 +369,7 @@ impl Block<'_> {
                     }
                 }
             }
-            Shape::Liquid { liquid, surface } => {
-                let covered = self.neighbour_is(Face::Up, liquid);
-                let top = if covered { 16 } else { surface };
-                for face in Face::ALL {
-                    let hidden = self.neighbour_is(face, liquid)
-                        || (self.neighbour_occludes(face) && (face != Face::Up || top == 16));
-                    if !hidden {
-                        self.quad(face, [0, 0, 0], [16, top as i8, 16], tints, mesh);
-                    }
-                }
-            }
+            Shape::Liquid { liquid, amount } => self.liquid(liquid, amount, tints, mesh),
             Shape::Cross => self.cross(self.look.face(Face::North), tints, mesh),
             Shape::Stalk { grows_up } => {
                 let beyond = self.neighbour(if grows_up { Face::Up } else { Face::Down }, 0);
@@ -393,6 +413,157 @@ impl Block<'_> {
                 }
             }
         }
+    }
+
+    /// A liquid (worth teaching). A cube's faces don't do: a flow has to run downhill,
+    /// so each corner of its top stands as high as the columns around it, and the
+    /// texture has to run the way it does. These are Java's rules, on its numbers.
+    ///
+    /// - **Corners** average the four columns that share them. A source counts ten
+    ///   times over, so water doesn't dip away from one, and a neighbour with the same
+    ///   liquid above it pulls the corner up to meet that.
+    /// - **Textures** come from the look's slots: `up` and `down` hold the still
+    ///   texture, and the sides the flowing one, which covers two blocks (`quad`), so a
+    ///   block only shows half of it.
+    /// - **A level top** shows the still texture, and a sloping one the flowing texture,
+    ///   turned so it runs downhill. `blocks.json` marks lava's top `isotropic`, but
+    ///   that's for cubes: here it would turn each block's texture its own way.
+    fn liquid(&self, liquid: Liquid, amount: u8, tints: &Tints, mesh: &mut Mesh) {
+        let shows = |face: Face| !self.neighbour_is(face, liquid) && !self.neighbour_occludes(face);
+        let covered = self.neighbour_is(Face::Up, liquid);
+        let sides = [Face::North, Face::South, Face::West, Face::East].map(|face| (face, shows(face)));
+        let bottom = shows(Face::Down);
+        // Most of a sea, so it's the first thing to be sure of.
+        if covered && !bottom && !sides.iter().any(|&(_, shows)| shows) {
+            return;
+        }
+        let own = f32::from(amount) / 9.0;
+        let height = |x: isize, z: isize| {
+            if covered {
+                WHOLE
+            } else {
+                (self.liquid_corner(liquid, own, x, z) * f32::from(WHOLE)).round() as i16
+            }
+        };
+        // By which end of x and of z each corner's at.
+        let heights = [[height(-1, -1), height(-1, 1)], [height(1, -1), height(1, 1)]];
+
+        if !covered && !(self.neighbour_occludes(Face::Up) && heights.iter().flatten().all(|&h| h == WHOLE)) {
+            let corners = box_face(Face::Up, [0; 3], [1; 3]).map(|[x, _, z]| {
+                [i16::from(x) * WHOLE, heights[x as usize][z as usize], i16::from(z) * WHOLE]
+            });
+            let (look, uvs) = match self.liquid_flow(liquid, own) {
+                Some(flow) => (self.look.face(Face::North), corners.map(|corner| flowing_uv(corner, flow))),
+                None => (self.look.face(Face::Up), [[0, 0], [0, UV_WHOLE], [UV_WHOLE, UV_WHOLE], [UV_WHOLE, 0]]),
+            };
+            self.push_fine(corners, uvs, Face::Up as u8, look, tints, mesh);
+        }
+        for (face, shows) in sides {
+            if shows {
+                self.liquid_side(face, &heights, tints, mesh);
+            }
+        }
+        if bottom {
+            let corners = box_face(Face::Down, [0; 3], [1; 3]).map(|corner| corner.map(|value| i16::from(value) * WHOLE));
+            let uvs = [[0, 0], [0, UV_WHOLE], [UV_WHOLE, UV_WHOLE], [UV_WHOLE, 0]];
+            self.push_fine(corners, uvs, Face::Down as u8, self.look.face(Face::Down), tints, mesh);
+        }
+    }
+
+    /// One side of a liquid, up to its two corners, in the left half of the flowing
+    /// texture: its top edge is lower down the texture by as much as the liquid's low.
+    fn liquid_side(&self, face: Face, heights: &[[i16; 2]; 2], tints: &Tints, mesh: &mut Mesh) {
+        let half = UV_WHOLE / 2;
+        let unit = box_face(face, [0; 3], [1; 3]);
+        let corners = unit.map(|[x, y, z]| {
+            let top = heights[x as usize][z as usize];
+            [i16::from(x) * WHOLE, if y == 1 { top } else { 0 }, i16::from(z) * WHOLE]
+        });
+        // Box faces start at the texture's top left, and go down, across and up.
+        let uvs = [0, 1, 2, 3].map(|index: usize| {
+            let u = if index < 2 { 0 } else { half };
+            let v = if corners[index][1] == 0 && unit[index][1] == 0 {
+                half
+            } else {
+                ((i32::from(WHOLE) - i32::from(corners[index][1])) * i32::from(half) / i32::from(WHOLE)) as u8
+            };
+            [u, v]
+        });
+        self.push_fine(corners, uvs, face as u8, self.look.face(face), tints, mesh);
+    }
+
+    /// The cell this far from the block.
+    fn cell_at(&self, x: isize, y: isize, z: isize) -> usize {
+        self.at
+            .wrapping_add_signed(x * STEP[Face::East as usize] + y * STEP[Face::Up as usize] + z * STEP[Face::South as usize])
+    }
+
+    /// How high this liquid stands in a cell, on either layer, in ninths.
+    fn liquid_in(&self, cell: usize, liquid: Liquid) -> Option<u8> {
+        (0..2).find_map(|layer| match self.n.looks[usize::from(self.n.cells[layer][cell])].shape {
+            Shape::Liquid { liquid: other, amount } if other == liquid => Some(amount),
+            _ => None,
+        })
+    }
+
+    /// How high this liquid stands in the column this far away, on this block's level:
+    /// the whole block with more of it above, or `None` if the block's solid.
+    fn liquid_column(&self, liquid: Liquid, x: isize, z: isize) -> Option<f32> {
+        if self.liquid_in(self.cell_at(x, 1, z), liquid).is_some() {
+            return Some(1.0);
+        }
+        let cell = self.cell_at(x, 0, z);
+        match self.liquid_in(cell, liquid) {
+            Some(amount) => Some(f32::from(amount) / 9.0),
+            None if self.n.looks[usize::from(self.n.cells[0][cell])].occludes => None,
+            None => Some(0.0),
+        }
+    }
+
+    /// The height of the corner towards `x` and `z`, each 1 or -1, as a fraction of
+    /// the block, from the four columns that share it.
+    fn liquid_corner(&self, liquid: Liquid, own: f32, x: isize, z: isize) -> f32 {
+        let (along_x, along_z) = (self.liquid_column(liquid, x, 0), self.liquid_column(liquid, 0, z));
+        if along_x == Some(1.0) || along_z == Some(1.0) {
+            return 1.0;
+        }
+        let mut columns = vec![Some(own), along_x, along_z];
+        // Around a solid block's corner, the diagonal isn't connected to this one.
+        if along_x.is_some_and(|height| height > 0.0) || along_z.is_some_and(|height| height > 0.0) {
+            let across = self.liquid_column(liquid, x, z);
+            if across == Some(1.0) {
+                return 1.0;
+            }
+            columns.push(across);
+        }
+        let (mut total, mut weight) = (0.0, 0.0);
+        for height in columns.into_iter().flatten() {
+            let count = if height >= 0.8 { 10.0 } else { 1.0 };
+            total += height * count;
+            weight += count;
+        }
+        total / weight
+    }
+
+    /// Which way this liquid runs, as a unit vector along x and z: downhill, towards
+    /// lower neighbours, and towards an edge it can pour over. `None` if it's level.
+    fn liquid_flow(&self, liquid: Liquid, own: f32) -> Option<[f32; 2]> {
+        let mut flow = [0.0f32; 2];
+        for (x, z) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+            let cell = self.cell_at(x, 0, z);
+            let drop = match self.liquid_in(cell, liquid) {
+                Some(amount) => own - f32::from(amount) / 9.0,
+                None if self.n.looks[usize::from(self.n.cells[0][cell])].occludes => 0.0,
+                None => match self.liquid_in(self.cell_at(x, -1, z), liquid) {
+                    Some(below) => own - f32::from(below) / 9.0 + 8.0 / 9.0,
+                    None => 0.0,
+                },
+            };
+            flow[0] += x as f32 * drop;
+            flow[1] += z as f32 * drop;
+        }
+        let length = flow[0].hypot(flow[1]);
+        (length > 1e-4).then(|| [flow[0] / length, flow[1] / length])
     }
 
     /// The look of the block beside this one, on `layer`.
@@ -580,6 +751,17 @@ impl Block<'_> {
     fn world_position(&self) -> [i32; 3] {
         [0, 1, 2].map(|axis| self.n.origin[axis] + i32::from(self.local[axis]))
     }
+}
+
+/// Where a corner of a flowing top is on the flowing texture. The texture's v runs the
+/// way the liquid does, as its frames scroll towards higher v, and a block covers half
+/// of it.
+fn flowing_uv(corner: [i16; 3], [x, z]: [f32; 2]) -> [u8; 2] {
+    let along = |value: i16| f32::from(value) / f32::from(WHOLE) - 0.5;
+    let (from_x, from_z) = (along(corner[0]), along(corner[2]));
+    let u = 0.5 + 0.5 * (from_x * z - from_z * x);
+    let v = 0.5 + 0.5 * (from_x * x + from_z * z);
+    [u, v].map(|value| (value * f32::from(UV_WHOLE)).round() as u8)
 }
 
 /// Java's `Mth.getSeed`: a position mixed into a number that's the same on

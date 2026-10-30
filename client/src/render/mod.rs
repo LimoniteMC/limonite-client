@@ -13,6 +13,7 @@ pub mod meshes;
 mod sheet;
 pub mod terrain;
 pub mod textures;
+pub mod animation;
 pub mod tint;
 
 use std::sync::Arc;

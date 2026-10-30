@@ -61,7 +61,7 @@ pub fn load_palette() -> Result<Palette, String> {
 #[must_use]
 pub fn build_appearance(palette: &Palette, vanilla: &Vanilla, jar: Option<&mut Jar>) -> Built {
     let start = Instant::now();
-    let built = appearance::build(palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack, jar);
+    let built = appearance::build(palette, &vanilla.blocks, &vanilla.terrain, &vanilla.flipbooks, &vanilla.stack, jar);
     let report = &built.report;
     if let Some(java) = &built.java {
         info!(
@@ -122,14 +122,17 @@ pub fn build_appearance(palette: &Palette, vanilla: &Vanilla, jar: Option<&mut J
         report.approximate.iter().map(String::as_str).collect::<Vec<_>>().join(", "),
     );
     let textures = &built.textures;
+    let (frames, frame_bytes) = built.animator.frames();
     info!(
-        "Texture array: {} layers of {}×{} with {} mip levels, {:.1} MB; textures loaded in \
-         {:.0} ms, everything in {:.0} ms",
+        "Texture array: {} layers of {}×{} with {} mip levels, {:.1} MB, {} of them animated with \
+         {frames} frames, {:.1} MB; textures loaded in {:.0} ms, everything in {:.0} ms",
         textures.layers,
         textures.size,
         textures.size,
         textures.mips.len(),
         textures.bytes() as f64 / 1e6,
+        built.animator.layers(),
+        frame_bytes as f64 / 1e6,
         built.texture_seconds * 1000.0,
         start.elapsed().as_secs_f64() * 1000.0,
     );

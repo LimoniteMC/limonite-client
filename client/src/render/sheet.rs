@@ -28,6 +28,7 @@ use limonite_packs::PackStack;
 use super::{
     Gpu, Needs,
     camera::Camera,
+    animation::Animator,
     mesher::{self, Neighbourhood},
     meshes::{Meshes, SubChunkKey},
     terrain::Terrain,
@@ -42,6 +43,7 @@ use crate::{
         palette_source,
         rules::JavaBlock,
     },
+    debug_world::fluid_scenes,
     install::{self, Vanilla},
     world::{AIR, BlockTable},
 };
@@ -629,9 +631,12 @@ fn write_sheet(
 
             let neighbourhood = Neighbourhood::from_fn(table, [0, 0, 0], 1, |bx, by, bz, layer| {
                 let at = [bx - AT[0], by - AT[1], bz - AT[2]];
+                // A floor under the tile's blocks, a block wider all round.
+                let floor = at[1] == -1
+                    && blocks.iter().any(|(offset, _)| (offset[0] - at[0]).abs() <= 1 && (offset[2] - at[2]).abs() <= 1);
                 if layer != 0 {
                     AIR
-                } else if at[1] == -1 && at[0].abs() <= 1 && at[2].abs() <= 1 {
+                } else if floor {
                     stone
                 } else {
                     blocks.iter().find(|(offset, _)| *offset == at).map_or(AIR, |&(_, id)| id)
@@ -647,7 +652,12 @@ fn write_sheet(
                 f64::from(AT[1]) + if tall { 1.0 } else { 0.5 },
                 f64::from(AT[2]) + 0.5,
             );
-            let distance = if tall { 7.5 } else { 5.0 };
+            let reach = blocks.iter().map(|(offset, _)| offset[0].abs().max(offset[2].abs())).max().unwrap_or(0);
+            let distance = match reach {
+                0 if tall => 7.5,
+                0 => 5.0,
+                reach => 6.0 + f64::from(reach) * 2.0,
+            };
             for (side, (pitch, yaw)) in [(35.0f32, 135.0f32), (35.0, -45.0)].into_iter().enumerate() {
                 let forward = super::camera::look_direction(pitch, yaw).as_dvec3();
                 let mut camera = Camera::new(center - forward * distance, pitch, yaw);
@@ -665,6 +675,32 @@ fn write_sheet(
         let file = out.join(if page == 0 { format!("{name}.png") } else { format!("{name}-{}.png", page + 1) });
         sheet.save(&file).unwrap_or_else(|err| panic!("{}: {err}", file.display()));
         println!("{}: {} tiles", file.display(), tiles.len());
+    }
+}
+
+/// The debug world's fluid scenes, at a few moments, to see them move.
+fn write_fluids(
+    out: &Path,
+    only: Option<&str>,
+    offscreen: &mut Offscreen,
+    mut animator: Animator,
+    table: &AppearanceTable,
+    tints: &Tints,
+    stone: u32,
+) {
+    if only.is_some_and(|only| !only.split(',').any(|sheet| sheet == "fluids")) {
+        return;
+    }
+    let tiles: Vec<Tile> = fluid_scenes()
+        .into_iter()
+        .map(|scene| {
+            let blocks = scene.blocks.iter().map(|&(at, state)| (at, pumpkin_data::BlockState::to_be_network_id(state)));
+            (scene.name.to_string(), blocks.collect())
+        })
+        .collect();
+    for tick in [0, 8, 16] {
+        offscreen.terrain.animate(&offscreen.gpu, &mut animator, tick);
+        write_sheet(out, &format!("fluids-{tick}"), &tiles, offscreen, table, tints, stone);
     }
 }
 
@@ -731,7 +767,7 @@ fn contact_sheets() {
     // With a jar, the sheets show its models; without, the hand-made ones.
     let mut jar = std::env::var_os("LIMONITE_JAVA_JAR")
         .map(|path| Jar::open(std::path::Path::new(&path), FoundBy::Flag).expect("LIMONITE_JAVA_JAR is a jar"));
-    let built = appearance::build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack, jar.as_mut());
+    let built = appearance::build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.flipbooks, &vanilla.stack, jar.as_mut());
     let (tints, _) = Tints::load(&vanilla.stack);
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../run/sheets");
     std::fs::create_dir_all(&out).unwrap();
@@ -749,6 +785,7 @@ fn contact_sheets() {
         .map(|(id, _)| id)
         .expect("stone");
     let mut offscreen = Offscreen::new(&built.textures);
+    write_fluids(&out, only.as_deref(), &mut offscreen, built.animator, &built.table, &tints, stone);
     for (name, wanted) in SHEETS {
         if only.as_deref().is_some_and(|only| !only.split(',').any(|sheet| sheet == *name)) {
             continue;

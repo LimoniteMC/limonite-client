@@ -6,7 +6,7 @@ use std::{collections::HashMap, sync::Arc};
 use image::{Rgba, RgbaImage};
 use limonite_packs::{
     Pack, PackStack,
-    registry::{BlocksJson, Face, TerrainTextures},
+    registry::{BlocksJson, Face, Flipbooks, TerrainTextures},
 };
 use pumpkin_data::{Block, BlockState as JavaState, BlockStateId};
 
@@ -164,7 +164,7 @@ fn fixture() -> Fixture {
     assert!(problems.is_empty(), "{problems:?}");
     let (terrain, problems) = TerrainTextures::load(&stack);
     assert!(problems.is_empty(), "{problems:?}");
-    let built = build(&palette, &blocks, &terrain, &stack, None);
+    let built = build(&palette, &blocks, &terrain, &Flipbooks::default(), &stack, None);
     Fixture { _dir: dir, built }
 }
 
@@ -305,9 +305,9 @@ fn bamboo_keeps_its_stem_and_leaves_from_the_bag_of_slots() {
 }
 
 #[test]
-fn liquid_surfaces_follow_java_heights() {
-    let heights: Vec<u8> = (0..=8).map(liquid_surface).collect();
-    assert_eq!(heights, [14, 12, 11, 9, 7, 5, 4, 2, 14]);
+fn liquid_amounts_follow_java_heights() {
+    let amounts: Vec<u8> = (0..=9).map(liquid_amount).collect();
+    assert_eq!(amounts, [8, 7, 6, 5, 4, 3, 2, 1, 8, 8], "a fall stands as high as a source");
 }
 
 /// The real palette, through Pumpkin's Java-to-Bedrock table.
@@ -391,7 +391,7 @@ fn shapes_follow_states_in_the_real_palette() {
     assert_eq!(shape(&Block::WHITE_CARPET, &[]), Shape::Slab { bottom: 0, top: 1 });
     assert_eq!(
         shape(&Block::WATER, &[("level", "0")]),
-        Shape::Liquid { liquid: Liquid::Water, surface: 14 }
+        Shape::Liquid { liquid: Liquid::Water, amount: 8 }
     );
     assert_eq!(shape(&Block::POPPY, &[]), Shape::Cross);
     assert_eq!(shape(&Block::OAK_SAPLING, &[]), Shape::Cross);
@@ -422,7 +422,7 @@ fn the_jar_draws_what_it_can_on_the_real_install() {
     let install = crate::install::find(Some(std::path::Path::new(&dir))).unwrap();
     let vanilla = crate::install::load_vanilla(&install).unwrap();
     let palette = palette_source::load().unwrap();
-    let built = build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack, Some(&mut jar));
+    let built = build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.flipbooks, &vanilla.stack, Some(&mut jar));
     let look = |block: &Block| *built.table.get(JavaState::to_be_network_id(block.default_state.id));
 
     let is_model = |block: &Block| matches!(look(block).shape, Shape::Model { quads } if !quads.is_empty());
@@ -492,7 +492,7 @@ fn the_real_install_looks_right() {
     let install = crate::install::find(Some(std::path::Path::new(&dir))).unwrap();
     let vanilla = crate::install::load_vanilla(&install).unwrap();
     let palette = palette_source::load().unwrap();
-    let built = build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.stack, None);
+    let built = build(&palette, &vanilla.blocks, &vanilla.terrain, &vanilla.flipbooks, &vanilla.stack, None);
     let look = |block: &Block| *built.table.get(JavaState::to_be_network_id(block.default_state.id));
 
     let grass = look(&Block::GRASS_BLOCK);
@@ -514,7 +514,7 @@ fn the_real_install_looks_right() {
     }
 
     let water = look(&Block::WATER);
-    assert_eq!(water.shape, Shape::Liquid { liquid: Liquid::Water, surface: 14 });
+    assert_eq!(water.shape, Shape::Liquid { liquid: Liquid::Water, amount: 8 });
     assert_eq!((water.tint, water.face(Face::Up).class), (Tint::Water, RenderClass::Blend));
     let lava = look(&Block::LAVA);
     assert_eq!(lava.liquid(), Some(Liquid::Lava));

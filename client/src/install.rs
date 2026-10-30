@@ -13,7 +13,7 @@ use std::{
 
 use limonite_packs::{
     PackStack, Problem, Version,
-    registry::{BlocksJson, TerrainTextures},
+    registry::{BlocksJson, Flipbooks, TerrainTextures},
 };
 use pumpkin_world::CURRENT_BEDROCK_MC_VERSION;
 use tracing::{info, warn};
@@ -109,6 +109,7 @@ pub struct Vanilla {
     pub stack: PackStack,
     pub blocks: BlocksJson,
     pub terrain: TerrainTextures,
+    pub flipbooks: Flipbooks,
 }
 
 /// Builds the vanilla stack, capped at the server's base game version, and
@@ -125,6 +126,7 @@ pub fn load_vanilla(install: &Install) -> Result<Vanilla, String> {
     let vanilla = PackStack::vanilla(&install.resource_packs(), base).map_err(|err| err.to_string())?;
     let (blocks, block_problems) = BlocksJson::load(&vanilla.stack);
     let (terrain, texture_problems) = TerrainTextures::load(&vanilla.stack);
+    let (flipbooks, flipbook_problems) = Flipbooks::load(&vanilla.stack);
 
     info!("Bedrock install: {} ({})", install.dir.display(), install.found_by);
     let packs = vanilla.stack.packs();
@@ -144,15 +146,17 @@ pub fn load_vanilla(install: &Install) -> Result<Vanilla, String> {
         .iter()
         .chain(&block_problems)
         .chain(&texture_problems)
+        .chain(&flipbook_problems)
         .collect();
     for problem in &problems {
         warn!("Skipped in the vanilla packs: {problem}");
     }
     info!(
-        "Vanilla registries: blocks.json {} blocks, terrain_texture.json {} texture keys; \
-         {} problems; {:.0} ms",
+        "Vanilla registries: blocks.json {} blocks, terrain_texture.json {} texture keys, \
+         flipbook_textures.json {} flipbooks; {} problems; {:.0} ms",
         blocks.blocks.len(),
         terrain.textures.len(),
+        flipbooks.by_path.len(),
         problems.len(),
         start.elapsed().as_secs_f64() * 1000.0,
     );
@@ -160,5 +164,6 @@ pub fn load_vanilla(install: &Install) -> Result<Vanilla, String> {
         stack: vanilla.stack,
         blocks,
         terrain,
+        flipbooks,
     })
 }

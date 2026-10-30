@@ -77,7 +77,7 @@ fn table() -> AppearanceTable {
             look(
                 Shape::Liquid {
                     liquid: Liquid::Water,
-                    surface: 14,
+                    amount: 8,
                 },
                 RenderClass::Blend,
                 Tint::Water,
@@ -237,9 +237,13 @@ fn water_beside_water_or_waterlogged_seagrass_has_no_face_between() {
 
 #[test]
 fn water_under_air_gets_a_lowered_top() {
+    // On its own its corners dip towards the air around it, as they do in Java.
     let alone = mesh_of(&[(5, 5, 5, WATER)], &[]);
-    assert!(has_quad_at(&alone.blend, 1, 5 * 16 + 14), "the surface is 14/16 up");
-    assert!(!alone.blend.iter().any(|vertex| vertex.at()[1] == 6 * 16));
+    let top = quads(&alone.blend)
+        .into_iter()
+        .find(|quad| quad[0].face() == Face::Up as u8)
+        .expect("a top");
+    assert!(top.iter().all(|vertex| vertex.at()[1] > 5 * 16 && vertex.at()[1] < 6 * 16));
 
     // With water above, the lower block has no top, and full-height sides.
     let stacked = mesh_of(&[(5, 5, 5, WATER), (5, 6, 5, WATER)], &[]);
@@ -249,6 +253,175 @@ fn water_under_air_gets_a_lowered_top() {
         .any(|quad| quad.iter().any(|v| v.at()[1] == 6 * 16));
     assert!(lower_sides_reach_the_top);
     assert!(!has_quad_at(&stacked.blend, 1, 5 * 16 + 14));
+}
+
+/// A table with water of each depth at ids 100 to 108 (the amount over 100), with its
+/// still texture on layer 40, its flowing one on 41, and a lava source at 110.
+fn fluid_table() -> AppearanceTable {
+    let liquid = |liquid, amount, class| {
+        let mut look = look(Shape::Liquid { liquid, amount }, class, Tint::None, 41);
+        look.faces[Face::Up as usize].layer = 40;
+        look.faces[Face::Down as usize].layer = 40;
+        look
+    };
+    let mut looks: Vec<(u32, Appearance)> = (1..=8)
+        .map(|amount| (100 + u32::from(amount), liquid(Liquid::Water, amount, RenderClass::Blend)))
+        .collect();
+    let mut lava = liquid(Liquid::Lava, 8, RenderClass::Opaque);
+    lava.faces[Face::Up as usize].isotropic = true;
+    looks.push((110, lava));
+    looks.push((AIR, look(Shape::Invisible, RenderClass::Opaque, Tint::None, 0)));
+    looks.push((STONE, look(Shape::Cube, RenderClass::Opaque, Tint::None, 1)));
+    AppearanceTable::from_looks(looks)
+}
+
+fn fluid_mesh(blocks: &[(i32, i32, i32, u32)]) -> Mesh {
+    mesh(
+        &Neighbourhood::from_fn(&fluid_table(), [0, 0, 0], 1, |x, y, z, layer| {
+            if layer != 0 {
+                return AIR;
+            }
+            blocks
+                .iter()
+                .find(|&&(bx, by, bz, _)| [bx, by, bz] == [x, y, z])
+                .map_or(AIR, |&(.., id)| id)
+        }),
+        &tints(),
+    )
+}
+
+/// The up face of the block at (x, z), by position.
+fn top_at(mesh: &Mesh, x: i16, z: i16) -> [Vertex; 4] {
+    let inside = |v: &Vertex, axis: usize, at: i16| (at * 1024..=(at + 1) * 1024).contains(&v.position[axis]);
+    quads(&mesh.blend)
+        .into_iter()
+        .chain(quads(&mesh.opaque))
+        .find(|quad| quad[0].face() == Face::Up as u8 && quad.iter().all(|v| inside(v, 0, x) && inside(v, 2, z)))
+        .map(|quad| [quad[0], quad[1], quad[2], quad[3]])
+        .expect("an up face there")
+}
+
+#[test]
+fn a_still_pool_is_level_and_shows_the_whole_still_texture() {
+    let mut blocks = Vec::new();
+    for x in 4..=6 {
+        for z in 4..=6 {
+            blocks.push((x, 5, z, 108));
+        }
+    }
+    let mesh = fluid_mesh(&blocks);
+    let top = top_at(&mesh, 5, 5);
+    assert_eq!(top[0].layer, 40, "the still texture");
+    for vertex in top {
+        let eight_ninths = 5 * 1024 + 8 * 1024 / 9;
+        assert!((vertex.position[1] - eight_ninths).abs() <= 1, "{vertex:?}");
+    }
+    assert_eq!(top.map(|v| v.uv), [[0, 0], [0, 128], [128, 128], [128, 0]]);
+}
+
+#[test]
+fn lava_doesnt_turn_its_texture_block_by_block() {
+    // `blocks.json` marks lava's top isotropic, which a block's cube face would obey.
+    // A pool of it would come out speckled.
+    let mesh = fluid_mesh(&[(3, 5, 3, 110), (4, 5, 3, 110), (5, 5, 3, 110), (6, 5, 3, 110)]);
+    for x in 3..=6 {
+        assert_eq!(top_at(&mesh, x, 3).map(|v| v.uv), [[0, 0], [0, 128], [128, 128], [128, 0]], "at x {x}");
+    }
+}
+
+#[test]
+fn a_flow_slopes_between_its_blocks_with_no_step_at_their_edge() {
+    // A source, then a block of each lower depth, going east.
+    let blocks: Vec<_> = (0..4).map(|i| (4 + i, 5, 5, 108 - i as u32)).collect();
+    let mesh = fluid_mesh(&blocks);
+    let (first, second) = (top_at(&mesh, 5, 5), top_at(&mesh, 6, 5));
+    // The two share an edge at x = 6, and it's at one height from both.
+    let at_edge = |quad: &[Vertex; 4]| {
+        let mut heights: Vec<i16> = quad
+            .iter()
+            .filter(|v| v.position[0] == 6 * 1024)
+            .map(|v| v.position[1])
+            .collect();
+        heights.sort_unstable();
+        heights
+    };
+    assert_eq!(at_edge(&first), at_edge(&second));
+    // It runs downhill: each block's east side is lower than its west.
+    let side = |quad: &[Vertex; 4], x: i16| quad.iter().find(|v| v.position[0] == x * 1024).expect("that side").position[1];
+    assert!(side(&first, 6) < side(&first, 5));
+    assert!(side(&second, 7) < side(&second, 6));
+    assert!(side(&second, 7) > 5 * 1024, "and it's still above the block's floor");
+}
+
+#[test]
+fn a_flowing_top_shows_the_flowing_texture_running_downhill() {
+    // Depths falling to the east: it flows along +x.
+    let mesh = fluid_mesh(&[(4, 5, 5, 108), (5, 5, 5, 107), (6, 5, 5, 106)]);
+    let top = top_at(&mesh, 5, 5);
+    assert_eq!(top[0].layer, 41, "the flowing texture");
+    let v_at = |x: i16| top.iter().find(|v| v.position[0] == x * 1024).expect("that side").uv[1];
+    assert!(v_at(6) > v_at(5), "its texture runs on down the texture's v as the water runs east");
+    // A flowing texture covers two blocks, so one block shows half of it.
+    let vs: Vec<u8> = top.iter().map(|v| v.uv[1]).collect();
+    assert_eq!(vs.iter().max().unwrap() - vs.iter().min().unwrap(), 64);
+}
+
+#[test]
+fn liquid_sides_show_half_the_flowing_texture_up_to_their_corners() {
+    let mesh = fluid_mesh(&[(5, 5, 5, 108)]);
+    let side = quads(&mesh.blend)
+        .into_iter()
+        .find(|quad| quad[0].face() == Face::North as u8)
+        .expect("a north side");
+    assert_eq!(side[0].layer, 41);
+    for vertex in side {
+        assert!(vertex.uv[0] <= 64, "half the width: {vertex:?}");
+        if vertex.position[1] == 5 * 1024 {
+            assert_eq!(vertex.uv[1], 64, "the bottom edge, half way down");
+        } else {
+            assert!(vertex.uv[1] < 64, "the top edge, higher by as much as the water is high");
+        }
+    }
+}
+
+#[test]
+fn diagonal_neighbours_count_towards_a_corner() {
+    let alone = fluid_mesh(&[(5, 5, 5, 104), (6, 5, 5, 104)]);
+    let with_diagonal = fluid_mesh(&[(5, 5, 5, 104), (6, 5, 5, 104), (6, 5, 6, 108)]);
+    let corner = |mesh: &Mesh| {
+        top_at(mesh, 5, 5)
+            .iter()
+            .find(|v| v.position[0] == 6 * 1024 && v.position[2] == 6 * 1024)
+            .expect("the corner")
+            .position[1]
+    };
+    assert!(corner(&with_diagonal) > corner(&alone), "the source across the corner lifts it");
+}
+
+#[test]
+fn water_above_a_neighbour_lifts_their_shared_corner_to_the_top() {
+    let mesh = fluid_mesh(&[(5, 5, 5, 108), (6, 5, 5, 108), (6, 6, 5, 108)]);
+    let top = top_at(&mesh, 5, 5);
+    let at_east: Vec<i16> = top.iter().filter(|v| v.position[0] == 6 * 1024).map(|v| v.position[1]).collect();
+    assert_eq!(at_east, [6 * 1024, 6 * 1024], "it meets the block above");
+}
+
+#[test]
+fn a_liquid_with_nothing_showing_makes_no_quads() {
+    let mut blocks = vec![(5, 5, 5, 108)];
+    for (x, y, z) in [(4, 5, 5), (6, 5, 5), (5, 5, 4), (5, 5, 6), (5, 4, 5), (5, 6, 5)] {
+        blocks.push((x, y, z, STONE));
+    }
+    assert_eq!(fluid_mesh(&blocks).blend.len(), 4, "only its top, as a block above doesn't reach it");
+    let mut covered = blocks;
+    covered[6] = (5, 6, 5, 108);
+    let quads_at_five = fluid_mesh(&covered)
+        .blend
+        .iter()
+        .filter(|v| v.position[1] <= 6 * 1024 && v.position[1] >= 5 * 1024)
+        .count();
+    // The block above still draws its own sides, from 6 up. None belong to the lower one.
+    assert_eq!(quads_at_five % 4, 0);
 }
 
 #[test]

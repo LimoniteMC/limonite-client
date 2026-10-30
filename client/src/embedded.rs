@@ -15,7 +15,7 @@ use pumpkin_core::{
     server::Server,
 };
 use pumpkin_util::PermissionLvl;
-use tokio::runtime::Runtime;
+use tokio::runtime::{Handle, Runtime};
 use tracing::{error, info};
 
 use crate::{home::save_atomically, login, settings::Settings};
@@ -126,11 +126,13 @@ pub struct EmbeddedServer {
     /// The server's own state, shared with its threads. Read-only use from the
     /// client: checks and measurements.
     pub server: Arc<Server>,
+    /// For waiting on the server's async calls from the client's thread.
+    pub runtime: Handle,
     thread: thread::JoinHandle<()>,
 }
 
 /// What the server thread sends back once the server exists.
-type Ready = Result<(LocalConnector, Arc<Server>), String>;
+type Ready = Result<(LocalConnector, Arc<Server>, Handle), String>;
 
 impl EmbeddedServer {
     /// Starts the server and waits until it can accept connections.
@@ -149,9 +151,10 @@ impl EmbeddedServer {
 
         // `recv` fails only if the thread ended without reporting, e.g. a panic.
         match ready_rx.recv() {
-            Ok(Ok((connector, server))) => Ok(Self {
+            Ok(Ok((connector, server, runtime))) => Ok(Self {
                 connector,
                 server,
+                runtime,
                 thread,
             }),
             Ok(Err(err)) => {
@@ -220,7 +223,7 @@ async fn serve(config: PumpkinConfig, ready: &mpsc::Sender<Ready>) {
         }
     };
 
-    let started = (server.local_listener.connector(), server.server.clone());
+    let started = (server.local_listener.connector(), server.server.clone(), Handle::current());
     if ready.send(Ok(started)).is_err() {
         return;
     }

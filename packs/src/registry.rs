@@ -1,5 +1,6 @@
-//! The registry files that merge across a stack: `blocks.json` and
-//! `textures/terrain_texture.json`, as typed values.
+//! The registry files that merge across a stack: `blocks.json`,
+//! `textures/terrain_texture.json` and `textures/flipbook_textures.json`, as typed
+//! values.
 //!
 //! PLAN.md's rule: registry JSON merges per key, and the higher pack wins.
 //! - **`terrain_texture.json`** merges per texture key: a higher pack's
@@ -9,6 +10,7 @@
 //!   fields it doesn't mention are kept. Vanilla relies on this: 1.21.70's
 //!   `blocks.json` gives the terracottas only a new `sound`, and they keep the
 //!   textures 1.20.30 gave them (m4-plan Deviations).
+//! - **`flipbook_textures.json`** is a list, and merges per texture path.
 //!
 //! An entry or a file that can't be parsed is skipped and reported as a
 //! [`Problem`], never a panic: the client draws what it can.
@@ -22,6 +24,7 @@ use crate::{json, stack::PackStack};
 
 pub const BLOCKS_JSON: &str = "blocks.json";
 pub const TERRAIN_TEXTURE_JSON: &str = "textures/terrain_texture.json";
+pub const FLIPBOOK_TEXTURES_JSON: &str = "textures/flipbook_textures.json";
 
 /// Something a loader skipped, and where it was.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -334,6 +337,79 @@ impl TerrainTextures {
     }
 }
 
+/// `textures/flipbook_textures.json`, merged over a stack: which textures are strips
+/// of frames, and how they play.
+#[derive(Clone, Debug, Default)]
+pub struct Flipbooks {
+    /// By the texture's path, without its extension.
+    pub by_path: HashMap<String, Flipbook>,
+}
+
+/// How one strip plays.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+pub struct Flipbook {
+    pub flipbook_texture: String,
+    /// Ticks each frame shows, 20 to a second.
+    #[serde(default = "one_tick")]
+    pub ticks_per_frame: u32,
+    /// Which frames, if not all of them in order.
+    pub frames: Option<FlipbookFrames>,
+    /// Whether a frame fades into the next.
+    #[serde(default = "fades")]
+    pub blend_frames: bool,
+}
+
+/// A flipbook's frames: how many, or which, in the order they play.
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum FlipbookFrames {
+    Count(u32),
+    List(Vec<u32>),
+}
+
+const fn one_tick() -> u32 {
+    1
+}
+
+const fn fades() -> bool {
+    true
+}
+
+impl Flipbooks {
+    /// Every pack's `flipbook_textures.json`, merged bottom up per texture path.
+    #[must_use]
+    pub fn load(stack: &PackStack) -> (Self, Vec<Problem>) {
+        let mut merged = Self::default();
+        let mut problems = Vec::new();
+        for (pack, read) in stack.layers(FLIPBOOK_TEXTURES_JSON) {
+            let bytes = match read {
+                Ok(Some(bytes)) => bytes,
+                Ok(None) => continue,
+                Err(err) => {
+                    problems.push(Problem::new(pack.name(), FLIPBOOK_TEXTURES_JSON, err));
+                    continue;
+                }
+            };
+            let entries = match json::parse::<Vec<Value>>(&bytes) {
+                Ok(entries) => entries,
+                Err(err) => {
+                    problems.push(Problem::new(pack.name(), FLIPBOOK_TEXTURES_JSON, err));
+                    continue;
+                }
+            };
+            for entry in entries {
+                match serde_json::from_value::<Flipbook>(entry) {
+                    Ok(flipbook) => {
+                        merged.by_path.insert(flipbook.flipbook_texture.clone(), flipbook);
+                    }
+                    Err(err) => problems.push(Problem::new(pack.name(), FLIPBOOK_TEXTURES_JSON, err)),
+                }
+            }
+        }
+        (merged, problems)
+    }
+}
+
 /// Each pack's copy of a registry file, bottom first, as the JSON object
 /// that holds its entries: the whole file, or the object under `section`.
 /// Packs without the file are left out; files that can't be read or parsed
@@ -390,6 +466,35 @@ mod tests {
 
     fn stack_of(dir: &TempDir, names: &[&str]) -> PackStack {
         PackStack::new(names.iter().map(|name| Pack::new(dir.path().join(name))).collect())
+    }
+
+    #[test]
+    fn flipbooks_merge_per_path_and_fill_in_their_defaults() {
+        let dir = TempDir::new("flipbooks");
+        dir.write(
+            "low/textures/flipbook_textures.json",
+            br#"[
+                // A comment, as Bedrock allows.
+                { "flipbook_texture": "textures/blocks/lava", "atlas_tile": "lava", "ticks_per_frame": 16 },
+                { "flipbook_texture": "textures/blocks/kelp", "atlas_tile": "kelp", "frames": [1, 0, 1] },
+                { "atlas_tile": "no path" }
+            ]"#,
+        );
+        dir.write(
+            "high/textures/flipbook_textures.json",
+            br#"[
+                { "flipbook_texture": "textures/blocks/kelp", "atlas_tile": "kelp", "frames": 4, "blend_frames": false }
+            ]"#,
+        );
+        dir.write("broken/textures/flipbook_textures.json", b"{ not a list }");
+        let (flipbooks, problems) = Flipbooks::load(&stack_of(&dir, &["low", "broken", "high", "none"]));
+        assert_eq!(problems.len(), 2, "{problems:?}");
+        let lava = &flipbooks.by_path["textures/blocks/lava"];
+        assert_eq!((lava.ticks_per_frame, lava.blend_frames, &lava.frames), (16, true, &None));
+        let kelp = &flipbooks.by_path["textures/blocks/kelp"];
+        assert_eq!(kelp.ticks_per_frame, 1, "the higher pack's whole entry won");
+        assert!(!kelp.blend_frames);
+        assert_eq!(kelp.frames, Some(FlipbookFrames::Count(4)));
     }
 
     #[test]

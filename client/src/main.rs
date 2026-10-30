@@ -3,6 +3,7 @@ mod bench;
 mod blocks;
 mod checks;
 mod clock;
+mod debug_world;
 mod embedded;
 mod game;
 mod home;
@@ -29,7 +30,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use pumpkin_util::math::{vector2::Vector2, vector3::Vector3};
+use pumpkin_util::{
+    GameMode,
+    math::{vector2::Vector2, vector3::Vector3},
+};
 use pumpkin_world::{CURRENT_BEDROCK_MC_PROTOCOL, CURRENT_BEDROCK_MC_VERSION};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
@@ -42,10 +46,11 @@ use crate::{
     identity::Identity,
     session::{Session, Stage},
     settings::{MAX_RADIUS, MIN_RADIUS, Overrides, Settings},
-    world::World,
+    world::{BlockTable, World},
 };
 
 const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [--java-jar <path>] [--data-dir <path>] \
+                     [--debug-world] [--goto <text>] \
                      [--name <name>] [--gamemode <mode>] [--radius <chunks>] [--bench <seconds>]\n       \
                      limonite-client --headless [--home <path>] [--data-dir <path>] [--name <name>] \
                      [--gamemode <mode>] [--radius <chunks>] [--linger <seconds>] [--measure] \
@@ -83,6 +88,10 @@ struct Args {
     /// The user's own Java client jar, for its block models. Without one, the
     /// usual places are looked in, and it's fine if they're empty.
     java_jar: Option<PathBuf>,
+    /// Open the debug world, with every block state in it (`debug_world.rs`).
+    debug_world: bool,
+    /// Where to start in it.
+    goto: Option<String>,
     /// The home folder: the settings and this install's identity.
     home: PathBuf,
     /// Where the embedded server keeps its world and data files.
@@ -109,8 +118,10 @@ impl Args {
         let mut headless = false;
         let mut bedrock = None;
         let mut java_jar = None;
+        let mut debug_world = false;
+        let mut goto = None;
         let mut home = PathBuf::from("run/home");
-        let mut data_dir = PathBuf::from("run/client");
+        let mut data_dir = None;
         let mut overrides = Overrides::default();
         let mut linger = Duration::ZERO;
         let mut measure = false;
@@ -131,9 +142,11 @@ impl Args {
                 "--java-jar" => {
                     java_jar = Some(PathBuf::from(args.next().ok_or("--java-jar needs a path")?));
                 }
+                "--debug-world" => debug_world = true,
+                "--goto" => goto = Some(args.next().ok_or("--goto needs what to look for")?),
                 "--home" => home = args.next().ok_or("--home needs a path")?.into(),
                 "--data-dir" => {
-                    data_dir = args.next().ok_or("--data-dir needs a path")?.into();
+                    data_dir = Some(PathBuf::from(args.next().ok_or("--data-dir needs a path")?));
                 }
                 "--name" => {
                     let name = args.next().ok_or("--name needs a name")?;
@@ -203,10 +216,19 @@ impl Args {
         let absolute = |path: &Path| {
             std::path::absolute(path).map_err(|err| format!("can't resolve {}: {err}", path.display()))
         };
+        // A debug world has a folder of its own, so a normal one isn't flattened, and
+        // it always opens in creative, to fly around it.
+        let default_data_dir = if debug_world { "run/debug-world" } else { "run/client" };
+        let data_dir = data_dir.unwrap_or_else(|| PathBuf::from(default_data_dir));
+        if debug_world {
+            overrides.gamemode = Some(GameMode::Creative);
+        }
         Ok(Self {
             headless,
             bedrock: bedrock.as_deref().map(absolute).transpose()?,
             java_jar: java_jar.as_deref().map(absolute).transpose()?,
+            debug_world,
+            goto,
             home: absolute(&home)?,
             data_dir: absolute(&data_dir)?,
             overrides,
@@ -253,6 +275,9 @@ fn main() -> ExitCode {
     if args.headless {
         if args.bedrock.is_some() || args.java_jar.is_some() {
             warn!("--bedrock and --java-jar are unused: the scripted session reads no assets");
+        }
+        if args.debug_world {
+            warn!("--debug-world is unused: it's for the window");
         }
         headless(&args, &settings, &identity)
     } else {
@@ -323,10 +348,16 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
     let assets = app::Assets {
         table: looks.table,
         textures: looks.textures,
+        animator: looks.animator,
         tints,
         approximate,
     };
-    let result = app::run(&server, settings, identity.xid(), needs, assets, args.bench);
+    let browser = args.debug_world.then(|| {
+        let layout = debug_world::Layout::build(&BlockTable::build());
+        debug_world::place(&server, &layout);
+        debug_world::Browser::new(layout, args.goto.as_deref())
+    });
+    let result = app::run(&server, settings, identity.xid(), needs, assets, args.bench, browser);
     server.stop();
     result
 }
@@ -366,6 +397,12 @@ fn start_server(args: &Args, settings: &Settings, identity: &Identity) -> Result
             info!("The host is an operator of this world at level {}, left as it is", level as u8);
         }
         Err(err) => warn!("Couldn't make the host an operator, so it has no commands: {err}"),
+    }
+    if args.debug_world
+        && let Err(err) = debug_world::prepare(&config.basic.get_world_path(), config.basic.seed)
+    {
+        error!("{err}");
+        return Err(ExitCode::FAILURE);
     }
     EmbeddedServer::start(config).map_err(|err| {
         error!("{err}");

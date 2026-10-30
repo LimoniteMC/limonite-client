@@ -29,7 +29,7 @@ use std::{
 use image::RgbaImage;
 use limonite_packs::{
     PackStack,
-    registry::{BlocksJson, Face, FaceTextures, TerrainTextures},
+    registry::{BlocksJson, Face, FaceTextures, Flipbooks, TerrainTextures},
 };
 use pumpkin_data::{BlockState as JavaState, BlockStateId};
 
@@ -43,6 +43,7 @@ use super::{
 };
 use crate::{
     render::{
+        animation::Animator,
         textures::{self, AlphaUse, JAVA_TEXTURE, TextureArray},
         tint::Tint,
     },
@@ -300,8 +301,9 @@ pub enum Shape {
     Cube,
     /// Two planes crossed diagonally: plants.
     Cross,
-    /// `surface` is the top's height when the same liquid isn't above.
-    Liquid { liquid: Liquid, surface: u8 },
+    /// `amount` is how high it stands in ninths of a block, when the same liquid
+    /// isn't above: 8 for a source or a fall, and a ninth less each block it's flowed.
+    Liquid { liquid: Liquid, amount: u8 },
     /// A full-width box from `bottom` to `top`: slabs, snow, carpets.
     Slab { bottom: u8, top: u8 },
     /// Thin planes just inside the faces in this set of `1 << face` bits.
@@ -463,6 +465,8 @@ pub struct Report {
 pub struct Built {
     pub table: AppearanceTable,
     pub textures: TextureArray,
+    /// The layers that move.
+    pub animator: Animator,
     pub texture_seconds: f64,
     pub report: Report,
     /// What the jar came to, if there was one.
@@ -494,6 +498,7 @@ pub fn build(
     palette: &Palette,
     blocks: &BlocksJson,
     terrain: &TerrainTextures,
+    flipbooks: &Flipbooks,
     stack: &PackStack,
     mut jar: Option<&mut Jar>,
 ) -> Built {
@@ -540,7 +545,7 @@ pub fn build(
         }
     }
 
-    let loaded = textures::load(stack, resolver.jar.as_deref_mut(), &resolver.requests);
+    let loaded = textures::load(stack, resolver.jar.as_deref_mut(), flipbooks, &resolver.requests);
     let mut failed_names: HashMap<&str, String> = HashMap::new();
     let mut by_id = HashMap::with_capacity(plans.len());
     for (id, name, plan) in plans {
@@ -631,6 +636,7 @@ pub fn build(
     Built {
         table: AppearanceTable { by_id },
         textures: loaded.array,
+        animator: loaded.animator,
         texture_seconds: loaded.seconds,
         report,
         java: compiled.map(|models| models.stats),
@@ -859,7 +865,7 @@ fn shape_of(state: &BedrockState) -> Shape {
     if let Some(&(_, liquid)) = LIQUIDS.iter().find(|(liquid, _)| *liquid == name) {
         return Shape::Liquid {
             liquid,
-            surface: liquid_surface(state.int("liquid_depth").unwrap_or(0)),
+            amount: liquid_amount(state.int("liquid_depth").unwrap_or(0)),
         };
     }
     // Every block with this property is a slab. The double slabs are full
@@ -913,15 +919,11 @@ fn shape_of(state: &BedrockState) -> Shape {
     Shape::Cube
 }
 
-/// A liquid's surface, in sixteenths, when the same liquid isn't above:
-/// Java's heights. A source (depth 0) is 8/9 of a block, and each step of
-/// flowing water is a ninth lower. Depth 8 and up is falling: full height
-/// less the same ninth.
-fn liquid_surface(depth: i32) -> u8 {
-    let level = if depth >= 8 { 0 } else { depth.clamp(0, 7) };
-    // (8 - level) / 9 of 16 sixteenths, rounded: floor(x + 1/2) with x =
-    // 16 (8 - level) / 9, all in integers. At most 14, so it fits a u8.
-    (((8 - level) * 32 + 9) / 18) as u8
+/// How high a liquid stands, in ninths of a block, when the same liquid isn't above:
+/// Java's heights. A source (depth 0) is 8, and each step of flowing water a ninth
+/// lower. Depth 8 and up is falling, which stands as high as a source.
+fn liquid_amount(depth: i32) -> u8 {
+    if depth >= 8 { 8 } else { (8 - depth.clamp(0, 7)) as u8 }
 }
 
 /// The faces a direction bit field names, as `1 << face` bits.

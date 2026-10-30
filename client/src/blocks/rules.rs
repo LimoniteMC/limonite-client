@@ -55,8 +55,7 @@ impl JavaBlock {
         }
     }
 
-    /// Its properties, for a test to print.
-    #[cfg(test)]
+    /// Its properties, by name.
     #[must_use]
     pub fn props(&self) -> &[(&'static str, &'static str)] {
         &self.props

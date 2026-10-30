@@ -24,13 +24,14 @@ use std::{
     time::{Duration, Instant},
 };
 
+use pumpkin_util::math::vector3::Vector3;
 use tracing::{debug, error, info, warn};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
     event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::PhysicalKey,
+    keyboard::{KeyCode, PhysicalKey},
     window::{CursorGrabMode, Window, WindowId},
 };
 
@@ -38,11 +39,13 @@ use crate::{
     bench::{Bench, Sample},
     blocks::{self, appearance::AppearanceTable},
     clock::Ticks,
+    debug_world::Browser,
     embedded::EmbeddedServer,
     input::{Action, Button, Input, PIXELS_PER_NOTCH},
     player::{EYE_HEIGHT, Motion, Pose},
     render::{
         Frame, Gpu, Needs,
+        animation::Animator,
         camera::{Camera, FOV_Y},
         meshes::{self, Meshes},
         terrain::Terrain,
@@ -58,6 +61,8 @@ pub struct Assets {
     pub table: AppearanceTable,
     /// Uploaded when the GPU comes up, then freed.
     pub textures: TextureArray,
+    /// The layers that move.
+    pub animator: Animator,
     pub tints: Tints,
     /// The ids drawn as approximate shapes, for the census once the join settles.
     pub approximate: HashMap<u32, String>,
@@ -77,6 +82,7 @@ pub fn run(
     needs: Needs,
     assets: Assets,
     bench: Option<Duration>,
+    browser: Option<Browser>,
 ) -> ExitCode {
     let radius = settings.radius;
     let mut session = match Session::connect(&server.connector, &settings.name, xid, radius) {
@@ -97,6 +103,7 @@ pub fn run(
     };
     let mut app = App::new(server, session, settings, needs, assets);
     app.bench = bench.map(|duration| Bench::new(duration, radius));
+    app.browser = browser;
     if let Err(err) = event_loop.run_app(&mut app) {
         error!("The window's event loop failed: {err}");
         return ExitCode::FAILURE;
@@ -122,6 +129,10 @@ pub struct App<'a> {
     table: AppearanceTable,
     /// The CPU copy of the texture array, until it's uploaded.
     textures: Option<TextureArray>,
+    animator: Animator,
+    /// Ticks so far, and the tick the textures show.
+    animation_tick: u64,
+    animated_tick: Option<u64>,
     tints: Tints,
     /// Until the census is logged.
     approximate: Option<HashMap<u32, String>>,
@@ -139,8 +150,11 @@ pub struct App<'a> {
     /// Counting frames for the title, which updates once a second.
     second_started: Instant,
     frames_this_second: u32,
+    fps: f64,
     /// `--bench`: it flies the camera instead of the keys and the mouse.
     bench: Option<Bench>,
+    /// `--debug-world`: where you are in it.
+    browser: Option<Browser>,
     /// Set when the bench is done: the loop ends at its next pass.
     quit: bool,
     /// Why the loop ended early, if it did.
@@ -166,6 +180,9 @@ impl<'a> App<'a> {
             gpu: None,
             table: assets.table,
             textures: Some(assets.textures),
+            animator: assets.animator,
+            animation_tick: 0,
+            animated_tick: None,
             tints: assets.tints,
             approximate: Some(assets.approximate),
             meshes: Meshes::default(),
@@ -178,7 +195,9 @@ impl<'a> App<'a> {
             last_frame: now,
             second_started: now,
             frames_this_second: 0,
+            fps: 0.0,
             bench: None,
+            browser: None,
             quit: false,
             failure: None,
         }
@@ -190,6 +209,7 @@ impl<'a> App<'a> {
         for _ in 0..self.ticks.due(Instant::now()) {
             let motion = self.motion();
             self.session.step(motion);
+            self.animation_tick += 1;
         }
     }
 
@@ -245,6 +265,61 @@ impl<'a> App<'a> {
         self.camera = Some(camera);
         info!("The camera is at the host's spawn; click in the window to look around");
         self.session.check_gamemode(self.settings.gamemode);
+        if self.browser.is_some() {
+            info!(
+                "Debug world: ] and [ go to the next and last block, . and , to the next and last state, \
+                 and typing in this terminal goes to what matches"
+            );
+            self.jump_to_browser();
+        }
+    }
+
+    /// Moves the host to what the debug world's browser is at, hovering to look at
+    /// it, and says what that is.
+    fn jump_to_browser(&mut self) {
+        let Some(browser) = &self.browser else {
+            return;
+        };
+        let (feet, yaw, pitch) = browser.pose();
+        let label = browser.label();
+        let players = self.server.server.get_all_players();
+        let Some(player) = players.first() else {
+            return;
+        };
+        player.set_flying(true);
+        player.request_teleport(Vector3::new(feet[0], feet[1], feet[2]), yaw, pitch);
+        info!("Debug world: {label}");
+        self.set_title();
+    }
+
+    /// A key the debug world answers to. The keymap has no say: these only exist here.
+    fn debug_key(&mut self, key: KeyCode) {
+        let Some(browser) = &mut self.browser else {
+            return;
+        };
+        match key {
+            KeyCode::BracketRight => browser.step_block(true),
+            KeyCode::BracketLeft => browser.step_block(false),
+            KeyCode::Period => browser.step_state(true),
+            KeyCode::Comma => browser.step_state(false),
+            _ => return,
+        }
+        self.jump_to_browser();
+    }
+
+    /// Goes to what was typed in the terminal, if anything was.
+    fn debug_typed(&mut self) {
+        let Some(browser) = &mut self.browser else {
+            return;
+        };
+        let Some(line) = browser.take_typed() else {
+            return;
+        };
+        if browser.find(&line) {
+            self.jump_to_browser();
+        } else {
+            info!("Debug world: nothing matches `{}`", line.trim());
+        }
     }
 
     fn grab_cursor(&mut self) {
@@ -293,6 +368,7 @@ impl<'a> App<'a> {
     }
 
     fn redraw(&mut self) {
+        self.debug_typed();
         let now = Instant::now();
         let frame_time = now - self.last_frame;
         let seconds = frame_time.as_secs_f64().min(MAX_FRAME_SECONDS);
@@ -330,6 +406,10 @@ impl<'a> App<'a> {
         let (Some(gpu), Some(terrain)) = (&mut self.gpu, &mut self.terrain) else {
             return;
         };
+        if self.animated_tick != Some(self.animation_tick) {
+            self.animated_tick = Some(self.animation_tick);
+            terrain.animate(gpu, &mut self.animator, self.animation_tick);
+        }
         let (camera, meshes) = (self.camera.as_ref(), &self.meshes);
         let drawn = gpu.frame(|gpu, view, encoder| terrain.draw(gpu, view, encoder, camera, meshes));
         if drawn == Frame::Drawn {
@@ -350,6 +430,27 @@ impl<'a> App<'a> {
         self.once_a_second(now);
     }
 
+    fn set_title(&self) {
+        let (Some(window), Some(camera)) = (&self.window, &self.camera) else {
+            return;
+        };
+        let p = camera.position;
+        let fps = self.fps;
+        let (draws, visible) = self.terrain.as_ref().map_or((0, 0), |t| (t.draws, t.visible));
+        let debug = self.browser.as_ref().map_or(String::new(), |browser| format!("{}; ", browser.label()));
+        window.set_title(&format!(
+            "Limonite: {debug}{fps:.0} fps, {:.1} ms; {} chunks, {} meshes ({} waiting), {visible} visible, \
+             {draws} draws; at {:.1}, {:.1}, {:.1}",
+            1000.0 / fps.max(0.001),
+            self.session.world().chunk_count(),
+            self.meshes.len(),
+            self.meshes.waiting(),
+            p.x,
+            p.y,
+            p.z
+        ));
+    }
+
     /// The title, and at debug level the camera beside the server's own
     /// copy of the host, which should follow it a tick or two behind.
     fn once_a_second(&mut self, now: Instant) {
@@ -357,27 +458,14 @@ impl<'a> App<'a> {
         if elapsed < Duration::from_secs(1) {
             return;
         }
-        let fps = f64::from(self.frames_this_second) / elapsed.as_secs_f64();
+        self.fps = f64::from(self.frames_this_second) / elapsed.as_secs_f64();
         self.second_started = now;
         self.frames_this_second = 0;
         let Some(camera) = &self.camera else {
             return;
         };
         let p = camera.position;
-        let (draws, visible) = self.terrain.as_ref().map_or((0, 0), |t| (t.draws, t.visible));
-        if let Some(window) = &self.window {
-            window.set_title(&format!(
-                "Limonite: {fps:.0} fps, {:.1} ms; {} chunks, {} meshes ({} waiting), {visible} visible, \
-                 {draws} draws; at {:.1}, {:.1}, {:.1}",
-                1000.0 / fps.max(0.001),
-                self.session.world().chunk_count(),
-                self.meshes.len(),
-                self.meshes.waiting(),
-                p.x,
-                p.y,
-                p.z
-            ));
-        }
+        self.set_title();
         let stats = &self.meshes.stats;
         debug!(
             "Meshes: {} on the GPU, {:.1} MB, {} waiting; {} meshed so far at {:.0} µs each, {} quads",
@@ -470,6 +558,9 @@ impl ApplicationHandler for App<'_> {
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
                     self.input.button(Button::Key(key), event.state);
+                    if event.state == ElementState::Pressed && !event.repeat {
+                        self.debug_key(key);
+                    }
                 }
             }
             // While the cursor is free, a left click only captures it. A
