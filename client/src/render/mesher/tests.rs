@@ -47,6 +47,8 @@ fn look(shape: Shape, class: RenderClass, tint: Tint, layer: u16) -> Appearance 
         tint,
         faces: [face; 6],
         occludes: shape == Shape::Cube && class == RenderClass::Opaque,
+        under_snow: None,
+        snow: false,
     }
 }
 
@@ -501,4 +503,56 @@ fn a_model_copies_its_quads_and_a_neighbour_hides_those_on_the_edge() {
     // Stone below and beside: the bottom and the west side go, the rest stays.
     let boxed = mesh_in(&table, &[(5, 5, 5, 20), (5, 4, 5, STONE), (4, 5, 5, STONE)]);
     assert_eq!(layer_quads(&boxed.opaque, 7).len(), 4);
+}
+
+#[test]
+fn a_stalk_shows_its_tip_where_the_plant_ends() {
+    let (body, tip) = (30, 31);
+    let mut kelp = look(Shape::Stalk { grows_up: true }, RenderClass::Cutout, Tint::None, body);
+    kelp.faces[Face::Up as usize].layer = tip;
+    let mut vine = look(Shape::Stalk { grows_up: false }, RenderClass::Cutout, Tint::None, body);
+    vine.faces[Face::Up as usize].layer = tip;
+
+    // Two kelp, one on the other: only the upper one has the tip.
+    let table = with_look(20, kelp);
+    let stack = mesh_in(&table, &[(5, 5, 5, 20), (5, 6, 5, 20)]);
+    assert_eq!(layer_quads(&stack.opaque, body).len(), 4);
+    let tips = layer_quads(&stack.opaque, tip);
+    assert_eq!(tips.len(), 4);
+    assert!(tips.iter().all(|quad| quad.iter().all(|vertex| vertex.position[1] >= 6 * 16)));
+
+    // A vine hanging: its tip is at the bottom.
+    let table = with_look(20, vine);
+    let stack = mesh_in(&table, &[(5, 5, 5, 20), (5, 6, 5, 20)]);
+    let tips = layer_quads(&stack.opaque, tip);
+    assert_eq!(tips.len(), 4);
+    assert!(tips.iter().all(|quad| quad.iter().all(|vertex| vertex.position[1] <= 6 * 16)));
+}
+
+#[test]
+fn grass_under_snow_shows_a_snowy_side() {
+    let snowy = FaceLook {
+        layer: 40,
+        class: RenderClass::Opaque,
+        tinted: false,
+        turns: 0,
+        isotropic: false,
+    };
+    let mut grass = look(Shape::Cube, RenderClass::Opaque, Tint::None, 41);
+    grass.under_snow = Some(snowy);
+    let mut snow = look(Shape::Slab { bottom: 0, top: 2 }, RenderClass::Opaque, Tint::None, 42);
+    snow.snow = true;
+    let table = AppearanceTable::from_looks([
+        (AIR, look(Shape::Invisible, RenderClass::Opaque, Tint::None, 0)),
+        (20, grass),
+        (21, snow),
+    ]);
+
+    let bare = mesh_in(&table, &[(5, 5, 5, 20)]);
+    assert!(layer_quads(&bare.opaque, 40).is_empty());
+    assert_eq!(layer_quads(&bare.opaque, 41).len(), 6);
+
+    let covered = mesh_in(&table, &[(5, 5, 5, 20), (5, 6, 5, 21)]);
+    assert_eq!(layer_quads(&covered.opaque, 40).len(), 4, "the four sides");
+    assert_eq!(layer_quads(&covered.opaque, 41).len(), 2, "the top and bottom");
 }

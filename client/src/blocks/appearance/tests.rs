@@ -107,6 +107,7 @@ fn fixture() -> Fixture {
     dir.write("textures/misc/missing_texture.png", &png(&solid([255, 0, 255, 255])));
     dir.write("textures/blocks/stone.png", &png(&solid([1, 1, 1, 255])));
     dir.write("textures/blocks/grass_top.png", &png(&solid([2, 2, 2, 255])));
+    dir.write("textures/blocks/snowy.png", &png(&solid([16, 16, 16, 255])));
     dir.write("textures/blocks/dirt.png", &png(&solid([3, 3, 3, 255])));
     // The grass side: alpha 0 dirt, with one masked texel, as in vanilla.
     let mut side = solid([4, 4, 4, 0]);

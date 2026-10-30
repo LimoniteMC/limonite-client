@@ -299,9 +299,16 @@ impl Block<'_> {
         match self.look.shape {
             Shape::Invisible => {}
             Shape::Cube => {
+                // Sides that go snowy keep that off the common path.
+                let snowy = self.look.under_snow.filter(|_| self.neighbour(Face::Up, 0).snow);
                 for face in Face::ALL {
                     if !self.neighbour_occludes(face) {
-                        self.quad(face, [0, 0, 0], [16, 16, 16], tints, mesh);
+                        match snowy {
+                            Some(look) if face.is_side() => {
+                                self.quad_in(&look, face, [0, 0, 0], [16, 16, 16], tints, mesh);
+                            }
+                            _ => self.quad(face, [0, 0, 0], [16, 16, 16], tints, mesh),
+                        }
                     }
                 }
             }
@@ -330,6 +337,12 @@ impl Block<'_> {
                 }
             }
             Shape::Cross => self.cross(self.look.face(Face::North), tints, mesh),
+            Shape::Stalk { grows_up } => {
+                let beyond = self.neighbour(if grows_up { Face::Up } else { Face::Down }, 0);
+                // More of the plant, or another of its names, which are crosses.
+                let goes_on = matches!(beyond.shape, Shape::Stalk { .. } | Shape::Cross);
+                self.cross(self.look.face(if goes_on { Face::North } else { Face::Up }), tints, mesh);
+            }
             Shape::Planes { faces } => {
                 for face in Face::ALL.into_iter().filter(|&face| faces & (1 << face as u8) != 0) {
                     self.plane(face, tints, mesh);
@@ -394,7 +407,11 @@ impl Block<'_> {
 
     /// One face of a box from `min` to `max`, in sixteenths of the block.
     fn quad(&self, face: Face, min: [i8; 3], max: [i8; 3], tints: &Tints, mesh: &mut Mesh) {
-        let look = self.look.face(face);
+        self.quad_in(self.look.face(face), face, min, max, tints, mesh);
+    }
+
+    /// One face of a box, showing `look`.
+    fn quad_in(&self, look: &FaceLook, face: Face, min: [i8; 3], max: [i8; 3], tints: &Tints, mesh: &mut Mesh) {
         let corners = box_face(face, min, max);
         let mut uvs = corners.map(|corner| face_uv(face, corner));
         let mut turns = look.turns;

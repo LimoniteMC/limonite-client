@@ -232,6 +232,15 @@ const TINTS: &[(&str, Tint)] = &[
 /// texels to tint, and whose bottom isn't tinted (Finding 5).
 const GRASS_SIDES: &str = "grass_block";
 
+/// Blocks that show a snowy side under snow, and the key whose list holds it,
+/// last. Java keeps this in the state; Bedrock works it out, as this does.
+const SNOWY: [(&str, &str); 3] = [
+    ("grass_block", "grass_side"),
+    ("mycelium", "mycelium_side"),
+    ("podzol", "grass_side"),
+];
+/// What counts as snow, for the block below.
+const SNOW: [&str; 3] = ["snow_layer", "snow", "powder_snow"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Liquid {
@@ -274,6 +283,9 @@ pub enum Shape {
     /// A hand-made model, baked (`blocks/models.rs`): each quad shows one of
     /// the look's six slots.
     Model { quads: &'static [ModelQuad] },
+    /// Crossed planes that show their body in north, or their growing tip in
+    /// up if no more of the plant lies the way it grows: kelp and vines.
+    Stalk { grows_up: bool },
 }
 
 /// How a face's texels are drawn.
@@ -315,6 +327,10 @@ pub struct Appearance {
     /// A full cube whose faces are all opaque or overlay: it hides the faces
     /// of its neighbours.
     pub occludes: bool,
+    /// What its sides show under snow: grass, mycelium and podzol.
+    pub under_snow: Option<FaceLook>,
+    /// Whether it counts as snow, for the block below.
+    pub snow: bool,
 }
 
 impl Appearance {
@@ -330,6 +346,8 @@ impl Appearance {
             isotropic: false,
         }; 6],
         occludes: true,
+        under_snow: None,
+        snow: false,
     };
 
     #[must_use]
@@ -418,6 +436,8 @@ struct Plan {
     tint: Tint,
     blend: bool,
     faces: [FacePlan; 6],
+    /// The texture its sides show under snow.
+    under_snow: Option<usize>,
 }
 
 /// Builds the table for every palette id, and loads the textures it uses.
@@ -487,6 +507,13 @@ pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, 
             && faces
                 .iter()
                 .all(|face| matches!(face.class, RenderClass::Opaque | RenderClass::Overlay));
+        let under_snow = plan.under_snow.and_then(|index| loaded.layers[index]).map(|layer| FaceLook {
+            layer: layer.index,
+            class: RenderClass::Opaque,
+            tinted: false,
+            turns: 0,
+            isotropic: false,
+        });
         by_id.insert(
             id,
             Appearance {
@@ -494,6 +521,8 @@ pub fn build(palette: &Palette, blocks: &BlocksJson, terrain: &TerrainTextures, 
                 tint: plan.tint,
                 faces,
                 occludes,
+                under_snow,
+                snow: SNOW.contains(&name),
             },
         );
     }
@@ -559,6 +588,7 @@ impl Resolver<'_> {
             tint,
             blend,
             faces: [FacePlan::default(); 6],
+            under_snow: None,
         };
         if shape == Shape::Invisible {
             return (plan, None);
@@ -625,6 +655,14 @@ impl Resolver<'_> {
                 turns: pick.turns,
                 isotropic: isotropic.is_some_and(|iso| iso.applies(face)),
             };
+        }
+        // Bedrock keeps the snowy side at the end of the list, or for podzol
+        // in grass's.
+        if let Some(&(_, key)) = SNOWY.iter().find(|(snowy, _)| *snowy == name)
+            && let Some(variant) = self.terrain.textures.get(key).map(|entry| entry.textures.as_slice().len() - 1)
+            && let Ok(path) = self.path(key, variant)
+        {
+            plan.under_snow = Some(self.request(path, AlphaUse::Coverage));
         }
         (plan, problem)
     }

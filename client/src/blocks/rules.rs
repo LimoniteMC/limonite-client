@@ -284,6 +284,20 @@ fn by_bedrock_state<'a>(state: &'a BedrockState, textures: &'a FaceTextures) -> 
             slots: all_variant(textures, usize::from(flag("hanging"))),
             tint: None,
         }),
+        // One name for the plant's body and its growing tip: which it is
+        // depends on what's beyond it. The tip is in down, or east for kelp.
+        "kelp" | "twisting_vines" | "weeping_vines" | "cave_vines" => {
+            let tip = if name == "kelp" { East } else { Down };
+            let mut slots = own(textures);
+            slots[Up as usize] = Pick::key(textures.key(tip));
+            Some(Rule {
+                shape: Shape::Stalk {
+                    grows_up: matches!(name, "kelp" | "twisting_vines"),
+                },
+                slots,
+                tint: None,
+            })
+        }
         _ => None,
     }
 }

@@ -366,8 +366,7 @@ fn needs_no_rule(name: &str) -> Option<&'static str> {
         _ if name.ends_with("_leaves") || name.ends_with("_leaves_flowered") => {
             "its variants are fancy, then fast: the fancy one draws"
         }
-        "tall_grass" | "large_fern" | "rose_bush" | "peony" | "lilac" | "pitcher_plant" | "sunflower" | "seagrass"
-        | "kelp" | "twisting_vines" | "weeping_vines" | "cave_vines" => {
+        "tall_grass" | "large_fern" | "rose_bush" | "peony" | "lilac" | "pitcher_plant" | "sunflower" | "seagrass" => {
             "cross_key picks these by state"
         }
         _ if name.ends_with("_stairs") || name.ends_with("_slab") || name.ends_with("_double_slab") => FACES,
