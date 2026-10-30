@@ -831,7 +831,35 @@ against it (Deviation 26).
 - **The wall:** what looks at the jar writes only to gitignored `run/`. Corrections to Step 7b's tables
   don't come from it.
 
-## Step 8: The UI, and the HUD (client)
+## Step 7d: Animated textures, fluids that flow, and a debug world (client; the owner's ask, 2026-10-31)
+
+The owner found everything animated standing still, water and lava included, lava's texture looking
+irregular, and no easy way to check a given block, and suggested a debug world like Java's (Deviation 29).
+
+- **Animated textures:** Bedrock's `flipbook_textures.json` says which textures are strips of frames,
+  how fast they run and whether frames blend. A jar's textures say the same in `.mcmeta` files.
+  - **One layer per texture, rewritten as it animates** (worth teaching). A layer per frame would be
+    simpler to draw, but there are 1,209 frames and the array holds 2,048 layers. So each animated layer
+    is rewritten from the CPU when its frame changes, 20 times a second at most, as Java does with its
+    atlas. The bench says what that costs.
+- **Fluids:**
+  - **The irregular lava:** two causes to confirm on a sheet. `blocks.json` marks lava's top `isotropic`,
+    so each block turned its texture at random; and flowing textures cover two blocks (`quad`), so a side
+    showed a whole 32-texel frame on one block.
+  - **Flow:** corners take their height from the four columns around them, so a flow slopes as it does
+    in Java, and a flowing top shows the flowing texture, turned the way it runs. That needs a look at
+    diagonal neighbours, so the neighbourhood fills its edges where there's liquid.
+- **The debug world** (`--debug-world`): a flat world holding every Bedrock id Pumpkin can send, 15,953 of
+  them, in a grid with a gap between blocks, as Java's debug world has. Added through Pumpkin's public
+  API, with no change to the fork. Ticks that would change it are off: no random ticks, no mobs, no day
+  and night.
+  - **Going to a block:** `]` and `[` jump between block names, `.` and `,` between a name's states, and
+    typing a name in the terminal jumps there. The title bar says what you're looking at.
+  - **A fluid corner:** pools, flows and waterfalls of water and lava, set out by hand, since nothing in
+    the grid flows.
+- **Checks:** unit tests on made-up strips and fluids; sheets of fluids at several ticks; the bench with
+  animation on, against without; and the headless run.
+
 
 - **`ui/`:** `atlas.rs` (sprites and nine-slices), `font.rs`, `lang.rs`, `tree.rs` and `layout.rs`,
   `render.rs` with `ui.wgsl`, and `input.rs` (the pointer and focus) (Decision 14).
@@ -1253,6 +1281,10 @@ The questions as they were asked:
     so Step 7b's list for M8 shrinks to what the jar has nothing for: chests, shulker boxes, banners,
     heads, decorated pots, conduits and copper golem statues. A bed's colour still waits, as Bedrock
     keeps it in the block actor, so every bed is white until then.
+
+29. **Animation comes before M8, and a new Step 7d holds it** (owner, 2026-10-31). The textures code put
+    animation in M8, and PLAN.md left fluids as flat steps. The owner saw both on the walk, and asked
+    for them after Step 7b, along with a debug world, which nothing in the plan had.
 
 ## Results (filled in during execution)
 
