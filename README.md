@@ -1,6 +1,7 @@
 <!--
   Keep this page current (CLAUDE.md): the "current phase" alert, the milestone badge and the
   roadmap table follow docs/STATUS.md, and the numbers come from the milestone plans.
+  The org's page repeats the badge, the roadmap and the headline numbers (LimoniteMC/.github).
 -->
 
 <div align="center">

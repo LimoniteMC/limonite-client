@@ -77,21 +77,23 @@ _Last updated: 2026-10-26._
 - **Fork changes in M4:** a client-side reader for `NetworkChunkPublisherUpdate`, and one
   deliberate non-seam edit: a `Weather::downfall()` accessor in `pumpkin-util/src/biome.rs`, an
   upstream candidate.
-- **Pushed, both public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
-  2026-10-24, the README and the wiki on 2026-10-25):
+- **Pushed, all public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
+  2026-10-24, the README and the wiki on 2026-10-25, the upstream sync and M5 through Step 7d on
+  2026-11-01):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
-  - the fork's `limonite` branch, at `443b954`, with the M1 to M4 fork commits. It tracks
-    `origin/limonite`. The fork goes first, since `main`'s submodule pointer names its commit;
+  - the fork's `limonite` branch, at `15745d6`, with the M1 to M4 fork commits, the upstream sync
+    and M5's play codecs. It tracks `origin/limonite`. The fork goes first, since `main`'s submodule
+    pointer names its commit;
   - the wiki, `https://github.com/LimoniteMC/limonite-client.wiki.git` (`master`), from its
-    clone in `run/wiki`. It goes after `main`, since its pages name `main`'s commit.
-  - **Not pushed yet** (2026-10-26): the upstream sync and M5 so far. That's the fork's `limonite`
-    from `845450b` to `15745d6`, then `main` from its bump `a8f0271` on.
+    clone in `run/wiki`. It goes after `main`, since its pages name `main`'s commit;
+  - the org's page, `https://github.com/LimoniteMC/.github` (`main`), from its clone in
+    `run/org-profile`. It goes last, since it claims what `main` has and links to its images.
 - **No upstream PR is open.** The candidates are listed under "Upstream PR candidates".
 
   Ask the owner before pushing anything, and before opening an upstream PR.
 - **Where the repos are:** the owner moved both to the `LimoniteMC` org by 2026-11-01. `.gitmodules`
-  and every `origin` point there, the wiki's too. The old `LimoniteMC` and `LaDoodleInTheHat` URLs
+  and every `origin` point there, the wiki's too. The old `Doodle-Studios` and `LaDoodleInTheHat` URLs
   redirect, but don't use them. Older plans still name them where they record what happened then.
 - **README and wiki (2026-10-25):** the README is rewritten for GitHub, with the owner's lemon
   added to the title, and the docs are mirrored to the GitHub wiki. Keeping both current: Dev
@@ -432,6 +434,10 @@ the gitignored folder.
     Retake both once M5 draws light.
   - **After pushing a changed image,** github.com can show the old one for about 5 minutes, while
     GitHub's raw-file cache expires.
+- **The org's page** (`https://github.com/LimoniteMC`) is `profile/README.md` in the separate
+  `LimoniteMC/.github` repo, cloned into `run/org-profile` (gitignored). It repeats the milestone
+  badge, the roadmap and the headline numbers, so they change there when they change in the README.
+  Its images are absolute links to `main`, so a new one has to reach `main` first.
 - **The wiki** (`https://github.com/LimoniteMC/limonite-client/wiki`) mirrors `docs/PLAN.md`,
   this page, `docs/recon/` and `docs/milestones/`, one page each. It's never edited by hand
   (CLAUDE.md, Rules).

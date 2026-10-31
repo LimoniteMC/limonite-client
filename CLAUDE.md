@@ -17,7 +17,7 @@ starting any task, and treat it as the source of truth for architecture decision
     the owner can tick what's done and split the rest into its own milestone.
   - After M5 comes milestone 5b, containers, then M6.
   - Both repos are public. The superproject is `LimoniteMC/limonite-client` (`main`), and the
-    fork is `LimoniteMC/Pumpkin` (`limonite`, at `15745d6` locally). Check STATUS.md for
+    fork is `LimoniteMC/Pumpkin` (`limonite`, at `15745d6`). Check STATUS.md for
     what's pushed. Ask the owner before pushing anything.
   - **Upstream syncs are weekly** (owner, 2026-10-26). STATUS.md's "Where we are" gives the next
     due date. If one is due, do it first, by the procedure in `docs/upstream.md`, and log it there.
@@ -81,6 +81,9 @@ All three transports implement the `Transport` trait. The host never touches the
 - Never connect to public servers or Realms while testing. Embedded server and own LAN only.
 - Never attempt to decrypt Marketplace content.
 - Always update the readme regarding any info that needs to be shared.
+  - **The org's page repeats some of it:** `profile/README.md` in `LimoniteMC/.github` (cloned into
+    `run/org-profile`, gitignored) has the milestone badge, the roadmap and the headline numbers.
+    When those change in the readme, change them there too, and push it after the owner's OK.
 - Keep the GitHub wiki in step with `docs/`. The wiki mirrors `docs/PLAN.md`, `docs/STATUS.md`,
   `docs/upstream.md`, `docs/recon/` and `docs/milestones/`, one page each. `docs/` stays the source of truth, so never
   edit wiki pages by hand.
