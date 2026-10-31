@@ -24,7 +24,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 $repo = Split-Path -Parent $PSScriptRoot
-$site = 'https://github.com/Doodle-Studios/limonite-client'
+$site = 'https://github.com/LimoniteMC/limonite-client'
 $wikiUrl = "$site.wiki.git"
 # Kept ASCII-only so Windows PowerShell 5.1 reads this file the same as PowerShell 7.
 $dot = [char]0x00B7
@@ -141,7 +141,7 @@ $milestoneRows = foreach ($source in $pages.Keys) {
 }
 
 Write-Page 'Home' @(
-    "<p align=`"center`"><img src=`"https://raw.githubusercontent.com/Doodle-Studios/limonite-client/main/docs/readme/title.png`" alt=`"Limonite Client`" width=`"640`"></p>"
+    "<p align=`"center`"><img src=`"https://raw.githubusercontent.com/LimoniteMC/limonite-client/main/docs/readme/title.png`" alt=`"Limonite Client`" width=`"640`"></p>"
     ''
     "<p align=`"center`"><b>The design documents of <a href=`"$site`">Limonite Client</a>, a Minecraft: Bedrock Edition client written in Rust.</b></p>"
     ''

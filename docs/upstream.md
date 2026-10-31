@@ -1,6 +1,6 @@
 # Upstream syncs
 
-Limonite's Pumpkin fork (`Doodle-Studios/Pumpkin`, branch `limonite`) follows upstream
+Limonite's Pumpkin fork (`LimoniteMC/Pumpkin`, branch `limonite`) follows upstream
 `Pumpkin-MC/Pumpkin`, branch `master`. This page holds the procedure, and a log of every sync,
 newest first: what came in, what it changed for Limonite, and how the conflicts were resolved.
 `docs/STATUS.md` ("Where we are") says when the next sync is due.

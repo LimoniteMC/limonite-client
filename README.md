@@ -16,7 +16,7 @@
 <br>
 [![Current milestone: 5, playable singleplayer](https://img.shields.io/badge/current_milestone-5_%C2%B7_playable_singleplayer-818600?style=for-the-badge&labelColor=1A1A1A)](#roadmap)
 [![Developed AI-first with Claude](https://img.shields.io/badge/AI--first-Claude-818600?style=for-the-badge&logo=claude&logoColor=white&labelColor=1A1A1A)](#how-its-made)
-[![Last commit](https://img.shields.io/github/last-commit/Doodle-Studios/limonite-client?style=for-the-badge&labelColor=1A1A1A&color=818600)](https://github.com/Doodle-Studios/limonite-client/commits/main)
+[![Last commit](https://img.shields.io/github/last-commit/LimoniteMC/limonite-client?style=for-the-badge&labelColor=1A1A1A&color=818600)](https://github.com/LimoniteMC/limonite-client/commits/main)
 
 [**What it is**](#what-limonite-is) · [**Try it**](#try-it) · [**How it works**](#how-it-works) · [**Roadmap**](#roadmap) · [**Docs**](#documentation)
 
@@ -210,7 +210,7 @@ colour and fog; clouds, weather and reflective water aren't part of it.</sub>
 ### Build and run
 
 ```bash
-git clone https://github.com/Doodle-Studios/limonite-client
+git clone https://github.com/LimoniteMC/limonite-client
 cd limonite-client
 git -c core.longpaths=true submodule update --init
 git -C pumpkin config core.longpaths true
@@ -350,7 +350,7 @@ flowchart LR
 
 ### The Pumpkin fork
 
-Limonite embeds [Doodle-Studios/Pumpkin](https://github.com/Doodle-Studios/Pumpkin/tree/limonite),
+Limonite embeds [LimoniteMC/Pumpkin](https://github.com/LimoniteMC/Pumpkin/tree/limonite),
 branch `limonite`, as a git submodule. Upstream Pumpkin's Bedrock support speaks NetherNet and
 accepts exactly one protocol: **Bedrock 1.26.51, protocol 2193**.
 
@@ -462,7 +462,7 @@ Limonite is for your own worlds and your own LAN.
 | [m0-pumpkin-bedrock.md](docs/recon/m0-pumpkin-bedrock.md) | How Pumpkin talks to Bedrock clients; read it before touching the fork |
 | [CLAUDE.md](CLAUDE.md) | The working rules for the AI agent that develops Limonite |
 
-The same documents are on the [wiki](https://github.com/Doodle-Studios/limonite-client/wiki), with
+The same documents are on the [wiki](https://github.com/LimoniteMC/limonite-client/wiki), with
 a sidebar for getting around. It's generated from `docs/` by `scripts/sync-wiki.ps1`, so edit the
 files here, not the wiki.
 

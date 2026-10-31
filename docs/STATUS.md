@@ -79,19 +79,20 @@ _Last updated: 2026-10-26._
   upstream candidate.
 - **Pushed, both public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
   2026-10-24, the README and the wiki on 2026-10-25):
-  - superproject `main` to `https://github.com/Doodle-Studios/limonite-client` (`origin`; `main`
+  - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
   - the fork's `limonite` branch, at `443b954`, with the M1 to M4 fork commits. It tracks
     `origin/limonite`. The fork goes first, since `main`'s submodule pointer names its commit;
-  - the wiki, `https://github.com/Doodle-Studios/limonite-client.wiki.git` (`master`), from its
+  - the wiki, `https://github.com/LimoniteMC/limonite-client.wiki.git` (`master`), from its
     clone in `run/wiki`. It goes after `main`, since its pages name `main`'s commit.
   - **Not pushed yet** (2026-10-26): the upstream sync and M5 so far. That's the fork's `limonite`
     from `845450b` to `15745d6`, then `main` from its bump `a8f0271` on.
 - **No upstream PR is open.** The candidates are listed under "Upstream PR candidates".
 
   Ask the owner before pushing anything, and before opening an upstream PR.
-- **Fork location:** the owner moved the fork to `Doodle-Studios/Pumpkin`. `.gitmodules` and
-  `origin` point there. The old `LaDoodleInTheHat/Pumpkin` URL redirects, but don't use it.
+- **Where the repos are:** the owner moved both to the `LimoniteMC` org by 2026-11-01. `.gitmodules`
+  and every `origin` point there, the wiki's too. The old `LimoniteMC` and `LaDoodleInTheHat` URLs
+  redirect, but don't use them. Older plans still name them where they record what happened then.
 - **README and wiki (2026-10-25):** the README is rewritten for GitHub, with the owner's lemon
   added to the title, and the docs are mirrored to the GitHub wiki. Keeping both current: Dev
   environment, "The README and the wiki".
@@ -194,15 +195,15 @@ Windows 11, with Git Bash and PowerShell both used.
   scripts.
 
 **Pumpkin fork: `pumpkin/`**
-- A git submodule of `https://github.com/Doodle-Studios/Pumpkin`, branch **`limonite`**, at
-  `f9badd8`: the M1 to M4 commits on upstream `aac0a82`, with upstream `master` `5e9101f`
-  (2026-10-26) merged in (`845450b`), then the NBT reader fix. Its git directory is
+- A git submodule of `https://github.com/LimoniteMC/Pumpkin`, branch **`limonite`**, at
+  `15745d6`: the M1 to M4 commits on upstream `aac0a82`, with upstream `master` `5e9101f`
+  (2026-10-26) merged in (`845450b`), then the NBT reader fix and M5's play codecs. Its git directory is
   `.git/modules/pumpkin`.
 - `upstream` points at `https://github.com/Pumpkin-MC/Pumpkin.git`, whose default branch is
   `master`. The fork merges it weekly (`docs/upstream.md`).
 - **The fork's whole diff:** `git -C pumpkin diff upstream/master` (after a fetch) shows exactly
   what Limonite adds.
-- **Fresh clone:** clone `https://github.com/Doodle-Studios/limonite-client`, then set long
+- **Fresh clone:** clone `https://github.com/LimoniteMC/limonite-client`, then set long
   paths before the submodule checks out. Run `git -c core.longpaths=true submodule update
   --init`, then `git -C pumpkin config core.longpaths true`.
 
@@ -431,7 +432,7 @@ the gitignored folder.
     Retake both once M5 draws light.
   - **After pushing a changed image,** github.com can show the old one for about 5 minutes, while
     GitHub's raw-file cache expires.
-- **The wiki** (`https://github.com/Doodle-Studios/limonite-client/wiki`) mirrors `docs/PLAN.md`,
+- **The wiki** (`https://github.com/LimoniteMC/limonite-client/wiki`) mirrors `docs/PLAN.md`,
   this page, `docs/recon/` and `docs/milestones/`, one page each. It's never edited by hand
   (CLAUDE.md, Rules).
   - **After committing doc changes,** run `pwsh scripts/sync-wiki.ps1`. It regenerates every page
