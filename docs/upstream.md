@@ -67,6 +67,9 @@ newest first: what came in, what it changed for Limonite, and how the conflicts 
    Then update "Where we are" in STATUS.md with the sync's date and the next due date.
 8. **Commit:** the fork's merge (and any fix) on `limonite`; then on `main`, the bump with the
    lockfile and any client changes; then the docs. Ask the owner before pushing, fork first.
+   - **A sync that changes `.github/workflows/` needs the `workflow` scope** on `gh`'s token, or
+     GitHub refuses the push (found on 2026-11-01). Upstream's dependabot bumps those files often.
+     Only the owner can add the scope: `gh auth refresh -h github.com -s workflow`.
 
 ## Log
 
