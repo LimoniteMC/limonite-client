@@ -15,7 +15,7 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, Vec3};
 
-use super::{Gpu, SKY, animation::Animator, camera::Camera, meshes::Meshes, textures::TextureArray};
+use super::{Gpu, SKY, animation::Animator, camera::Camera, meshes::Meshes, outline::Outline, textures::TextureArray};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Six indices per quad: two triangles, 0-1-2 and 0-2-3, counter-clockwise.
@@ -46,6 +46,9 @@ pub struct Terrain {
     /// One camera-relative offset per draw.
     instances: wgpu::Buffer,
     instance_capacity: usize,
+    /// The lines around the block aimed at, drawn among the terrain since they
+    /// need its depth.
+    pub outline: Outline,
     /// The last frame's numbers, for the title and the benchmark.
     pub draws: u32,
     pub visible: u32,
@@ -164,6 +167,7 @@ impl Terrain {
         let (indices, index_quads) = index_buffer(device, 4096);
         let instance_capacity = 1024;
         let instances = instance_buffer(device, instance_capacity);
+        let outline = Outline::new(device, format, DEPTH_FORMAT, &frame);
         Self {
             textures: uploaded,
             texture_view,
@@ -177,6 +181,7 @@ impl Terrain {
             index_quads,
             instances,
             instance_capacity,
+            outline,
             draws: 0,
             visible: 0,
         }
@@ -269,6 +274,9 @@ impl Terrain {
                 self.draws += 1;
             }
         }
+
+        self.outline.draw(&mut pass);
+        pass.set_bind_group(0, &self.bind_group, &[]);
 
         // Back to front by the distance to each sub-chunk's centre.
         let mut blended: Vec<(u32, f32)> = (0u32..)

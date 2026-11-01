@@ -47,6 +47,7 @@ use crate::{
     Args,
     blocks::{self, appearance::AppearanceTable},
     debug_world::{self, Browser},
+    edit::aim,
     embedded::EmbeddedServer,
     install, open_home,
     player::{Motion, Pose, EYE_HEIGHT},
@@ -253,6 +254,9 @@ impl Studio {
             self.ui_renderer.upload(&self.gpu, drawing);
         }
         self.terrain.animate(&self.gpu, &mut self.animator, self.tick);
+        let aimed = aim::from_camera(self.session.game(), &self.camera);
+        let boxes = aimed.as_ref().map_or(&[][..], |hit| &hit.boxes);
+        self.terrain.outline.show(&self.gpu, self.camera.position, boxes);
 
         let world = self.target.create_view(&wgpu::TextureViewDescriptor::default());
         let over = self.target.create_view(&wgpu::TextureViewDescriptor {
@@ -268,7 +272,7 @@ impl Studio {
 
         let player = self.session.game().player().expect("the player");
         println!(
-            "{}: {:?}, health {}, hunger {}, air {}; {} meshes, {} in view",
+            "{}: {:?}, health {}, hunger {}, air {}; {} meshes, {} in view; aimed at {:?}",
             shot.name,
             player.gamemode,
             player.attributes.health,
@@ -276,6 +280,7 @@ impl Studio {
             player.attributes.air,
             self.meshes.len(),
             self.terrain.visible,
+            aimed.as_ref().map(|hit| hit.block),
         );
     }
 }

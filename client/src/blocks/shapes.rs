@@ -1,7 +1,7 @@
 //! Block shapes by Bedrock id, from pumpkin-data (m5-plan Decision 7,
 //! Finding 9): the collision boxes physics walks on, and the outline boxes
-//! the mesher draws for blocks with no model of their own (`blocks/models.rs`).
-//! Step 10's aiming reads the outlines too.
+//! the mesher draws for blocks with no model of their own (`blocks/models.rs`),
+//! which aiming hits too (`edit/aim.rs`).
 //!
 //! A Bedrock id's boxes are its Java state's, the one
 //! [`BlockTable::shape_state`] picks. The tests check that the Java states
@@ -108,6 +108,25 @@ pub fn collision_boxes(table: &BlockTable, bedrock: u32, x: i32, y: i32, z: i32,
     let corner = DVec3::new(f64::from(x), f64::from(y), f64::from(z));
     // Some blocks (bamboo, pointed dripstone) sit off-centre by their position.
     for shape in state.to_state().get_block_collision_shapes_at(&BlockPos::new(x, y, z)) {
+        let min = DVec3::new(shape.min.x, shape.min.y, shape.min.z);
+        let max = DVec3::new(shape.max.x, shape.max.y, shape.max.z);
+        out.push(Aabb::new(min + corner, max + corner));
+    }
+}
+
+/// Adds the outline boxes of the block with Bedrock id `bedrock` at `(x, y, z)`,
+/// in world blocks: what aiming hits, and what the outline draws. These are
+/// exact, where [`outline`] rounds them for the mesher.
+///
+/// An id with no Java state counts as a full cube, as it does for collisions.
+pub fn outline_boxes(table: &BlockTable, bedrock: u32, x: i32, y: i32, z: i32, out: &mut Vec<Aabb>) {
+    let Some(state) = table.shape_state(bedrock) else {
+        out.push(Aabb::cube(x, y, z));
+        return;
+    };
+    let corner = DVec3::new(f64::from(x), f64::from(y), f64::from(z));
+    let java = state.to_state();
+    for shape in java.get_block_outline_shapes_at(&BlockPos::new(x, y, z)).take(java.outline_shapes.len()) {
         let min = DVec3::new(shape.min.x, shape.min.y, shape.min.z);
         let max = DVec3::new(shape.max.x, shape.max.y, shape.max.z);
         out.push(Aabb::new(min + corner, max + corner));
@@ -361,6 +380,33 @@ mod tests {
         // An id the table doesn't know is solid.
         let mut out = Vec::new();
         collision_boxes(&table, 0xDEAD_BEEF, 1, 2, 3, &mut out);
+        assert_eq!(out, [Aabb::cube(1, 2, 3)]);
+    }
+
+    #[test]
+    fn blocks_are_aimed_at_by_pumpkins_outlines() {
+        let table = BlockTable::build();
+        let at = |block: &Block| {
+            let mut out = Vec::new();
+            outline_boxes(&table, BlockState::to_be_network_id(block.default_state.id), 10, 64, -3, &mut out);
+            out
+        };
+        assert_eq!(at(&Block::STONE), [Aabb::cube(10, 64, -3)]);
+        // Nothing to aim at in air or a liquid.
+        assert!(at(&Block::AIR).is_empty());
+        assert!(at(&Block::WATER).is_empty());
+        assert!(at(&Block::LAVA).is_empty());
+        // A bottom slab: half a block high.
+        let slab = at(&Block::OAK_SLAB);
+        assert_eq!(slab.len(), 1);
+        assert!((slab[0].max.y - 64.5).abs() < 1e-9, "{slab:?}");
+        // A fence's post is a block tall to aim at, and collides half a block higher.
+        let post = at(&Block::OAK_FENCE);
+        assert_eq!(post.len(), 1, "{post:?}");
+        assert!((post[0].min.x - 10.375).abs() < 1e-9 && (post[0].max.y - 65.0).abs() < 1e-9, "{post:?}");
+        // An id the table doesn't know is solid.
+        let mut out = Vec::new();
+        outline_boxes(&table, 0xDEAD_BEEF, 1, 2, 3, &mut out);
         assert_eq!(out, [Aabb::cube(1, 2, 3)]);
     }
 

@@ -4,6 +4,7 @@ mod blocks;
 mod checks;
 mod clock;
 mod debug_world;
+mod edit;
 mod embedded;
 mod game;
 mod home;

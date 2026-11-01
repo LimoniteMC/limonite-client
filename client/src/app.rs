@@ -40,6 +40,7 @@ use crate::{
     blocks::{self, appearance::AppearanceTable},
     clock::Ticks,
     debug_world::Browser,
+    edit::aim::{self, Hit},
     embedded::EmbeddedServer,
     input::{Action, Button, Input, PIXELS_PER_NOTCH},
     player::{EYE_HEIGHT, Motion, Pose},
@@ -147,6 +148,8 @@ pub struct App<'a> {
     /// Placed where `StartGame` put the host, once it has spawned. It draws
     /// the player's eyes, except during the bench, which flies it.
     camera: Option<Camera>,
+    /// What the camera was aimed at, the last frame.
+    aimed: Option<Hit>,
     input: Input,
     cursor_grabbed: bool,
     /// Whether frames can be seen: not minimised or covered.
@@ -198,6 +201,7 @@ impl<'a> App<'a> {
             ui_picture: Some(assets.ui.picture),
             ui_renderer: None,
             camera: None,
+            aimed: None,
             input,
             cursor_grabbed: false,
             visible: true,
@@ -422,6 +426,13 @@ impl<'a> App<'a> {
             }
         }
 
+        // The bench keeps M4's picture, so its numbers compare with the baseline.
+        self.aimed = self
+            .camera
+            .as_ref()
+            .filter(|_| self.bench.is_none())
+            .and_then(|camera| aim::from_camera(self.session.game(), camera));
+
         self.ui.update(self.session.game());
 
         // Separate fields, borrowed separately: the frame needs the GPU
@@ -432,6 +443,10 @@ impl<'a> App<'a> {
         };
         if let Some(drawing) = self.ui.drawing() {
             ui_renderer.upload(gpu, drawing);
+        }
+        if let Some(camera) = &self.camera {
+            let boxes = self.aimed.as_ref().map_or(&[][..], |hit| &hit.boxes);
+            terrain.outline.show(gpu, camera.position, boxes);
         }
         if self.animated_tick != Some(self.animation_tick) {
             self.animated_tick = Some(self.animation_tick);

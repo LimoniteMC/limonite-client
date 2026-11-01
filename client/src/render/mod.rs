@@ -10,6 +10,7 @@ pub mod camera;
 pub mod icons;
 pub mod mesher;
 pub mod meshes;
+pub mod outline;
 #[cfg(test)]
 mod sheet;
 pub mod terrain;
