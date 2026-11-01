@@ -325,7 +325,7 @@ UI is three separate systems: the client's own retained-mode UI, server forms, a
 
 ## Milestones
 
-Each milestone ends in something runnable and is done only when its acceptance check passes. Do them in order; later ones assume the seams from earlier ones.
+Each milestone ends in something runnable and is done only when its acceptance check passes. Do them in order; later ones assume the seams from earlier ones. [GitHub's milestones](https://github.com/LimoniteMC/limonite-client/milestones) mirror this list, and this list is the source of truth.
 
 0. ✅ **Recon.** Clone Pumpkin, build it, enable Bedrock, offline mode, join with the official Bedrock client. Trace where a Bedrock connection is accepted and where packets are dispatched to a player.
    - Accept: official client joins the stock Pumpkin build; a short written note maps the accept and dispatch code paths and proposes the exact `Transport` seam.

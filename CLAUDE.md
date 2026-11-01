@@ -60,7 +60,8 @@ All three transports implement the `Transport` trait. The host never touches the
 - Use `tracing` for all logging.
 - If the real code contradicts the plan, stop and say so, propose the change, and update
   `docs/PLAN.md` once it's agreed.
-- When a milestone or open question is resolved, tick it off in `docs/PLAN.md`.
+- When a milestone or open question is resolved, tick it off in `docs/PLAN.md`. A milestone's
+  GitHub milestone follows (Rules).
 
 ## Rules
 
@@ -91,3 +92,12 @@ All three transports implement the `Transport` trait. The host never touches the
     wiki into `run/wiki` (gitignored) if needed, and regenerates every page.
   - Check `git -C run/wiki diff`, then commit the wiki and push it along with the superproject,
     after the owner's OK.
+- Always keep the GitHub milestones in step with `docs/` (the owner, 2026-11-01). Each milestone in
+  `docs/PLAN.md` has one on `LimoniteMC/limonite-client`, since GitHub has no organisation-wide
+  milestones. `docs/` stays the source of truth. STATUS.md, Dev environment, has their numbers and
+  the commands.
+  - **When a step lands,** tick it in the milestone's description. **When a milestone is accepted,**
+    mark it done with the date, close it, and mark the next one as current. **When a plan changes**
+    its steps or acceptance, or adds a milestone, change the description to match.
+  - **Do it right after the push that carries the change,** not before, because a milestone claims
+    what `main` has. This update needs no OK of its own.

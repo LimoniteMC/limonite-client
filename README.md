@@ -410,6 +410,8 @@ Later milestones add `molang/`, `iris-compat/` and `mappings/` crates.
 ## Roadmap
 
 Each milestone ends in something runnable, and is done only when its acceptance check passes.
+[GitHub's milestones](https://github.com/LimoniteMC/limonite-client/milestones) follow the same list,
+with the current one's steps ticked as they land.
 
 | Status | Milestone | What it delivers | Docs |
 | --- | --- | --- | :-: |

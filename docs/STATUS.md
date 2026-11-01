@@ -102,6 +102,9 @@ _Last updated: 2026-11-01._
 - **Where the repos are:** the owner moved both to the `LimoniteMC` org by 2026-11-01. `.gitmodules`
   and every `origin` point there, the wiki's too. The old `Doodle-Studios` and `LaDoodleInTheHat` URLs
   redirect, but don't use them. Older plans still name them where they record what happened then.
+- **GitHub milestones (2026-11-01):** every milestone in PLAN.md has one on
+  `LimoniteMC/limonite-client`, with M5's steps as a checklist. Keeping them current: Dev environment,
+  "The GitHub milestones".
 - **README and wiki (2026-10-25):** the README is rewritten for GitHub, with the owner's lemon
   added to the title, and the docs are mirrored to the GitHub wiki. Keeping both current: Dev
   environment, "The README and the wiki".
@@ -473,6 +476,35 @@ the gitignored folder.
 - **The owner's original models** from before the lemon (`title.bbmodel`, `lemon.bbmodel`, and
   their `.obj`, `.mtl` and texture exports) are in `run/readme-models-before-lemon/`, on the
   owner's machine only.
+
+**The GitHub milestones** (`https://github.com/LimoniteMC/limonite-client/milestones`)
+- **Why on this repo:** GitHub's milestones belong to a repo, and an organisation has none of its own.
+  The fork's work is tracked here too, because the superproject is where a milestone is accepted.
+- **Their numbers:** M0 to M4 are 1 to 5, and closed. M5 is 6, M5b is 7, and M6 to M11 are 8 to 13.
+- **Their progress bars stay at 0%.** GitHub counts issues, and the steps are a checklist in the
+  description. So read the checklist, and the milestone's state, rather than the bar.
+- **After a push** (CLAUDE.md, Rules), change the description. For M5, once a step's commits are on `main`:
+
+  ```bash
+  gh api repos/LimoniteMC/limonite-client/milestones/6 --jq .description > run/milestone.md
+  ```
+
+  Tick the step in `run/milestone.md` (gitignored), then:
+
+  ```bash
+  gh api --method PATCH repos/LimoniteMC/limonite-client/milestones/6 -f description="$(cat run/milestone.md)"
+  ```
+
+- **When a milestone is accepted:** write "Done <date>." and what was accepted in its description, then
+  close it, and write "Current." in the next one's. GitHub stamps the closing date itself, and can't
+  backdate it, so the description holds the real one:
+
+  ```bash
+  gh api --method PATCH repos/LimoniteMC/limonite-client/milestones/6 -f state=closed
+  ```
+
+- **The page's order is backwards:** with no due dates, it has M11 at the top and the current milestone
+  at the bottom. Read the titles. None are set, because the project hasn't any dates to give them.
 
 ## Gotchas
 
