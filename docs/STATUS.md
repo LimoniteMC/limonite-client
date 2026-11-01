@@ -56,7 +56,7 @@ _Last updated: 2026-11-01._
     for Step 12.
   - **Fixed (2026-11-01, the owner's report):** walls gave way along any axis from about 256 blocks out from the
     origin, because a position's rounding could carry the box inside them (`ad5e250`; m5-plan Deviation 40, and
-    Results, "The walls that gave way"). Not pushed yet.
+    Results, "The walls that gave way").
   - **Next:** Step 10, aiming at blocks. The owner's walk, in the debug world and beside the official client, is
     still to come, and now takes in the HUD and the hotbar.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
@@ -87,8 +87,8 @@ _Last updated: 2026-11-01._
   deliberate non-seam edit: a `Weather::downfall()` accessor in `pumpkin-util/src/biome.rs`, an
   upstream candidate.
 - **Pushed, all public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
-  2026-10-24, the README and the wiki on 2026-10-25, the upstream sync and M5 through Step 9 on
-  2026-11-01):
+  2026-10-24, the README and the wiki on 2026-10-25, the upstream sync, M5 through Step 9 and the
+  fix for walls giving way on 2026-11-01):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
   - the fork's `limonite` branch, at `15745d6`, with the M1 to M4 fork commits, the upstream sync
