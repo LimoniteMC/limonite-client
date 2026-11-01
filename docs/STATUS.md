@@ -548,6 +548,18 @@ the gitignored folder.
     takes the bump (`docs/upstream.md`). In a world of its own, it still works for comparing looks.
 - **Stopping the server:** stopping a background shell doesn't always kill `pumpkin.exe` on
   Windows. Check with `Get-Process pumpkin`.
+- **A commit message can close an issue, in any repo.** GitHub reads close, fix or resolve, in any form, followed by
+  an issue reference, as an order, once the commit reaches a default branch and the pusher may close that issue.
+  `ad2eb64` said Pumpkin ignores a pick "until upstream fixes Pumpkin-MC/Pumpkin#4321", and on the push of 2026-11-01
+  that closed the owner's issue, as completed, with the bug still there.
+  - **Write it another way:** "Pumpkin ignores it for now (Pumpkin-MC/Pumpkin#4321)". Only messages count, so a doc
+    can say what it likes. Upstream's own commits are safe to carry, since the fork has no issues.
+  - **Check before a push,** with the line breaks taken out, since a message can wrap between the two:
+
+    ```bash
+    git log origin/main..main --format=%B | tr '\n' ' ' | grep -ioE '\b(close[sd]?|fix(e[sd])?|resolve[sd]?):? +[^ ]*#[0-9]+'
+    ```
+
 - **Telemetry:** Pumpkin's defaults to **on** (heartbeat to `market.pumpkinmc.org`). Keep it off in
   every config.
 - **Lockfile and profiles:** building from the repo root ignores Pumpkin's `Cargo.lock`,
@@ -767,6 +779,8 @@ upstream fixes it and a weekly sync brings the fix in:
 - **Block pick is always ignored:** Pumpkin-MC/Pumpkin#4321, opened by the owner's account on
   2026-10-26. `block_pick_request.rs:23-26` takes `max_slots` as the slot to fill, and the official
   client always sends 9, so the handler returns.
+  - **It shows as closed, by mistake:** a line in our own commit `ad2eb64` closed it on 2026-11-01 (Gotchas). The handler
+    hasn't changed, here or on upstream's `master`. It needs reopening from the owner's account.
 - **A survival placement costs two items:** Pumpkin-MC/Pumpkin#4130, already open. The official
   client's use-item transaction carries its predicted slot change, which `inventory_action.rs`
   applies (`:87-135`) before its own `stack.decrement(1)` (`:289`).
