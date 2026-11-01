@@ -144,6 +144,27 @@ impl Game {
         &self.predictions
     }
 
+    /// Shows `id` at `at`, ahead of the server, from a click at `clicked`.
+    pub fn predict_place(&mut self, at: IVec3, id: u32, clicked: Instant) {
+        let Some(server) = self.world.block(at.x, at.y, at.z, 0) else {
+            return;
+        };
+        let water = self.world.block(at.x, at.y, at.z, 1).filter(|&id| id != AIR);
+        if self.world.edit(at.x, at.y, at.z, 0, id) {
+            if water.is_some() {
+                self.world.edit(at.x, at.y, at.z, 1, AIR);
+            }
+            self.predictions.add(at, id, server, water, self.ticks, clicked);
+        }
+    }
+
+    /// Times a place whose result only the server knows.
+    pub fn expect_place(&mut self, at: IVec3, clicked: Instant) {
+        if let Some(server) = self.world.block(at.x, at.y, at.z, 0) {
+            self.predictions.expect(at, server, self.ticks, clicked);
+        }
+    }
+
     /// Shows the block at `at` broken, ahead of the server, from a click at `clicked`:
     /// air, or the water it held. Bedrock keeps a waterlogged block's water in the
     /// second layer, and water on its own in the first.

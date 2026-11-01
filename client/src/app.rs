@@ -225,7 +225,8 @@ impl<'a> App<'a> {
             let motion = self.motion();
             if self.bench.is_none() {
                 let hit = self.camera.as_ref().and_then(|camera| aim::from_camera(self.session.game(), camera));
-                self.session.edit_tick(self.input.is_held(Action::Attack), hit.as_ref());
+                let (attack, use_item) = (self.input.is_held(Action::Attack), self.input.is_held(Action::Use));
+                self.session.edit_tick(attack, use_item, hit.as_ref());
             }
             self.session.step(motion);
             self.animation_tick += 1;
@@ -403,10 +404,11 @@ impl<'a> App<'a> {
         let seconds = frame_time.as_secs_f64().min(MAX_FRAME_SECONDS);
         self.last_frame = now;
 
-        let mut attack_pressed = false;
+        let (mut attack_pressed, mut use_pressed) = (false, false);
         for action in self.input.take_pressed() {
             match action {
                 Action::Attack => attack_pressed = true,
+                Action::Use => use_pressed = true,
                 // Until the pause menu (Step 16).
                 Action::Pause => self.release_cursor(),
                 Action::LogPose => self.log_pose(),
@@ -455,6 +457,9 @@ impl<'a> App<'a> {
             .and_then(|camera| aim::from_camera(self.session.game(), camera));
         if attack_pressed {
             self.session.attack_pressed(self.aimed.as_ref());
+        }
+        if use_pressed {
+            self.session.use_pressed(self.aimed.as_ref());
         }
         self.mesh_edits();
 

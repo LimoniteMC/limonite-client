@@ -44,8 +44,8 @@ use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tracing::{debug, info, warn};
 
 use crate::{
-    edit::{self, Aimed, Command, Editor, View, aim::Hit},
-    inventory::{CONTAINER_MAIN, HOTBAR, items},
+    edit::{self, Aimed, Command, Editor, UseTick, View, aim::Hit},
+    inventory::{CONTAINER_MAIN, Click, HOTBAR, items},
     clock::TICK,
     game::{Effect, Game},
     login,
@@ -53,7 +53,7 @@ use crate::{
     packets,
     player::{EYE_HEIGHT, Motion, movement::Flags, physics::{Fluid, Terrain as _}, terrain::WorldTerrain},
     render::camera::look_direction,
-    world::{Applied, World},
+    world::{AIR, Applied, World},
 };
 
 /// Bedrock's input-mode and play-mode values for mouse and keyboard on a
@@ -689,11 +689,78 @@ impl Session {
         }
     }
 
+    /// The use button went down, with `hit` aimed at. The click goes now, so that what
+    /// it places shows in this frame.
+    pub fn use_pressed(&mut self, hit: Option<&Hit>) {
+        self.click(hit, true);
+    }
+
     /// One tick of editing, before the tick's input goes.
-    pub fn edit_tick(&mut self, attack_held: bool, hit: Option<&Hit>) {
+    pub fn edit_tick(&mut self, attack_held: bool, use_held: bool, hit: Option<&Hit>) {
         if let Some(view) = self.edit_view(hit) {
             let commands = self.editor.tick(attack_held, &view);
             self.carry_out(commands);
+        }
+        match self.editor.use_tick(use_held) {
+            UseTick::Nothing => {}
+            UseTick::Repeat => self.click(hit, false),
+            UseTick::Stop(target) => {
+                if let Some(player) = self.game.player() {
+                    self.send(&player_action(player.runtime_id, PlayerActionType::StopItemUseOn, target, IVec3::ZERO, 0));
+                }
+            }
+        }
+    }
+
+    /// A right click, with `hit` aimed at, as the official client's: `StartItemUseOn`, a
+    /// swing, the click on the block, and a click on air. With nothing aimed at, a press
+    /// is just the click on air, and what's held just keeps waiting for something to aim at.
+    fn click(&mut self, hit: Option<&Hit>, pressed: bool) {
+        let Some(player) = self.game.player() else {
+            return;
+        };
+        let runtime_id = player.runtime_id;
+        let pose = player.pose();
+        let eyes = pose.eyes();
+        let eyes = Vector3::new(eyes.x as f32, eyes.y as f32, eyes.z as f32);
+        let creative = player.gamemode == GameMode::Creative;
+        let Some(hit) = hit else {
+            if pressed {
+                self.send(&self.game.inventory().click_air(eyes));
+            }
+            return;
+        };
+        let now = Instant::now();
+        let world = self.game.world();
+        let held = self.game.inventory().held();
+        let placed = items::placed_block(held.id, held.aux_value.0);
+        let plan = edit::plan_use(world, pose.feet, player.abilities.build, placed, hit.block, hit.face);
+        let at = (hit.point - hit.block.as_dvec3()).as_vec3();
+        let click = Click {
+            block: hit.block,
+            face: hit.face as u8,
+            eyes,
+            at: Vector3::new(at.x, at.y, at.z),
+            runtime_id: world.block(hit.block.x, hit.block.y, hit.block.z, 0).unwrap_or(AIR),
+        };
+        if let Some(last) = self.editor.used(&plan, pressed) {
+            self.send(&player_action(runtime_id, PlayerActionType::StopItemUseOn, last, IVec3::ZERO, 0));
+        }
+        self.send(&player_action(
+            runtime_id,
+            PlayerActionType::StartItemUseOn,
+            hit.block,
+            plan.result,
+            hit.face as i32,
+        ));
+        self.send(&swing(runtime_id, ActorSwingSource::Build));
+        let transaction = self.game.inventory_mut().click_block(&click, plan.places, plan.places && !creative);
+        self.send(&transaction);
+        self.send(&self.game.inventory().click_air(eyes));
+        match plan.shows {
+            Some(id) => self.game.predict_place(plan.result, id, now),
+            None if plan.places => self.game.expect_place(plan.result, now),
+            None => {}
         }
     }
 

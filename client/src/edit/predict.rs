@@ -83,7 +83,6 @@ impl Predictions {
     }
 
     /// An edit with nothing to show until the server answers. It's here to be timed.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the next commit's places"))]
     pub fn expect(&mut self, at: IVec3, server: u32, tick: u64, clicked: Instant) {
         self.entries.entry(at).or_insert(Entry {
             predicted: None,

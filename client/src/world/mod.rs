@@ -244,6 +244,26 @@ impl World {
             .is_some_and(|chunk| chunk.set_block((x & 15) as usize, y, (z & 15) as usize, layer, id))
     }
 
+    /// A chunk of air, for tests to put blocks in.
+    #[cfg(test)]
+    pub fn add_empty_chunk(&mut self, x: i32, z: i32) {
+        let air = || chunk::SubChunk {
+            layers: vec![storage::Storage::Single(AIR)],
+        };
+        self.chunks.insert(
+            (x, z),
+            Chunk {
+                x,
+                z,
+                dimension: 0,
+                min_section: -4,
+                sub_chunks: (0..24).map(|_| air()).collect(),
+                biomes: Vec::new(),
+                block_actors: Vec::new(),
+            },
+        );
+    }
+
     /// Sets a block for the player's own edit, ahead of the server. Returns false if
     /// its chunk (or its sub-chunk) isn't loaded.
     pub fn edit(&mut self, x: i32, y: i32, z: i32, layer: usize, id: u32) -> bool {

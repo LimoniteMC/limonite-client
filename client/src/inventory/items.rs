@@ -50,9 +50,14 @@ const MOST_VARIANTS: u32 = 16;
 /// The Bedrock id of the block an item places, if it places one.
 #[must_use]
 pub fn block_of(id: i16, aux: u32) -> Option<u32> {
+    Some(BlockState::to_be_network_id(placed_block(id, aux)?.default_state.id))
+}
+
+/// The block the item with Bedrock id `id` places, if it's that sort of item.
+#[must_use]
+pub fn placed_block(id: i16, aux: u32) -> Option<&'static Block> {
     let mapping = JavaToBedrockItemMapping::from_bedrock(id, aux)?;
-    let block = Block::from_item_id(mapping.java_item.id)?;
-    Some(BlockState::to_be_network_id(block.default_state.id))
+    Block::from_item_id(mapping.java_item.id)
 }
 
 /// The Java stack for the item with Bedrock id `id`: what knows how fast it digs. An

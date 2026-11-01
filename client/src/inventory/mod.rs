@@ -10,17 +10,19 @@
 
 pub mod items;
 
+use glam::IVec3;
 use pumpkin_protocol::{
     bedrock::{
         network_item::{NetworkItemDescriptor, NetworkItemStackDescriptor},
         server::inventory_transaction::{
-            InventoryAction, LegacySetItemSlot, NormalTransactionData, SInventoryTransaction,
-            TransactionData, WINDOW_ID_INVENTORY,
+            HandSlot, InventoryAction, LegacySetItemSlot, NormalTransactionData, SInventoryTransaction,
+            TransactionData, UseItemTransactionData, WINDOW_ID_INVENTORY,
         },
     },
     codec::{var_int::VarInt, var_uint::VarUInt},
     serial::{PacketRead, PacketWrite},
 };
+use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
 
 /// The slots of the player's inventory.
 pub const MAIN: usize = 36;
@@ -34,6 +36,26 @@ const CONTAINER_PREDICTED: u8 = 29;
 const SOURCE_CONTAINER: u32 = 0;
 /// A transaction's source that's the world: what's dropped goes there.
 const SOURCE_WORLD: u32 = 2;
+/// A use-item transaction's kinds: clicking a block, and clicking air.
+const USE_CLICK_BLOCK: i32 = 0;
+const USE_CLICK_AIR: i32 = 1;
+/// What made it happen: the player, for a click on a block.
+const TRIGGER_PLAYER: u8 = 1;
+/// The face a click on air names.
+const NO_FACE: u8 = 255;
+
+/// A right click on a block, as a use-item transaction says it.
+#[derive(Clone, Copy, Debug)]
+pub struct Click {
+    pub block: IVec3,
+    pub face: u8,
+    /// Where the player's eyes are, which is where Bedrock says a player is.
+    pub eyes: Vector3<f32>,
+    /// Where on the block, from its lowest corner.
+    pub at: Vector3<f32>,
+    /// What's there.
+    pub runtime_id: u32,
+}
 
 /// What a slot holds, as far as anyone looking at it can tell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -137,6 +159,114 @@ impl Inventory {
         }
         self.last_transaction -= 2;
         Some(drop_transaction(self.last_transaction, slot as u32, old))
+    }
+
+    /// A right click on a block. If it `takes_one`, the hand loses one, and the
+    /// transaction says so. `predicted` says the client expects it to place something.
+    pub fn click_block(&mut self, click: &Click, predicted: bool, takes_one: bool) -> SInventoryTransaction {
+        let slot = usize::from(self.selected);
+        let held = action_item(&self.main[slot]).unwrap_or_default();
+        let change = (takes_one && item_of(&self.main[slot]).is_some()).then(|| {
+            // Each click takes two ids in the capture, whichever transaction the second is for.
+            self.last_transaction -= 4;
+            let stack = &mut self.main[slot];
+            stack.stack_size -= 1;
+            if stack.stack_size == 0 {
+                *stack = NetworkItemStackDescriptor::default();
+                // The capture's last item goes without an id.
+                (0, NetworkItemDescriptor::default())
+            } else {
+                let mut left = held.clone();
+                left.stack_size -= 1;
+                (self.last_transaction, left)
+            }
+        });
+        click_transaction(slot as u32, held, change, click, predicted)
+    }
+
+    /// The click on air that follows a click on a block, naming what's in hand by then,
+    /// and the one that's all there is when nothing is aimed at.
+    #[must_use]
+    pub fn click_air(&self, eyes: Vector3<f32>) -> SInventoryTransaction {
+        let slot = usize::from(self.selected);
+        click_air_transaction(slot as u32, action_item(&self.main[slot]).unwrap_or_default(), eyes)
+    }
+}
+
+/// A click on a block (m5-plan Results, Step 1). `change` is an id and what the slot
+/// will hold, if it's predicted to change: a legacy line then names the slot, unless
+/// the id is 0, and an action says what happened to it.
+fn click_transaction(
+    slot: u32,
+    held: NetworkItemDescriptor,
+    change: Option<(i32, NetworkItemDescriptor)>,
+    click: &Click,
+    predicted: bool,
+) -> SInventoryTransaction {
+    let id = change.as_ref().map_or(0, |(id, _)| *id);
+    let legacy_set_item_slots = if id == 0 {
+        Vec::new()
+    } else {
+        vec![LegacySetItemSlot {
+            container_id: CONTAINER_PREDICTED,
+            slots: vec![slot as u8],
+        }]
+    };
+    let actions: Vec<InventoryAction> = change
+        .map(|(_, left)| InventoryAction {
+            source_type: SOURCE_CONTAINER,
+            window_id: Some(WINDOW_ID_INVENTORY),
+            source_flags: None,
+            inventory_slot: slot,
+            old_item: held.clone(),
+            new_item: left,
+        })
+        .into_iter()
+        .collect();
+    SInventoryTransaction {
+        legacy_request_id: VarInt(id),
+        legacy_set_item_slots,
+        has_value: !actions.is_empty(),
+        actions,
+        transaction_type: VarUInt(2),
+        transaction_data: TransactionData::UseItem(UseItemTransactionData {
+            action_type: VarInt(USE_CLICK_BLOCK),
+            trigger_type: TRIGGER_PLAYER,
+            block_position: BlockPos::new(click.block.x, click.block.y, click.block.z),
+            block_face: click.face,
+            hot_bar_slot: VarInt(slot as i32),
+            hand: HandSlot::Mainhand,
+            item_in_hand: held,
+            player_position: click.eyes,
+            click_position: click.at,
+            block_runtime_id: VarUInt(click.runtime_id),
+            client_prediction: u8::from(predicted),
+            client_cooldown_state: 0,
+        }),
+    }
+}
+
+fn click_air_transaction(slot: u32, held: NetworkItemDescriptor, eyes: Vector3<f32>) -> SInventoryTransaction {
+    SInventoryTransaction {
+        legacy_request_id: VarInt(0),
+        legacy_set_item_slots: Vec::new(),
+        has_value: false,
+        actions: Vec::new(),
+        transaction_type: VarUInt(2),
+        transaction_data: TransactionData::UseItem(UseItemTransactionData {
+            action_type: VarInt(USE_CLICK_AIR),
+            trigger_type: 0,
+            block_position: BlockPos::new(0, 0, 0),
+            block_face: NO_FACE,
+            hot_bar_slot: VarInt(slot as i32),
+            hand: HandSlot::Mainhand,
+            item_in_hand: held,
+            player_position: eyes,
+            click_position: Vector3::new(0.0, 0.0, 0.0),
+            block_runtime_id: VarUInt(0),
+            client_prediction: 0,
+            client_cooldown_state: 0,
+        }),
     }
 }
 
@@ -280,6 +410,129 @@ mod tests {
         assert_eq!(transaction.actions[0].new_item.id.0, 0);
         assert_eq!(transaction.legacy_request_id.0, -4, "ids fall by 2");
         assert!(inventory.drop_one().is_none(), "an empty hand drops nothing");
+    }
+
+    fn eyes() -> Vector3<f32> {
+        Vector3::new(1.5, 65.62, 2.5)
+    }
+
+    fn click() -> Click {
+        Click {
+            block: IVec3::new(1, 64, 2),
+            face: 1,
+            eyes: eyes(),
+            at: Vector3::new(0.25, 1.0, 0.75),
+            runtime_id: 77,
+        }
+    }
+
+    fn use_item(transaction: &SInventoryTransaction) -> &UseItemTransactionData {
+        let TransactionData::UseItem(data) = &transaction.transaction_data else {
+            panic!("a use-item transaction");
+        };
+        data
+    }
+
+    #[test]
+    fn a_click_that_places_takes_one_and_says_so() {
+        let mut inventory = Inventory::default();
+        inventory.set_slot(2, stack(5, 2));
+        inventory.select(2);
+        let transaction = inventory.click_block(&click(), true, true);
+        assert_eq!(inventory.hotbar()[2].map(|item| item.count), Some(1));
+        assert_eq!(transaction.legacy_request_id.0, -4, "as the capture's first is");
+        assert_eq!(transaction.legacy_set_item_slots[0].container_id, CONTAINER_PREDICTED);
+        assert_eq!(transaction.legacy_set_item_slots[0].slots, [2]);
+        let action = &transaction.actions[0];
+        assert_eq!((action.inventory_slot, action.old_item.stack_size, action.new_item.stack_size), (2, 2, 1));
+        let data = use_item(&transaction);
+        assert_eq!(data.item_in_hand.stack_size, 2, "what was in hand when it clicked");
+        assert_eq!((data.client_prediction, data.hot_bar_slot.0, data.block_runtime_id.0), (1, 2, 77));
+
+        // The click on air after it names what's in hand now.
+        assert_eq!(use_item(&inventory.click_air(eyes())).item_in_hand.stack_size, 1);
+
+        // The last one empties the hand, and goes without an id, as in the capture.
+        let transaction = inventory.click_block(&click(), true, true);
+        assert_eq!(inventory.hotbar()[2], None);
+        assert_eq!(transaction.legacy_request_id.0, 0);
+        assert!(transaction.legacy_set_item_slots.is_empty());
+        assert_eq!(transaction.actions[0].new_item.id.0, 0);
+    }
+
+    #[test]
+    fn a_click_that_doesnt_take_one_leaves_the_hand_alone() {
+        let mut inventory = Inventory::default();
+        inventory.set_slot(0, stack(5, 16));
+        // In creative it places, and takes nothing.
+        let transaction = inventory.click_block(&click(), true, false);
+        assert_eq!(inventory.hotbar()[0].map(|item| item.count), Some(16));
+        assert_eq!(transaction.legacy_request_id.0, 0);
+        assert!(transaction.actions.is_empty() && transaction.legacy_set_item_slots.is_empty());
+        assert_eq!(use_item(&transaction).client_prediction, 1);
+        // An empty hand has nothing to take.
+        let mut empty = Inventory::default();
+        let transaction = empty.click_block(&click(), false, true);
+        assert!(transaction.actions.is_empty());
+        assert_eq!(use_item(&transaction).client_prediction, 0);
+    }
+
+    fn fixture_block(data: &UseItemTransactionData) -> IVec3 {
+        let at = data.block_position.0;
+        IVec3::new(at.x, at.y, at.z)
+    }
+
+    /// A placement, byte for byte, against what the official client sent, on top of a
+    /// block in survival and on a side in creative.
+    #[test]
+    fn a_placement_matches_the_official_client() {
+        let fixtures: [&[u8]; 2] = [
+            include_bytes!(
+                "../../../pumpkin/crates/pumpkin-protocol/src/bedrock/client_codecs/fixtures/inventory_transaction-place_on_top.bin"
+            ),
+            include_bytes!(
+                "../../../pumpkin/crates/pumpkin-protocol/src/bedrock/client_codecs/fixtures/inventory_transaction-place_on_side.bin"
+            ),
+        ];
+        for fixture in fixtures {
+            let official = SInventoryTransaction::read(&mut &*fixture).unwrap();
+            let data = use_item(&official);
+            let click = Click {
+                block: fixture_block(data),
+                face: data.block_face,
+                eyes: data.player_position,
+                at: data.click_position,
+                runtime_id: data.block_runtime_id.0,
+            };
+            let change = official
+                .actions
+                .first()
+                .map(|action| (official.legacy_request_id.0, action.new_item.clone()));
+            let ours = click_transaction(
+                data.hot_bar_slot.0 as u32,
+                data.item_in_hand.clone(),
+                change,
+                &click,
+                data.client_prediction == 1,
+            );
+            let mut bytes = Vec::new();
+            ours.write(&mut bytes).unwrap();
+            assert_eq!(bytes, fixture);
+        }
+    }
+
+    /// The click on air that follows, byte for byte.
+    #[test]
+    fn the_click_on_air_matches_the_official_client() {
+        let fixture: &[u8] = include_bytes!(
+            "../../../pumpkin/crates/pumpkin-protocol/src/bedrock/client_codecs/fixtures/inventory_transaction-click_air.bin"
+        );
+        let official = SInventoryTransaction::read(&mut &*fixture).unwrap();
+        let data = use_item(&official);
+        let ours = click_air_transaction(data.hot_bar_slot.0 as u32, data.item_in_hand.clone(), data.player_position);
+        let mut bytes = Vec::new();
+        ours.write(&mut bytes).unwrap();
+        assert_eq!(bytes, fixture);
     }
 
     /// Q, byte for byte, against what the official client sent.

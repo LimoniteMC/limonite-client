@@ -19,6 +19,7 @@ use crate::{
     blocks::shapes::{self, Aabb},
     game::Game,
     render::camera::Camera,
+    world::World,
 };
 
 /// How far a player reaches, in blocks: Pumpkin's numbers
@@ -54,8 +55,13 @@ const fn reach(gamemode: GameMode) -> Option<f64> {
 #[must_use]
 pub fn from_camera(game: &Game, camera: &Camera) -> Option<Hit> {
     let reach = reach(game.player()?.gamemode)?;
-    let world = game.world();
-    trace(camera.position, camera.forward().as_dvec3(), reach, |block, out| {
+    in_world(game.world(), camera.position, camera.forward().as_dvec3(), reach)
+}
+
+/// What a ray from `eyes` along `look` hits in `world`, within `reach`.
+#[must_use]
+pub fn in_world(world: &World, eyes: DVec3, look: DVec3, reach: f64) -> Option<Hit> {
+    trace(eyes, look, reach, |block, out| {
         if let Some(id) = world.block(block.x, block.y, block.z, 0) {
             shapes::outline_boxes(world.blocks(), id, block.x, block.y, block.z, out);
         }
