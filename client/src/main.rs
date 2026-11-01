@@ -352,6 +352,7 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
         animator: looks.animator,
         tints,
         approximate,
+        ui: ui::load(&vanilla.stack),
     };
     let browser = args.debug_world.then(|| {
         let layout = debug_world::Layout::build(&BlockTable::build());

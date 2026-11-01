@@ -54,6 +54,7 @@ use crate::{
     },
     session::{Session, Stage},
     settings::Settings,
+    ui::{self, Ui, render::UiRenderer},
 };
 
 /// What the window draws with, prepared before it opens.
@@ -66,6 +67,7 @@ pub struct Assets {
     pub tints: Tints,
     /// The ids drawn as approximate shapes, for the census once the join settles.
     pub approximate: HashMap<u32, String>,
+    pub ui: ui::Assets,
 }
 
 /// The longest step the bench's camera takes in one frame, so a hitch doesn't
@@ -138,6 +140,10 @@ pub struct App<'a> {
     approximate: Option<HashMap<u32, String>>,
     meshes: Meshes,
     terrain: Option<Terrain>,
+    ui: Ui,
+    /// The CPU copy of the UI's atlas, until it's uploaded.
+    ui_picture: Option<image::RgbaImage>,
+    ui_renderer: Option<UiRenderer>,
     /// Placed where `StartGame` put the host, once it has spawned. It draws
     /// the player's eyes, except during the bench, which flies it.
     camera: Option<Camera>,
@@ -171,6 +177,7 @@ impl<'a> App<'a> {
     ) -> Self {
         let now = Instant::now();
         let input = Input::new(settings.keymap.clone());
+        let ui = Ui::new(assets.ui.atlas, assets.ui.font, settings.ui_scale);
         Self {
             server,
             session,
@@ -187,6 +194,9 @@ impl<'a> App<'a> {
             approximate: Some(assets.approximate),
             meshes: Meshes::default(),
             terrain: None,
+            ui,
+            ui_picture: Some(assets.ui.picture),
+            ui_renderer: None,
             camera: None,
             input,
             cursor_grabbed: false,
@@ -289,6 +299,7 @@ impl<'a> App<'a> {
         player.set_flying(true);
         player.request_teleport(Vector3::new(feet[0], feet[1], feet[2]), yaw, pitch);
         info!("Debug world: {label}");
+        self.ui.set_note(Some(&label));
         self.set_title();
     }
 
@@ -401,17 +412,27 @@ impl<'a> App<'a> {
             }
         }
 
+        self.ui.update(self.session.game());
+
         // Separate fields, borrowed separately: the frame needs the GPU
         // mutably while the terrain and meshes are read.
-        let (Some(gpu), Some(terrain)) = (&mut self.gpu, &mut self.terrain) else {
+        let (Some(gpu), Some(terrain), Some(ui_renderer)) = (&mut self.gpu, &mut self.terrain, &mut self.ui_renderer)
+        else {
             return;
         };
+        if let Some(drawing) = self.ui.drawing() {
+            ui_renderer.upload(gpu, drawing);
+        }
         if self.animated_tick != Some(self.animation_tick) {
             self.animated_tick = Some(self.animation_tick);
             terrain.animate(gpu, &mut self.animator, self.animation_tick);
         }
         let (camera, meshes) = (self.camera.as_ref(), &self.meshes);
-        let drawn = gpu.frame(|gpu, view, encoder| terrain.draw(gpu, view, encoder, camera, meshes));
+        let ui_renderer = &*ui_renderer;
+        let drawn = gpu.frame(|gpu, views, encoder| {
+            terrain.draw(gpu, &views.world, encoder, camera, meshes);
+            ui_renderer.draw(&views.ui, encoder);
+        });
         if drawn == Frame::Drawn {
             self.frames_this_second += 1;
             if let Some(bench) = &mut self.bench {
@@ -522,6 +543,11 @@ impl ApplicationHandler for App<'_> {
                 if let Some(textures) = self.textures.take() {
                     self.terrain = Some(Terrain::new(&gpu, &textures));
                 }
+                if let Some(picture) = self.ui_picture.take() {
+                    self.ui_renderer = Some(UiRenderer::new(&gpu, &picture));
+                }
+                let size = window.inner_size();
+                self.ui.resize(size.width, size.height);
                 self.gpu = Some(gpu);
             }
             Err(err) => {
@@ -546,6 +572,7 @@ impl ApplicationHandler for App<'_> {
                 if let Some(gpu) = &mut self.gpu {
                     gpu.resize(size.width, size.height);
                 }
+                self.ui.resize(size.width, size.height);
                 if let Some(camera) = &mut self.camera {
                     camera.aspect = aspect(size);
                 }
@@ -563,13 +590,17 @@ impl ApplicationHandler for App<'_> {
                     }
                 }
             }
-            // While the cursor is free, a left click only captures it. A
-            // release always counts, so a button held when the cursor was
-            // let go isn't left held.
+            WindowEvent::CursorMoved { position, .. } => self.ui.pointer_moved(position.x, position.y),
+            // While the cursor is free, a left click goes to the UI, and if the UI
+            // doesn't want it, it captures the cursor. A release always counts, so a
+            // button held when the cursor was let go isn't left held.
             WindowEvent::MouseInput { state, button, .. } => {
                 if self.cursor_grabbed || state == ElementState::Released {
                     self.input.button(Button::Mouse(button), state);
-                } else if button == MouseButton::Left {
+                    if button == MouseButton::Left {
+                        self.ui.pointer_released();
+                    }
+                } else if button == MouseButton::Left && !self.ui.pointer_pressed() {
                     self.grab_cursor();
                 }
             }

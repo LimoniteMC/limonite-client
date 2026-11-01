@@ -19,7 +19,7 @@ use super::{Gpu, SKY, animation::Animator, camera::Camera, meshes::Meshes, textu
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Six indices per quad: two triangles, 0-1-2 and 0-2-3, counter-clockwise.
-const INDICES_PER_QUAD: u32 = 6;
+pub const INDICES_PER_QUAD: u32 = 6;
 
 /// The per-frame uniform: rotation and projection.
 #[repr(C)]
@@ -415,7 +415,7 @@ fn depth_view(gpu: &Gpu) -> (wgpu::TextureView, (u32, u32)) {
 /// The index pattern for `quads` quads: 0 1 2, 0 2 3, then the same plus 4,
 /// and so on. One buffer serves every mesh, since each mesh starts its
 /// vertices at 0 (or at `base_vertex` for its blended part).
-fn index_buffer(device: &wgpu::Device, quads: u32) -> (wgpu::Buffer, u32) {
+pub fn index_buffer(device: &wgpu::Device, quads: u32) -> (wgpu::Buffer, u32) {
     use wgpu::util::DeviceExt;
     let indices: Vec<u32> = (0..quads)
         .flat_map(|quad| {

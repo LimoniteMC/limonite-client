@@ -39,6 +39,17 @@ pub struct Gpu {
     /// Only the contact sheet (`sheet.rs`) has none: it draws into a texture.
     surface: Option<wgpu::Surface<'static>>,
     pub config: wgpu::SurfaceConfiguration,
+    /// The format the UI draws in: the frame's, without the sRGB conversion, where
+    /// the frame can have a second view like that (`ui/render.rs`).
+    pub ui_format: wgpu::TextureFormat,
+}
+
+/// The two ways to draw into one frame's picture.
+pub struct Views {
+    /// In linear light, converted to sRGB on the way out.
+    pub world: wgpu::TextureView,
+    /// In `Gpu::ui_format`.
+    pub ui: wgpu::TextureView,
 }
 
 /// What became of one frame.
@@ -105,9 +116,14 @@ impl Gpu {
             .ok_or("the adapter can't present to this surface")?;
         config.format = format;
         config.present_mode = present_mode;
+        let ui_format = plain_view_format(format, adapter.get_downlevel_capabilities().flags, wgpu::DownlevelFlags::SURFACE_VIEW_FORMATS);
+        if ui_format != format {
+            config.view_formats.push(ui_format);
+        }
         surface.configure(&device, &config);
         info!(
-            "Surface: {format:?}, {present_mode:?} (offered {:?}); {} texture array layers allowed",
+            "Surface: {format:?}, {present_mode:?} (offered {:?}); the UI draws in {ui_format:?}; \
+             {} texture array layers allowed",
             capabilities.present_modes, layers
         );
         Ok(Self {
@@ -115,6 +131,7 @@ impl Gpu {
             queue,
             surface: Some(surface),
             config,
+            ui_format,
         })
     }
 
@@ -142,11 +159,13 @@ impl Gpu {
             alpha_mode: wgpu::CompositeAlphaMode::Auto,
             view_formats: Vec::new(),
         };
+        let ui_format = plain_view_format(config.format, adapter.get_downlevel_capabilities().flags, wgpu::DownlevelFlags::VIEW_FORMATS);
         Ok(Self {
             device,
             queue,
             surface: None,
             config,
+            ui_format,
         })
     }
 
@@ -166,7 +185,7 @@ impl Gpu {
     /// Acquires the next surface texture, lets `draw` record into it, then
     /// submits and presents. A surface that needs reconfiguring is
     /// reconfigured, and the frame skipped.
-    pub fn frame(&mut self, draw: impl FnOnce(&Self, &wgpu::TextureView, &mut wgpu::CommandEncoder)) -> Frame {
+    pub fn frame(&mut self, draw: impl FnOnce(&Self, &Views, &mut wgpu::CommandEncoder)) -> Frame {
         let Some(surface) = &self.surface else {
             return Frame::Skipped;
         };
@@ -185,11 +204,17 @@ impl Gpu {
                 return Frame::Skipped;
             }
         };
-        let view = texture.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let views = Views {
+            world: texture.texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            ui: texture.texture.create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.ui_format),
+                ..Default::default()
+            }),
+        };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("frame") });
-        draw(self, &view, &mut encoder);
+        draw(self, &views, &mut encoder);
         self.queue.submit([encoder.finish()]);
         self.queue.present(texture);
         if suboptimal {
@@ -197,6 +222,16 @@ impl Gpu {
         }
         Frame::Drawn
     }
+}
+
+/// The format the UI draws in. An sRGB frame can be viewed without the conversion
+/// where the adapter has the capability `needed`, and otherwise it stays as it is.
+fn plain_view_format(
+    format: wgpu::TextureFormat,
+    flags: wgpu::DownlevelFlags,
+    needed: wgpu::DownlevelFlags,
+) -> wgpu::TextureFormat {
+    if flags.contains(needed) { format.remove_srgb_suffix() } else { format }
 }
 
 /// Creates a device that meets `needs`.
@@ -292,6 +327,15 @@ mod tests {
     use wgpu::PresentMode;
 
     use super::*;
+
+    #[test]
+    fn the_ui_blends_in_gamma_where_the_frame_can_be_viewed_that_way() {
+        use wgpu::{DownlevelFlags as Flags, TextureFormat::Bgra8Unorm, TextureFormat::Bgra8UnormSrgb};
+        let needed = Flags::SURFACE_VIEW_FORMATS;
+        assert_eq!(plain_view_format(Bgra8UnormSrgb, needed, needed), Bgra8Unorm);
+        assert_eq!(plain_view_format(Bgra8UnormSrgb, Flags::empty(), needed), Bgra8UnormSrgb);
+        assert_eq!(plain_view_format(Bgra8Unorm, needed, needed), Bgra8Unorm);
+    }
 
     #[test]
     fn present_modes_fall_back_to_fifo() {
