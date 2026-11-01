@@ -60,8 +60,11 @@ _Last updated: 2026-11-01._
   - **Step 10 is done (2026-11-01):** a ray from the eyes finds the block aimed at, within Pumpkin's reach
     (`client/src/edit/aim.rs`), with an outline along its shape (`render/outline.rs`). A middle click sends the
     official client's pick, which Pumpkin ignores for now.
-  - **Next:** Step 11, breaking and placing, then its checkpoint. The owner's walk, in the debug world and beside
-    the official client, is still to come, and now takes in the HUD, the hotbar and the outline's width and darkness.
+  - **Step 11 is built (2026-11-02):** blocks break and place, with the official client's packets, and show at once
+    where the result is certain (`client/src/edit/`). A table takes back what the server refuses, and `--headless
+    --edits <n>` checks it all against the real server. Not pushed yet.
+  - **Next:** the owner's checkpoint: build something in creative and in survival, about 10 minutes, which takes in
+    the walk beside the official client: the HUD, the hotbar, the outline and the crack. Then Step 12.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -72,7 +75,9 @@ _Last updated: 2026-11-01._
   brought in.
   - **Last sync:** 2026-10-26, upstream `5e9101f` (44 commits). The fork's `limonite` is at
     `f9badd8`, and `main` bumped it in `a8f0271`.
-  - **Next sync due:** 2026-11-02.
+  - **Next sync due:** 2026-11-02, and waiting on the owner: upstream has moved to Bedrock 1.26.60 (protocol 2225, in
+    `f2cff8e65`), and a protocol bump is the owner's to decide (`docs/upstream.md`). The 25 commits before it,
+    up to `eba538f28`, change neither the protocol nor the block data, and merge without conflicts.
 - **Milestone 4 is done (2026-10-24).** Plan, results and deviations: `docs/milestones/m4-plan.md`.
   - **What it built:** a window (winit) with a wgpu device and a fly camera that flies the host;
     CPU meshes for every loaded sub-chunk, drawn with vanilla textures read at runtime from the

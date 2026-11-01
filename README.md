@@ -34,8 +34,8 @@
 
 > [!WARNING]
 > **Limonite is under heavy construction, so expect little to no functionality.** Today you can
-> walk and fly around a singleplayer world drawn with vanilla textures, with a HUD, and that's it: no
-> lighting, sky or mobs yet, and nothing to build with.
+> walk and fly around a singleplayer world drawn with vanilla textures, with a HUD, and break and place
+> blocks, and that's it: no lighting, sky or mobs yet.
 
 > [!IMPORTANT]
 > **Current phase of development: [Milestone 5, playable singleplayer](docs/milestones/m5-plan.md).**
@@ -159,6 +159,9 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
 - **A hotbar with what you carry.** Block icons come from the world's own meshes, so stairs look like stairs,
   and items from your install's pictures, with counts and the held item's name. 1 to 9 and the wheel select,
   and Q drops.
+- **Breaking and placing, at once.** What you do shows in the same frame, where the result is certain, and the
+  server has the last word: what it refuses snaps back. Survival takes the server's time, with a crack from
+  your install, and creative breaks with a click.
 - **An outline on what you aim at.** Thin dark lines along the shape of the block you're looking at, within
   reach: 4.5 blocks, or 5 in creative.
 - **A debug world.** `--debug-world` holds every block state in a grid, and you can jump to any of them.
@@ -255,6 +258,8 @@ flies). Closing the window saves the world.
 | <kbd>Space</kbd> twice | In creative: fly, or land. Flying, <kbd>Space</kbd> and <kbd>Left Shift</kbd> rise and sink |
 | <kbd>1</kbd> to <kbd>9</kbd>, the wheel | Select a hotbar slot |
 | <kbd>Q</kbd> | Drops one of the held item |
+| <kbd>Left click</kbd> | Breaks the block you aim at. Hold it to keep going |
+| <kbd>Right click</kbd> | Places the held block, or uses what you click. Hold it to keep placing |
 | <kbd>Middle click</kbd> | Picks the block you aim at, once [Pumpkin stops ignoring it](https://github.com/Pumpkin-MC/Pumpkin/issues/4321) |
 | <kbd>Esc</kbd> | Releases the mouse |
 | <kbd>P</kbd> | Logs where you are as a `/tp` command |
@@ -402,7 +407,7 @@ limonite-client/          # cargo workspace
 ├── client/               # the binary: window, renderer, world state, input, embedded server
 │   └── src/
 │       ├── blocks/       # the block palette, and how each block looks
-│       ├── edit/         # what you aim at
+│       ├── edit/         # what you aim at, and breaking and placing it
 │       ├── inventory/    # what the player carries, and what each item looks like
 │       ├── render/       # wgpu device, camera, mesher, textures, terrain shader
 │       ├── ui/           # the client's own UI: sprites, font, strings, layout, and the HUD

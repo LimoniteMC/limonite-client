@@ -1331,6 +1331,17 @@ The questions as they were asked:
     (STATUS.md, "Plant offsets"), this goes.
 43. **A pick sends `with_data` false** (Step 10). Results, Step 1 says it was true on the first and false after: of
     the capture's 17 picks, only the first is true, and nothing about it says why. Pumpkin doesn't read it.
+44. **The crack multiplies, over the block's own quads** (Step 11). Decision 9 had it in the blend pass, and the first
+    try did that, on the outline boxes. It painted gray patches, because these textures are for multiplying what's
+    under them, and it hung in the air around a fence. So it has its own pipeline, with a depth bias, and draws what
+    the mesher makes of the block alone.
+45. **The blocks that react to a click are a list** (Step 11). The server's say so in code, so the client can't ask.
+    `edit::reacts_to_use` has 41 names and 12 tags, and one that's missing only costs a block that shows for half a
+    second.
+46. **A held button repeats less than the official client's** (Step 11). With an empty hand on a block, the capture has
+    use-item clicks with trigger 2 every tick. Pumpkin takes each for a click, so holding the button on a door would
+    swing it to and fro. So ours clicks once, and only repeats with a block in hand and nothing that reacts, every 4
+    ticks. That's Java's number: the capture's gaps run from 4 to 12, by where the aim went.
 
 ## Results (filled in during execution)
 
@@ -1647,6 +1658,51 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 11: Break and place, predicted (2026-11-02)
+
+- **Commits:** `11be9f7` (breaking), `f16ea2b` (placing), `e75752b` (the headless check) and `e15c1b2` (the crack).
+- **The capture, read in tick order,** which is the spec for `edit/mod.rs`:
+  - **creative:** a click is `PlayerAction` `CreativeDestroyBlock`, and `StartDestroyBlock` with `PredictDestroyBlock`
+    in that tick's input. Held, `ContinueDestroyBlock` with `PredictDestroyBlock`, at ticks 5481, 5486, 5491, 5496 and
+    5500;
+  - **survival:** `StartDestroyBlock` at 4293, nothing per tick, then `ContinueDestroyBlock` with `PredictDestroyBlock`
+    at 4307. The next block's `ContinueDestroyBlock` is at 4313, and `AbortDestroyBlock` with face 0 at 4314;
+  - **a right click:** `StartItemUseOn` (the clicked block, where the new one goes, the face), the swing, the click on
+    the block, and one on air. `StopItemUseOn` names where the new one went when the button comes up. Ids fall by 4 a
+    click, starting at -4, and the stack's last item goes with id 0.
+- **Byte for byte:** the click on top of a block, the one on its side, and the click on air all match the official
+  client's fixtures. The tests run the capture's timelines through `Editor`, tick by tick.
+- **Survival times,** from the server's sum on `pumpkin-data`'s numbers: dirt by hand in 15 ticks, stone by hand in
+  150, and stone with a wooden pickaxe in 23.
+- **Against the real server,** with `--headless --edits 4`, which stays:
+
+  | | Creative | Survival |
+  | --- | --- | --- |
+  | 4 of dirt, placed and broken | The server applied each | The server applied each |
+  | Ticks to break dirt | 1 | 15 |
+  | Ticks to break a log, placed and broken | 1 | 59 |
+  | A click the server refuses | Snapped back | Snapped back |
+  | Click to confirmed by the server, median | 50.5 ms | 50.3 ms |
+  | The world, block for block, after | Matches | Matches |
+
+  The refused click takes away the right to build on the server, before the client has read that. The log is what
+  shows a place that isn't predicted: nothing appears until the server says.
+- **Looking at it:** pictures of the crack on stone, stairs, a slab, a fence and glass (`run/step11/shots`, gitignored),
+  which is how Deviation 44 came about.
+- **A scare that wasn't:** the screenshot run once took 27 minutes where it takes 26 s. The same run straight after,
+  on the same code, took 26 s, so it was the machine.
+- **Checks:** 348 client tests, the headless run's 8 PASS lines, and clippy with the same 2 warnings.
+- **Not verified:**
+  - nobody has clicked in the window, so click to drawn isn't measured: a headless run draws no frames. The end of a
+    session logs it now;
+  - nobody has held the crack up against the official client's, or how fast a held button repeats.
+- **Left:**
+  - no Efficiency or Haste in the client's sum, which only makes it later than the server would allow;
+  - nothing shows a drop or a falling block, since entities are Step 15; no sound or particles; no arm swings on
+    screen;
+  - a survival placement costs two items, as reported (Pumpkin-MC/Pumpkin#4130);
+  - the crack only shows the local player's.
 
 ### Step 10: Aim at blocks (2026-11-01)
 
