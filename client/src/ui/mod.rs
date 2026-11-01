@@ -20,7 +20,7 @@ pub mod layout;
 pub mod render;
 pub mod screens;
 #[cfg(test)]
-mod sheet;
+pub mod sheet;
 pub mod tree;
 
 use std::time::Instant;

@@ -102,40 +102,47 @@ impl Sheet {
             format: Some(format),
             ..Default::default()
         });
-        let row = (WIDTH * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
-        let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("hud sheet readback"),
-            size: u64::from(row * HEIGHT),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
         let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         renderer.draw(&view, &mut encoder);
-        encoder.copy_texture_to_buffer(
-            self.target.as_image_copy(),
-            wgpu::TexelCopyBufferInfo {
-                buffer: &buffer,
-                layout: wgpu::TexelCopyBufferLayout {
-                    offset: 0,
-                    bytes_per_row: Some(row),
-                    rows_per_image: Some(HEIGHT),
-                },
-            },
-            wgpu::Extent3d {
-                width: WIDTH,
-                height: HEIGHT,
-                depth_or_array_layers: 1,
-            },
-        );
-        gpu.queue.submit([encoder.finish()]);
-        buffer.slice(..).map_async(wgpu::MapMode::Read, |result| result.expect("the map"));
-        gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("the GPU");
-        let bytes = buffer.slice(..).get_mapped_range().expect("the mapped range");
-        RgbaImage::from_fn(WIDTH, HEIGHT, |x, y| {
-            let at = (y * row + x * 4) as usize;
-            Rgba([bytes[at], bytes[at + 1], bytes[at + 2], 255])
-        })
+        read_back(gpu, &self.target, encoder)
     }
+}
+
+/// Finishes `encoder`, with a copy of `target`, and returns the picture. The target is
+/// in `Rgba8UnormSrgb`, as `Gpu::offscreen` says, so its bytes are a PNG's.
+pub fn read_back(gpu: &Gpu, target: &wgpu::Texture, mut encoder: wgpu::CommandEncoder) -> RgbaImage {
+    let (width, height) = (target.width(), target.height());
+    let row = (width * 4).next_multiple_of(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT);
+    let buffer = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("picture readback"),
+        size: u64::from(row * height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    encoder.copy_texture_to_buffer(
+        target.as_image_copy(),
+        wgpu::TexelCopyBufferInfo {
+            buffer: &buffer,
+            layout: wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(row),
+                rows_per_image: Some(height),
+            },
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    gpu.queue.submit([encoder.finish()]);
+    buffer.slice(..).map_async(wgpu::MapMode::Read, |result| result.expect("the map"));
+    gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("the GPU");
+    let bytes = buffer.slice(..).get_mapped_range().expect("the mapped range");
+    RgbaImage::from_fn(width, height, |x, y| {
+        let at = (y * row + x * 4) as usize;
+        Rgba([bytes[at], bytes[at + 1], bytes[at + 2], 255])
+    })
 }
 
 /// The crops, one above another, each twice the size so its pixels can be counted.
