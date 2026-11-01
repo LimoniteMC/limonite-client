@@ -59,7 +59,7 @@ _Last updated: 2026-11-01._
     Results, "The walls that gave way").
   - **Step 10 is done (2026-11-01):** a ray from the eyes finds the block aimed at, within Pumpkin's reach
     (`client/src/edit/aim.rs`), with an outline along its shape (`render/outline.rs`). A middle click sends the
-    official client's pick, which Pumpkin ignores for now. Not pushed yet.
+    official client's pick, which Pumpkin ignores for now.
   - **Next:** Step 11, breaking and placing, then its checkpoint. The owner's walk, in the debug world and beside
     the official client, is still to come, and now takes in the HUD, the hotbar and the outline's width and darkness.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
@@ -90,8 +90,8 @@ _Last updated: 2026-11-01._
   deliberate non-seam edit: a `Weather::downfall()` accessor in `pumpkin-util/src/biome.rs`, an
   upstream candidate.
 - **Pushed, all public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
-  2026-10-24, the README and the wiki on 2026-10-25, the upstream sync, M5 through Step 9 and the
-  fix for walls giving way on 2026-11-01):
+  2026-10-24, the README and the wiki on 2026-10-25, and the upstream sync and M5 through Step 10
+  on 2026-11-01):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
   - the fork's `limonite` branch, at `15745d6`, with the M1 to M4 fork commits, the upstream sync
