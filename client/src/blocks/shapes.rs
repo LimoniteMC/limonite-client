@@ -9,7 +9,7 @@
 //! its reason.
 
 use glam::DVec3;
-use pumpkin_data::BlockStateId;
+use pumpkin_data::{Block, BlockStateId};
 use pumpkin_util::math::position::BlockPos;
 
 use crate::world::BlockTable;
@@ -114,11 +114,26 @@ pub fn collision_boxes(table: &BlockTable, bedrock: u32, x: i32, y: i32, z: i32,
     }
 }
 
+/// Where Pumpkin's plant offsets are at their far limit on both axes. At x 0
+/// and z 0 they add nothing.
+const FAR_OFFSET: (i32, i32) = (-18, -7);
+
 /// Adds the outline boxes of the block with Bedrock id `bedrock` at `(x, y, z)`,
 /// in world blocks: what aiming hits, and what the outline draws. These are
 /// exact, where [`outline`] rounds them for the mesher.
 ///
 /// An id with no Java state counts as a full cube, as it does for collisions.
+///
+/// **A plant's goes where it's drawn** (worth teaching). Java and Bedrock nudge
+/// plants off-centre by their position, and Pumpkin's boxes follow Java's nudge.
+/// This client draws them all in the middle of their block, but for bamboo's
+/// stalk (STATUS.md, "Plant offsets"). A box that's somewhere else would have you
+/// aim beside what you see, so it goes in the middle too.
+///
+/// That also gets round a Pumpkin bug. It assumes every box it holds was taken
+/// where the nudge is at its lowest limit, which holds for flowers. But Java doesn't
+/// move the boxes of grass, ferns and roots at all, so Pumpkin's end up as much as
+/// half a block away.
 pub fn outline_boxes(table: &BlockTable, bedrock: u32, x: i32, y: i32, z: i32, out: &mut Vec<Aabb>) {
     let Some(state) = table.shape_state(bedrock) else {
         out.push(Aabb::cube(x, y, z));
@@ -126,11 +141,31 @@ pub fn outline_boxes(table: &BlockTable, bedrock: u32, x: i32, y: i32, z: i32, o
     };
     let corner = DVec3::new(f64::from(x), f64::from(y), f64::from(z));
     let java = state.to_state();
-    for shape in java.get_block_outline_shapes_at(&BlockPos::new(x, y, z)).take(java.outline_shapes.len()) {
-        let min = DVec3::new(shape.min.x, shape.min.y, shape.min.z);
-        let max = DVec3::new(shape.max.x, shape.max.y, shape.max.z);
-        out.push(Aabb::new(min + corner, max + corner));
+    let boxes_at = |x: i32, z: i32| -> Vec<Aabb> {
+        java.get_block_outline_shapes_at(&BlockPos::new(x, y, z))
+            .take(java.outline_shapes.len())
+            .map(|shape| {
+                let min = DVec3::new(shape.min.x, shape.min.y, shape.min.z);
+                let max = DVec3::new(shape.max.x, shape.max.y, shape.max.z);
+                Aabb::new(min, max)
+            })
+            .collect()
+    };
+    if Block::from_state_id(state).id == Block::BAMBOO.id {
+        out.extend(boxes_at(x, z).into_iter().map(|area| area.offset(corner)));
+        return;
     }
+    let boxes = boxes_at(0, 0);
+    let to_middle = if boxes == boxes_at(FAR_OFFSET.0, FAR_OFFSET.1) {
+        DVec3::ZERO
+    } else {
+        let (low, high) = boxes.iter().fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(low, high), area| {
+            (low.min(area.min), high.max(area.max))
+        });
+        let middle = (low + high) / 2.0;
+        DVec3::new(0.5 - middle.x, 0.0, 0.5 - middle.z)
+    };
+    out.extend(boxes.into_iter().map(|area| area.offset(corner + to_middle)));
 }
 
 /// Whether a Java state's outline is exactly one whole block.
@@ -408,6 +443,68 @@ mod tests {
         let mut out = Vec::new();
         outline_boxes(&table, 0xDEAD_BEEF, 1, 2, 3, &mut out);
         assert_eq!(out, [Aabb::cube(1, 2, 3)]);
+    }
+
+    #[test]
+    fn plants_are_aimed_at_where_they_are_drawn() {
+        let table = BlockTable::build();
+        let places = [(0, 0), FAR_OFFSET, (-3, 70), (535, -10), (-1867, 1995), (12, 13)];
+        let middle = |boxes: &[Aabb]| {
+            let (low, high) = boxes.iter().fold((DVec3::INFINITY, DVec3::NEG_INFINITY), |(low, high), area| {
+                (low.min(area.min), high.max(area.max))
+            });
+            (low + high) / 2.0
+        };
+        let mut moved = Vec::new();
+        for state in (0..BlockStateId::COUNT).filter_map(BlockStateId::new) {
+            let java = state.to_state();
+            let first = |x, z| java.get_block_outline_shapes_at(&BlockPos::new(x, 64, z)).next().map(|area| area.min.x);
+            let block = Block::from_state_id(state);
+            if first(0, 0) == first(FAR_OFFSET.0, FAR_OFFSET.1) || block.id == Block::BAMBOO.id {
+                continue;
+            }
+            if !moved.contains(&block.name) {
+                moved.push(block.name);
+            }
+            // Through every id that stands for it, which is the path the game takes.
+            let id = BlockState::to_be_network_id(state);
+            for (x, z) in places {
+                let mut boxes = Vec::new();
+                outline_boxes(&table, id, x, 64, z, &mut boxes);
+                let at = middle(&boxes);
+                assert!(
+                    (at.x - f64::from(x) - 0.5).abs() < 1e-9 && (at.z - f64::from(z) - 0.5).abs() < 1e-9,
+                    "{} at ({x}, {z}): {boxes:?}",
+                    block.name
+                );
+            }
+        }
+        // Pumpkin moves these. A new one is centred too, so this is only a floor.
+        for name in ["short_grass", "tall_grass", "fern", "poppy", "dandelion", "hanging_roots", "pointed_dripstone"] {
+            assert!(moved.contains(&name), "{name} isn't among {moved:?}");
+        }
+
+        // Bamboo's stalk is the one that's drawn off-centre, and within a sixteenth of
+        // this: the mesher draws on a sixteenth grid.
+        let bamboo = BlockState::to_be_network_id(Block::BAMBOO.default_state.id);
+        let mut far = Vec::new();
+        outline_boxes(&table, bamboo, FAR_OFFSET.0, 64, FAR_OFFSET.1, &mut far);
+        let at = middle(&far);
+        assert!((at.x - f64::from(FAR_OFFSET.0) - 0.75).abs() < 1e-9, "{far:?}");
+        assert!((at.z - f64::from(FAR_OFFSET.1) - 0.75).abs() < 1e-9, "{far:?}");
+    }
+
+    #[test]
+    fn a_block_that_isnt_a_plant_keeps_its_boxes_where_they_are() {
+        let table = BlockTable::build();
+        // A closed door lies against one side of its block, whichever way it faces.
+        let door = BlockState::to_be_network_id(Block::OAK_DOOR.default_state.id);
+        let mut boxes = Vec::new();
+        outline_boxes(&table, door, 3, 64, 3, &mut boxes);
+        let (low, high) = (boxes[0].min - DVec3::new(3.0, 64.0, 3.0), boxes[0].max - DVec3::new(3.0, 64.0, 3.0));
+        let thin = high - low;
+        assert!(thin.x < 0.25 || thin.z < 0.25, "{boxes:?}");
+        assert!(low.x == 0.0 || low.z == 0.0 || high.x == 1.0 || high.z == 1.0, "{boxes:?}");
     }
 
     #[test]
