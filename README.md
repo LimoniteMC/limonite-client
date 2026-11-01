@@ -167,6 +167,13 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
 - **A baseline to beat.** 2,794, 1,016 and 166 fps at radius 8, 16 and 32, in a release build on
   the dev machine. The GPU-driven renderer has to beat it.
 
+The HUD, over a jungle coast:
+
+<img src="docs/readme/screenshots/hud.jpg" alt="A jungle coast in Limonite, with a crosshair, an empty hotbar, six and a half hearts and three and a half drumsticks" width="100%">
+
+<sub>The sprites and the font come from your install. The health and hunger were set on the server to show
+the half icons, and reached the HUD as packets, as they do in play.</sub>
+
 The same spot in the same world, at the same pose, in both clients:
 
 <table>

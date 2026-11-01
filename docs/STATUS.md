@@ -450,6 +450,8 @@ the gitignored folder.
     2026-10-25, cropped below the title bar and saved as 1600 px JPEGs. The before-and-after pair
     is one pose in Limonite and in the official client, taken with the comparison recipe above.
     Retake both once M5 draws light.
+    - **`hud.jpg`** is the owner's pick from the screenshot tool (2026-11-01), kept at 1920 px with no
+      colour subsampling, so that the HUD's pixels stay sharp. Retake it once the hotbar has items.
   - **After pushing a changed image,** github.com can show the old one for about 5 minutes, while
     GitHub's raw-file cache expires.
 - **The org's page** (`https://github.com/LimoniteMC`) is `profile/README.md` in the separate
