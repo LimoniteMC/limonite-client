@@ -860,6 +860,7 @@ irregular, and no easy way to check a given block, and suggested a debug world l
 - **Checks:** unit tests on made-up strips and fluids; sheets of fluids at several ticks; the bench with
   animation on, against without; and the headless run.
 
+## Step 8: The UI, and the HUD (client)
 
 - **`ui/`:** `atlas.rs` (sprites and nine-slices), `font.rs`, `lang.rs`, `tree.rs` and `layout.rs`,
   `render.rs` with `ui.wgsl`, and `input.rs` (the pointer and focus) (Decision 14).
