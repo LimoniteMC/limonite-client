@@ -19,7 +19,10 @@ use pumpkin_protocol::{
     bedrock::client::{
         CCorrectPlayerMovePrediction, CMovePlayer, CSetActorMotion, CSetHealth, CSetPlayerGameType,
         CSetTime, CStartGame, CUpdateAbilities, CUpdateAttributes, GameType,
+        inventory_content::CInventoryContent,
+        inventory_slot::CInventorySlot,
         network_chunk_publisher_update::CNetworkChunkPublisherUpdate,
+        player_hotbar::CPlayerHotbar,
         set_actor_data::{CSetActorData, MetadataValue, entity_data_key},
         update_block::CUpdateBlock,
     },
@@ -31,6 +34,7 @@ use tracing::warn;
 
 use crate::{
     clock::TimeOfDay,
+    inventory::{CONTAINER_MAIN, Inventory},
     packets::PacketName,
     player::{self, Abilities, Motion, Player, Pose, terrain::WorldTerrain},
     world::{Applied, ApplyError, World},
@@ -45,6 +49,8 @@ pub enum Effect {
     Player,
     /// The time of day.
     Time,
+    /// The player's inventory.
+    Inventory,
     /// Nothing the client keeps yet, or something about someone else.
     Ignored,
 }
@@ -70,6 +76,7 @@ pub struct Game {
     world: World,
     /// From `StartGame` on.
     player: Option<Player>,
+    inventory: Inventory,
     time: TimeOfDay,
     /// Ticks stepped since `StartGame`.
     ticks: u64,
@@ -82,6 +89,7 @@ impl Default for Game {
         Self {
             world: World::new(),
             player: None,
+            inventory: Inventory::default(),
             time: TimeOfDay::default(),
             ticks: 0,
             world_gamemode: GameType::Default,
@@ -109,6 +117,19 @@ impl Game {
 
     pub const fn time(&self) -> &TimeOfDay {
         &self.time
+    }
+
+    pub const fn inventory(&self) -> &Inventory {
+        &self.inventory
+    }
+
+    pub const fn inventory_mut(&mut self) -> &mut Inventory {
+        &mut self.inventory
+    }
+
+    /// Ticks stepped since `StartGame`.
+    pub const fn ticks(&self) -> u64 {
+        self.ticks
     }
 
     /// Takes the player from `StartGame`: its ids, its gamemode, and where it
@@ -160,6 +181,29 @@ impl Game {
                 let set: CSetTime = read(packet)?;
                 self.time.set(i64::from(set.time.0), self.ticks);
                 Ok(Effect::Time)
+            }
+            CInventoryContent::PACKET_ID => {
+                let content: CInventoryContent = read(packet)?;
+                if content.container_id.0 != CONTAINER_MAIN {
+                    return Ok(Effect::Ignored);
+                }
+                self.inventory.set_main(content.slots);
+                Ok(Effect::Inventory)
+            }
+            CInventorySlot::PACKET_ID => {
+                let slot: CInventorySlot = read(packet)?;
+                if slot.container_id.0 != CONTAINER_MAIN {
+                    return Ok(Effect::Ignored);
+                }
+                self.inventory.set_slot(slot.slot.0 as usize, slot.item);
+                Ok(Effect::Inventory)
+            }
+            CPlayerHotbar::PACKET_ID => {
+                let hotbar: CPlayerHotbar = read(packet)?;
+                if hotbar.should_select_slot && hotbar.selected_slot.0 < 9 {
+                    self.inventory.select(hotbar.selected_slot.0 as u8);
+                }
+                Ok(Effect::Inventory)
             }
             _ => self.apply_to_player(packet),
         }
@@ -261,7 +305,8 @@ mod tests {
             set_actor_data::{PropertySyncData, SyncedActorDataList},
             update_abilities::Ability,
         },
-        codec::{var_int::VarInt, var_ulong::VarULong},
+        bedrock::network_item::{ContainerName, FullContainerName, NetworkItemStackDescriptor},
+        codec::{var_int::VarInt, var_uint::VarUInt, var_ulong::VarULong},
     };
     use pumpkin_util::math::vector2::Vector2;
 
@@ -416,6 +461,64 @@ mod tests {
 
         apply(&mut game, &CSetHealth { health: VarInt(9) });
         assert_eq!(player(&game).attributes.health, 9.0);
+    }
+
+    fn stack(id: i16, count: u16) -> NetworkItemStackDescriptor {
+        NetworkItemStackDescriptor {
+            id,
+            stack_size: count,
+            ..NetworkItemStackDescriptor::default()
+        }
+    }
+
+    fn inventory_name() -> FullContainerName {
+        FullContainerName {
+            container_name: ContainerName::Inventory,
+            dynamic_id: None,
+        }
+    }
+
+    #[test]
+    fn the_server_says_what_the_player_carries() {
+        let mut game = game();
+        let content = |container| CInventoryContent {
+            container_id: VarUInt(container),
+            slots: vec![stack(5, 64), stack(6, 1)],
+            full_container_name: inventory_name(),
+            storage_item: NetworkItemStackDescriptor::default(),
+        };
+        assert_eq!(apply(&mut game, &content(7)), Effect::Ignored, "someone else's chest");
+        assert_eq!(game.inventory().hotbar()[0], None);
+        assert_eq!(apply(&mut game, &content(0)), Effect::Inventory);
+        assert_eq!(game.inventory().hotbar()[0].map(|item| (item.id, item.count)), Some((5, 64)));
+
+        apply(
+            &mut game,
+            &CInventorySlot {
+                container_id: VarUInt(0),
+                slot: VarUInt(3),
+                full_container_name: Some(inventory_name()),
+                storage_item: None,
+                item: stack(9, 2),
+            },
+        );
+        assert_eq!(game.inventory().hotbar()[3].map(|item| (item.id, item.count)), Some((9, 2)));
+    }
+
+    #[test]
+    fn the_server_can_select_a_slot() {
+        let mut game = game();
+        let hotbar = |slot, select| CPlayerHotbar {
+            selected_slot: VarUInt(slot),
+            container_id: 0,
+            should_select_slot: select,
+        };
+        apply(&mut game, &hotbar(4, true));
+        assert_eq!(game.inventory().selected(), 4);
+        apply(&mut game, &hotbar(6, false));
+        assert_eq!(game.inventory().selected(), 4, "it only says what's selected");
+        apply(&mut game, &hotbar(20, true));
+        assert_eq!(game.inventory().selected(), 4, "no such slot");
     }
 
     #[test]

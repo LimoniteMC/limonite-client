@@ -25,9 +25,13 @@ use super::{
     layout::Measure,
     tree::{Blend, Kind, NodeId, Tree},
 };
-use crate::render::{
-    Gpu,
-    terrain::{INDICES_PER_QUAD, index_buffer},
+use crate::{
+    inventory::items::ItemIcons,
+    render::{
+        Gpu,
+        icons::{Icon, IconQuad},
+        terrain::{INDICES_PER_QUAD, index_buffer},
+    },
 };
 
 /// Text, and whatever else draws as it is.
@@ -45,7 +49,12 @@ pub struct Vertex {
     /// In the atlas, from 0 to 1.
     pub uv: [f32; 2],
     pub color: [u8; 4],
+    /// A block icon's texture layer, and bit 16 if it's an overlay.
+    pub layer: u32,
 }
+
+/// The bit of [`Vertex::layer`] that marks an overlay.
+const OVERLAY: u32 = 1 << 16;
 
 /// Quads in a row that blend the same way.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -84,15 +93,41 @@ impl Drawing {
         ];
         let quad = self.quads();
         self.vertices.extend_from_slice(&[
-            Vertex { position: [left, top], uv: [u0, v0], color },
-            Vertex { position: [left, bottom], uv: [u0, v1], color },
-            Vertex { position: [right, bottom], uv: [u1, v1], color },
-            Vertex { position: [right, top], uv: [u1, v0], color },
+            Vertex { position: [left, top], uv: [u0, v0], color, layer: 0 },
+            Vertex { position: [left, bottom], uv: [u0, v1], color, layer: 0 },
+            Vertex { position: [right, bottom], uv: [u1, v1], color, layer: 0 },
+            Vertex { position: [right, top], uv: [u1, v0], color, layer: 0 },
         ]);
+        self.batch(blend, quad);
+    }
+
+    /// Puts quad number `quad` in the last batch, if it blends the same way.
+    fn batch(&mut self, blend: Blend, quad: u32) {
         match self.batches.last_mut() {
             Some(batch) if batch.blend == blend => batch.quads.end = quad + 1,
             _ => self.batches.push(Batch { blend, quads: quad..quad + 1 }),
         }
+    }
+
+    /// Adds one quad of a block icon drawn in `rect`. Its corners aren't square to the
+    /// screen, but they're snapped as well, so that neighbouring faces meet.
+    fn icon_quad(&mut self, rect: [f32; 4], scale: f32, icon: &IconQuad) {
+        let [left, top, right, bottom] = rect;
+        let [r, g, b] = icon.tint;
+        let color = [r, g, b, (icon.shade * 255.0) as u8];
+        let layer = u32::from(icon.layer) | if icon.overlay { OVERLAY } else { 0 };
+        let quad = self.quads();
+        for (corner, uv) in icon.corners.iter().zip(icon.uvs) {
+            let x = left + corner[0] * (right - left);
+            let y = top + corner[1] * (bottom - top);
+            self.vertices.push(Vertex {
+                position: [(x * scale).round(), (y * scale).round()],
+                uv,
+                color,
+                layer,
+            });
+        }
+        self.batch(Blend::Block, quad);
     }
 }
 
@@ -101,6 +136,7 @@ impl Drawing {
 pub struct Looks<'a> {
     pub atlas: &'a Atlas,
     pub font: &'a Font,
+    pub icons: &'a ItemIcons,
     /// How many window pixels a UI unit is.
     pub scale: f32,
 }
@@ -142,6 +178,16 @@ fn add_node(tree: &Tree, id: NodeId, looks: Looks<'_>, drawing: &mut Drawing) {
                 }
             }
         }
+        Kind::Icon(None) => {}
+        Kind::Icon(Some(Icon::Sprite(sprite))) => {
+            let source = looks.atlas.get(*sprite).source;
+            drawing.quad(looks.atlas, looks.scale, Blend::Alpha, node.rect.edges(), source, WHITE);
+        }
+        Kind::Icon(Some(Icon::Block { first, count })) => {
+            for quad in looks.icons.quads(*first, *count) {
+                drawing.icon_quad(node.rect.edges(), looks.scale, quad);
+            }
+        }
         Kind::Label(label) => {
             add_text(&label.text, [node.rect.x + SHADOW, node.rect.y + SHADOW], SHADOW_COLOR, looks, drawing);
             add_text(&label.text, [node.rect.x, node.rect.y], WHITE, looks, drawing);
@@ -168,7 +214,9 @@ fn add_text(text: &str, at: [f32; 2], color: [u8; 4], looks: Looks<'_>, drawing:
 pub struct UiRenderer {
     alpha: wgpu::RenderPipeline,
     invert: wgpu::RenderPipeline,
+    block: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
+    block_group: wgpu::BindGroup,
     screen: wgpu::Buffer,
     vertices: wgpu::Buffer,
     indices: wgpu::Buffer,
@@ -178,9 +226,10 @@ pub struct UiRenderer {
 }
 
 impl UiRenderer {
-    /// Uploads the atlas, which can then be freed, and builds the pipelines.
+    /// Uploads the atlas, which can then be freed, and builds the pipelines. `blocks` is
+    /// the terrain's texture array, which block icons sample.
     #[must_use]
-    pub fn new(gpu: &Gpu, atlas: &RgbaImage) -> Self {
+    pub fn new(gpu: &Gpu, atlas: &RgbaImage, blocks: &wgpu::TextureView) -> Self {
         let device = &gpu.device;
         let view = upload_atlas(gpu, atlas);
         // Nearest, so pixel art stays sharp at any scale.
@@ -247,21 +296,49 @@ impl UiRenderer {
                 },
             ],
         });
+        let block_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("ui block icons"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let block_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("ui block icons"),
+            layout: &block_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(blocks),
+            }],
+        });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("ui"),
-            bind_group_layouts: &[Some(&layout)],
+            bind_group_layouts: &[Some(&layout), Some(&block_layout)],
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("ui.wgsl"));
         let format = gpu.ui_format;
-        let plain = if format.is_srgb() { "fragment_linear" } else { "fragment_gamma" };
+        let (plain, block_entry) = if format.is_srgb() {
+            ("fragment_linear", "fragment_block_linear")
+        } else {
+            ("fragment_gamma", "fragment_block_gamma")
+        };
         let alpha = pipeline(device, &pipeline_layout, &shader, format, plain, wgpu::BlendState::ALPHA_BLENDING);
         let invert = pipeline(device, &pipeline_layout, &shader, format, "fragment_invert", INVERT);
+        let block = pipeline(device, &pipeline_layout, &shader, format, block_entry, wgpu::BlendState::ALPHA_BLENDING);
         let (vertices, indices) = buffers(device, QUADS_AT_FIRST);
         Self {
             alpha,
             invert,
+            block,
             bind_group,
+            block_group,
             screen,
             vertices,
             indices,
@@ -301,12 +378,14 @@ impl UiRenderer {
             ..Default::default()
         });
         pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_bind_group(1, &self.block_group, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         for batch in &self.batches {
             pass.set_pipeline(match batch.blend {
                 Blend::Alpha => &self.alpha,
                 Blend::Invert => &self.invert,
+                Blend::Block => &self.block,
             });
             pass.draw_indexed(batch.quads.start * INDICES_PER_QUAD..batch.quads.end * INDICES_PER_QUAD, 0, 0..1);
         }
@@ -374,7 +453,7 @@ fn pipeline(
     fragment: &str,
     blend: wgpu::BlendState,
 ) -> wgpu::RenderPipeline {
-    let attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4];
+    let attributes = wgpu::vertex_attr_array![0 => Float32x2, 1 => Float32x2, 2 => Unorm8x4, 3 => Uint32];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(fragment),
         layout: Some(layout),
@@ -447,7 +526,13 @@ mod tests {
 
     /// Lays the tree out in a 100 × 100 unit screen, and builds it.
     fn drawn(tree: &mut Tree, atlas: &Atlas, font: &Font, scale: f32) -> Drawing {
-        let looks = Looks { atlas, font, scale };
+        let icons = ItemIcons::default();
+        let looks = Looks {
+            atlas,
+            font,
+            icons: &icons,
+            scale,
+        };
         layout::run(tree, [100.0, 100.0], &looks);
         let mut drawing = Drawing::default();
         build(tree, looks, &mut drawing);

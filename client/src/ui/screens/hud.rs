@@ -14,15 +14,24 @@
 //! **Hunger and air fill from the right**, so those rows are built from their far end.
 //!
 //! **The experience bar** isn't in M5's HUD (Decision 15), though the space above the
-//! hotbar is its. **Armour** isn't sent by the server, because Bedrock works it out
-//! from what the player wears, so its row waits for Step 9's inventory.
+//! hotbar is its. **Armour** isn't sent by the server: Bedrock works it out from what the
+//! player wears, and Pumpkin doesn't send a Bedrock player's armour slots either. So its
+//! row waits for Step 12's inventory screen, where the client sees its own moves.
+//!
+//! **A slot** is 20 × 22, with its icon 16 × 16 in the middle of it, as the JSON has them,
+//! and the count at its bottom right.
 
 use pumpkin_util::GameMode;
 
 use crate::{
     game::Game,
+    inventory::{
+        HOTBAR, Item,
+        items::{ItemIcons, display_name},
+    },
     ui::{
         atlas::{Atlas, SpriteId},
+        lang::Lang,
         layout::{Anchor, Arrange, Axis, Layout},
         tree::{Node, NodeId, Tree},
     },
@@ -123,6 +132,8 @@ const STATS_UP: f32 = 32.0;
 const ROW_UP: f32 = 10.0;
 /// How far the bottom of a note is above the window's: over the hearts and armour.
 const NOTE_UP: f32 = 59.0;
+/// How long the held item's name stays up, in ticks.
+const NAME_TICKS: u64 = 60;
 
 /// What the HUD shows.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -131,12 +142,15 @@ pub struct HudState {
     pub health: f32,
     pub max_health: f32,
     pub hunger: f32,
-    /// Armour points, 0 to 20. Nothing fills it in until Step 9's inventory.
+    /// Armour points, 0 to 20. Nothing fills it in until Step 12's inventory screen.
     pub armour: u32,
     /// Breath, in ticks.
     pub air: f32,
-    /// The selected hotbar slot, 0 to 8. Nothing changes it until Step 9.
+    /// The selected hotbar slot, 0 to 8.
     pub selected: u8,
+    pub hotbar: [Option<Item>; HOTBAR],
+    /// The game's ticks so far.
+    pub tick: u64,
 }
 
 impl HudState {
@@ -151,7 +165,9 @@ impl HudState {
             hunger: player.attributes.hunger,
             armour: 0,
             air: player.attributes.air,
-            selected: 0,
+            selected: game.inventory().selected(),
+            hotbar: game.inventory().hotbar(),
+            tick: game.ticks(),
         })
     }
 }
@@ -255,6 +271,21 @@ pub struct Hud {
     armour: Row,
     air: Row,
     note: NodeId,
+    slots: [Slot; HOTBAR],
+    /// What each slot shows now.
+    shown: [Option<Item>; HOTBAR],
+    /// The item whose name was last put up, and when that comes down.
+    named: Option<(i16, u32)>,
+    name_until: u64,
+    /// Whether a note is up that isn't the held item's name.
+    noted: bool,
+}
+
+/// What's on a slot.
+#[derive(Clone, Copy)]
+struct Slot {
+    icon: NodeId,
+    count: NodeId,
 }
 
 impl Hud {
@@ -287,9 +318,13 @@ impl Hud {
         let hotbar = tree.add(root, Node::panel(hotbar_layout));
         let cap = Layout::px(1.0, 22.0);
         tree.add(hotbar, Node::image(cap, atlas.sprite(HOTBAR_START)));
-        for path in HOTBAR_SLOTS {
-            tree.add(hotbar, Node::image(Layout::px(SLOT, 22.0), atlas.sprite(path)));
-        }
+        let slots = HOTBAR_SLOTS.map(|path| {
+            let slot = tree.add(hotbar, Node::image(Layout::px(SLOT, 22.0), atlas.sprite(path)));
+            let icon = tree.add(slot, Node::icon(Layout::px(16.0, 16.0)));
+            let count = Layout::content().at(Anchor::BottomRight).moved(-1.0, -2.0);
+            let count = tree.add(slot, Node::label(count, "").hidden());
+            Slot { icon, count }
+        });
         tree.add(hotbar, Node::image(cap, atlas.sprite(HOTBAR_END)));
 
         // One frame that moves, after the hotbar, so that it draws over the slots on
@@ -310,6 +345,11 @@ impl Hud {
             armour,
             air,
             note,
+            slots,
+            shown: [None; HOTBAR],
+            named: None,
+            name_until: 0,
+            noted: false,
         };
         hud.select(tree, 0);
         hud
@@ -323,7 +363,7 @@ impl Hud {
     }
 
     /// Brings the HUD up to date, hiding it if there's nothing to show.
-    pub fn update(&self, tree: &mut Tree, state: Option<&HudState>) {
+    pub fn update(&mut self, tree: &mut Tree, icons: &ItemIcons, lang: &Lang, state: Option<&HudState>) {
         let Some(state) = state else {
             tree.set_visible(self.root, false);
             return;
@@ -334,6 +374,8 @@ impl Hud {
         tree.set_visible(self.hotbar, playing);
         tree.set_visible(self.selected, playing);
         self.select(tree, state.selected);
+        self.show_slots(tree, icons, &state.hotbar);
+        self.show_held_name(tree, icons, lang, state);
         tree.set_visible(self.stats, matches!(state.gamemode, GameMode::Survival | GameMode::Adventure));
 
         self.hearts.show(tree, points(state.health));
@@ -353,8 +395,41 @@ impl Hud {
         self.air.show_counted(tree, full, popping);
     }
 
-    /// Shows a line above the hotbar, or nothing.
-    pub fn set_note(&self, tree: &mut Tree, text: Option<&str>) {
+    /// Puts what's in `hotbar` on the slots. Only a slot that changed costs anything.
+    fn show_slots(&mut self, tree: &mut Tree, icons: &ItemIcons, hotbar: &[Option<Item>; HOTBAR]) {
+        for ((slot, item), shown) in self.slots.iter().zip(hotbar).zip(&mut self.shown) {
+            if item == shown {
+                continue;
+            }
+            *shown = *item;
+            tree.set_icon(slot.icon, item.and_then(|item| icons.get(item.id, item.aux)));
+            let count = item.filter(|item| item.count > 1).map(|item| item.count.to_string());
+            tree.set_visible(slot.count, count.is_some());
+            tree.set_text(slot.count, count.as_deref().unwrap_or_default());
+        }
+    }
+
+    /// Puts the held item's name up when it changes, and takes it down after a while.
+    fn show_held_name(&mut self, tree: &mut Tree, icons: &ItemIcons, lang: &Lang, state: &HudState) {
+        if self.noted {
+            return;
+        }
+        let held = state.hotbar[usize::from(state.selected).min(HOTBAR - 1)];
+        let key = held.map(|item| (item.id, item.aux));
+        if key != self.named {
+            self.named = key;
+            let name = held.and_then(|item| icons.name(item.id)).map(|name| display_name(lang, name));
+            tree.set_text(self.note, name.as_deref().unwrap_or_default());
+            tree.set_visible(self.note, name.is_some());
+            self.name_until = state.tick + NAME_TICKS;
+        } else if state.tick >= self.name_until {
+            tree.set_visible(self.note, false);
+        }
+    }
+
+    /// Shows a line above the hotbar, in place of the held item's name, or nothing.
+    pub fn set_note(&mut self, tree: &mut Tree, text: Option<&str>) {
+        self.noted = text.is_some();
         tree.set_visible(self.note, text.is_some());
         tree.set_text(self.note, text.unwrap_or_default());
     }
@@ -383,6 +458,8 @@ mod tests {
             armour: 0,
             air: MAX_AIR,
             selected: 0,
+            hotbar: [None; HOTBAR],
+            tick: 0,
         }
     }
 
@@ -390,6 +467,8 @@ mod tests {
         tree: Tree,
         hud: Hud,
         atlas: Atlas,
+        icons: ItemIcons,
+        lang: Lang,
     }
 
     impl Fixture {
@@ -397,17 +476,24 @@ mod tests {
             let atlas = atlas();
             let mut tree = Tree::new();
             let hud = Hud::build(&mut tree, &atlas);
-            let mut fixture = Self { tree, hud, atlas };
+            let mut fixture = Self {
+                tree,
+                hud,
+                atlas,
+                icons: ItemIcons::default(),
+                lang: Lang::default(),
+            };
             fixture.update(state());
             fixture
         }
 
         fn update(&mut self, state: HudState) {
-            self.hud.update(&mut self.tree, Some(&state));
+            self.hud.update(&mut self.tree, &self.icons, &self.lang, Some(&state));
             let font = Font::default();
             let looks = Looks {
                 atlas: &self.atlas,
                 font: &font,
+                icons: &self.icons,
                 scale: 3.0,
             };
             layout::run(&mut self.tree, SCREEN, &looks);
@@ -579,7 +665,7 @@ mod tests {
     fn no_player_no_hud() {
         let mut fixture = Fixture::new();
         assert!(fixture.shown(fixture.hud.root));
-        fixture.hud.update(&mut fixture.tree, None);
+        fixture.hud.update(&mut fixture.tree, &fixture.icons, &fixture.lang, None);
         assert!(!fixture.shown(fixture.hud.root));
     }
 
@@ -597,8 +683,77 @@ mod tests {
     fn a_settled_hud_changes_nothing() {
         let mut fixture = Fixture::new();
         fixture.tree.take_changed();
-        fixture.hud.update(&mut fixture.tree, Some(&state()));
+        fixture.hud.update(&mut fixture.tree, &fixture.icons, &fixture.lang, Some(&state()));
         assert!(!fixture.tree.take_changed(), "the same state is no work");
+    }
+
+    fn holding(hotbar: &[(usize, i16, u16)]) -> HudState {
+        let mut state = state();
+        for &(slot, id, count) in hotbar {
+            state.hotbar[slot] = Some(Item { id, aux: 0, count });
+        }
+        state
+    }
+
+    fn text(fixture: &Fixture, id: NodeId) -> String {
+        match &fixture.tree.node(id).kind {
+            Kind::Label(label) => label.text.clone(),
+            other => panic!("not a label: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_count_shows_only_for_more_than_one() {
+        let mut fixture = Fixture::new();
+        fixture.update(holding(&[(0, 5, 64), (1, 6, 1)]));
+        let [first, second, ..] = fixture.hud.slots;
+        assert!(fixture.shown(first.count));
+        assert_eq!(text(&fixture, first.count), "64");
+        assert!(!fixture.shown(second.count), "one needs no number");
+
+        fixture.update(state());
+        assert!(!fixture.shown(first.count), "and an empty slot has none");
+    }
+
+    #[test]
+    fn a_slots_icon_sits_in_its_middle() {
+        let fixture = Fixture::new();
+        let hotbar = fixture.rect(fixture.hud.hotbar);
+        let icon = fixture.rect(fixture.hud.slots[0].icon);
+        assert_eq!(icon.size(), [16.0, 16.0]);
+        assert_eq!(icon.x, hotbar.x + 1.0 + 2.0, "a cap, and 2 either side in a slot of 20");
+        assert_eq!(icon.y, hotbar.y + 3.0, "3 above and below in a slot of 22");
+    }
+
+    #[test]
+    fn the_held_items_name_shows_when_it_changes_and_then_goes() {
+        let mut fixture = Fixture::new();
+        fixture.hud.update(&mut fixture.tree, &fixture.icons, &fixture.lang, Some(&state()));
+        assert!(!fixture.shown(fixture.hud.note), "an empty hand has no name");
+
+        // Unknown to this fixture's icons, so it has no name to show, but the timing's the
+        // same with one: check the rule on the note itself.
+        fixture.hud.named = Some((1, 0));
+        fixture.hud.name_until = 60;
+        fixture.tree.set_visible(fixture.hud.note, true);
+        let mut later = holding(&[(0, 1, 1)]);
+        later.tick = 59;
+        fixture.hud.update(&mut fixture.tree, &fixture.icons, &fixture.lang, Some(&later));
+        assert!(fixture.shown(fixture.hud.note), "still up");
+        later.tick = 60;
+        fixture.hud.update(&mut fixture.tree, &fixture.icons, &fixture.lang, Some(&later));
+        assert!(!fixture.shown(fixture.hud.note), "and down");
+    }
+
+    #[test]
+    fn a_note_outranks_the_held_items_name() {
+        let mut fixture = Fixture::new();
+        fixture.hud.set_note(&mut fixture.tree, Some("oak_door"));
+        let mut later = holding(&[(0, 1, 1)]);
+        later.tick = 1000;
+        fixture.hud.update(&mut fixture.tree, &fixture.icons, &fixture.lang, Some(&later));
+        assert!(fixture.shown(fixture.hud.note));
+        assert_eq!(text(&fixture, fixture.hud.note), "oak_door");
     }
 
     #[test]

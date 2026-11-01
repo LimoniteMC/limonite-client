@@ -10,6 +10,7 @@ mod home;
 mod identity;
 mod input;
 mod install;
+mod inventory;
 mod login;
 mod map;
 mod measure;
@@ -336,6 +337,7 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
     let looks = blocks::build_appearance(&palette, &vanilla, jar.as_mut());
     let approximate = blocks::approximate_ids(&palette, &looks.report);
     let tints = render::load_tints(&vanilla.stack);
+    let ui_assets = ui::load(&vanilla.stack, &looks.table, &tints);
 
     let server = match start_server(args, &settings, identity) {
         Ok(server) => server,
@@ -354,7 +356,7 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
         animator: looks.animator,
         tints,
         approximate,
-        ui: ui::load(&vanilla.stack),
+        ui: ui_assets,
     };
     let browser = args.debug_world.then(|| {
         let layout = debug_world::Layout::build(&BlockTable::build());

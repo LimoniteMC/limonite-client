@@ -24,7 +24,11 @@
 //!
 //! Where to stand is what a `/tp` takes, which the `P` key logs: x, y, z, yaw and
 //! pitch. In the debug world it can be `@` and what to look for instead, with `+` for
-//! a space, and the picture gets the block's name on it.
+//! a space, and the picture gets the block's name on it. A hotbar slot can follow the
+//! seconds, to select it just before the picture, so that the item's name shows.
+//!
+//! `LIMONITE_SHOTS_HOTBAR` fills the hotbar first, through the server: item names
+//! separated by commas, each with `*` and a count if it isn't 1.
 //!
 //! **The pictures go in `run/screenshots`, which is gitignored:** they show Mojang's
 //! textures. The owner picks any that go in the README (CLAUDE.md, Rules).
@@ -36,6 +40,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use pumpkin_data::{item::Item, item_stack::ItemStack};
 use pumpkin_util::{GameMode, math::vector3::Vector3};
 
 use crate::{
@@ -78,6 +83,8 @@ struct Shot {
     hunger: u8,
     place: Place,
     seconds: f32,
+    /// The hotbar slot to select just before the picture.
+    slot: Option<u8>,
 }
 
 enum Place {
@@ -105,6 +112,7 @@ impl Shot {
             hunger: hunger.parse().ok()?,
             place,
             seconds: parts.get(rest).and_then(|part| part.parse().ok()).unwrap_or(0.0),
+            slot: parts.get(rest + 1).and_then(|part| part.parse().ok()),
         })
     }
 }
@@ -187,6 +195,21 @@ impl Studio {
         println!("Still loading after {} s; taking it anyway", LOADING.as_secs());
     }
 
+    /// Fills the hotbar through the server: item names, each with `*` and a count if it
+    /// isn't 1. It reaches the client as it does in play, as `InventorySlot`s.
+    fn fill_hotbar(&mut self, list: &str) {
+        let _runtime = self.server.runtime.enter();
+        let players = self.server.server.get_all_players();
+        let player = players.first().expect("the player");
+        for (slot, entry) in (0_i16..).zip(list.split(',')) {
+            let (name, count) = entry.split_once('*').unwrap_or((entry, "1"));
+            let item = Item::from_registry_key(name.trim()).unwrap_or_else(|| panic!("no item called `{name}`"));
+            let mut stack = ItemStack::new(count.parse().expect("a count"), item);
+            player.inventory().insert_stack(slot, &mut stack);
+        }
+        player.sync_inventory_to_client();
+    }
+
     /// Sets what the server knows of the player.
     fn set_player(&self, shot: &Shot) {
         let _runtime = self.server.runtime.enter();
@@ -216,6 +239,13 @@ impl Studio {
         self.set_player(shot);
         for _ in 0..(shot.seconds * 20.0) as u32 + 10 {
             self.step();
+        }
+        if let Some(slot) = shot.slot {
+            self.session.select_slot(slot);
+            // One tick for the HUD to see it, and a few for the server.
+            for _ in 0..3 {
+                self.step();
+            }
         }
         self.ui.set_note(note.as_deref());
         self.ui.update(self.session.game());
@@ -276,7 +306,7 @@ fn screenshots() {
     let mut jar = blocks::find_jar(args.java_jar.as_deref()).unwrap();
     let looks = blocks::build_appearance(&palette, &vanilla, jar.as_mut());
     let tints = render::load_tints(&vanilla.stack);
-    let ui_assets = ui::load(&vanilla.stack);
+    let ui_assets = ui::load(&vanilla.stack, &looks.table, &tints);
     let server = start_server(&args, &settings, &identity).unwrap();
     let browser = args.debug_world.then(|| {
         let layout = debug_world::Layout::build(&BlockTable::build());
@@ -290,7 +320,7 @@ fn screenshots() {
     };
     let gpu = Gpu::offscreen(WIDTH, HEIGHT, &needs).expect("a GPU");
     let terrain = Terrain::new(&gpu, &looks.textures);
-    let ui_renderer = UiRenderer::new(&gpu, &ui_assets.picture);
+    let ui_renderer = UiRenderer::new(&gpu, &ui_assets.picture, &terrain.texture_view);
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("screenshot"),
         size: wgpu::Extent3d {
@@ -305,7 +335,7 @@ fn screenshots() {
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[gpu.ui_format],
     });
-    let mut ui = Ui::new(ui_assets.atlas, ui_assets.font, settings.ui_scale);
+    let mut ui = Ui::new(ui_assets.atlas, ui_assets.font, ui_assets.lang, ui_assets.icons, settings.ui_scale);
     ui.resize(WIDTH, HEIGHT);
 
     let mut session = Session::connect(&server.connector, &settings.name, identity.xid(), settings.radius).unwrap();
@@ -340,6 +370,9 @@ fn screenshots() {
         pose,
         browser,
     };
+    if let Ok(list) = std::env::var("LIMONITE_SHOTS_HOTBAR") {
+        studio.fill_hotbar(&list);
+    }
     for shot in &shots {
         studio.shoot(shot, &out);
     }

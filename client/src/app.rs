@@ -177,7 +177,7 @@ impl<'a> App<'a> {
     ) -> Self {
         let now = Instant::now();
         let input = Input::new(settings.keymap.clone());
-        let ui = Ui::new(assets.ui.atlas, assets.ui.font, settings.ui_scale);
+        let ui = Ui::new(assets.ui.atlas, assets.ui.font, assets.ui.lang, assets.ui.icons, settings.ui_scale);
         Self {
             server,
             session,
@@ -543,8 +543,8 @@ impl ApplicationHandler for App<'_> {
                 if let Some(textures) = self.textures.take() {
                     self.terrain = Some(Terrain::new(&gpu, &textures));
                 }
-                if let Some(picture) = self.ui_picture.take() {
-                    self.ui_renderer = Some(UiRenderer::new(&gpu, &picture));
+                if let (Some(picture), Some(terrain)) = (self.ui_picture.take(), &self.terrain) {
+                    self.ui_renderer = Some(UiRenderer::new(&gpu, &picture, &terrain.texture_view));
                 }
                 let size = window.inner_size();
                 self.ui.resize(size.width, size.height);

@@ -35,6 +35,8 @@ pub struct Terrain {
     bind_group: wgpu::BindGroup,
     /// The texture array, which animation writes into.
     textures: wgpu::Texture,
+    /// A view of it, which the UI's block icons sample too.
+    pub texture_view: wgpu::TextureView,
     frame: wgpu::Buffer,
     depth: wgpu::TextureView,
     depth_size: (u32, u32),
@@ -164,6 +166,7 @@ impl Terrain {
         let instances = instance_buffer(device, instance_capacity);
         Self {
             textures: uploaded,
+            texture_view,
             opaque,
             blend,
             bind_group,

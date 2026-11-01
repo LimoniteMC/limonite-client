@@ -130,6 +130,34 @@ impl Pack {
         Ok(archive.and_then(|archive| archive.get(file).map(<[u8]>::to_vec)))
     }
 
+    /// The names of the files directly in `folder`: loose ones and those in its
+    /// archive. Empty if it has neither.
+    ///
+    /// # Errors
+    /// A bad path, a read error, or a damaged archive for the folder.
+    pub fn list(&self, folder: &str) -> Result<Vec<String>, PackError> {
+        let parts = plain_parts(folder)?;
+        let loose = parts.iter().fold(self.dir.clone(), |dir, part| dir.join(part));
+        let mut names = Vec::new();
+        match std::fs::read_dir(&loose) {
+            Ok(entries) => {
+                let files = entries.flatten().filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_file()));
+                names.extend(files.map(|entry| entry.file_name().to_string_lossy().into_owned()));
+            }
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(PackError::Io {
+                    file: loose,
+                    error: Arc::new(err),
+                });
+            }
+        }
+        if let Some(archive) = self.archive(folder)? {
+            names.extend(archive.names().map(str::to_string));
+        }
+        Ok(names)
+    }
+
     /// The archive for `folder`, opened and checked on first use.
     fn archive(&self, folder: &str) -> CachedArchive {
         // A poisoned lock only means another thread panicked mid-insert; the

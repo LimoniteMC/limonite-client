@@ -333,7 +333,7 @@ fn size_in(tree: &Tree, id: NodeId, parent: [f32; 2], measure: &impl Measure) ->
 fn content(tree: &Tree, id: NodeId, measure: &impl Measure) -> [f32; 2] {
     let node = tree.node(id);
     let own = match &node.kind {
-        Kind::Panel => [0.0, 0.0],
+        Kind::Panel | Kind::Icon(_) => [0.0, 0.0],
         Kind::Image(image) => image.sprite.map_or([0.0, 0.0], |sprite| measure.image(sprite)),
         Kind::Label(label) => measure.text(&label.text),
     };

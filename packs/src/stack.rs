@@ -6,6 +6,7 @@
 //! instead; see [`crate::registry`].
 
 use std::{
+    collections::BTreeMap,
     fmt, io,
     path::{Path, PathBuf},
 };
@@ -115,6 +116,21 @@ impl PackStack {
         path: &'a str,
     ) -> impl Iterator<Item = (&'a Pack, Result<Option<Vec<u8>>, PackError>)> + 'a {
         self.packs.iter().map(move |pack| (pack, pack.read(path)))
+    }
+
+    /// The files directly in `folder`, each with the index of the pack whose copy
+    /// counts: the highest that has it. A pack that can't be listed is passed over.
+    ///
+    /// Reading many files this way saves asking every pack for each one.
+    #[must_use]
+    pub fn list(&self, folder: &str) -> BTreeMap<String, usize> {
+        let mut files = BTreeMap::new();
+        for (index, pack) in self.packs.iter().enumerate() {
+            for name in pack.list(folder).unwrap_or_default() {
+                files.insert(name, index);
+            }
+        }
+        files
     }
 
     /// The vanilla stack in a Bedrock install's `resource_packs` folder.
@@ -230,6 +246,25 @@ mod tests {
 
     fn stack_of(dir: &TempDir, names: &[&str]) -> PackStack {
         PackStack::new(names.iter().map(|name| Pack::new(dir.path().join(name))).collect())
+    }
+
+    #[test]
+    fn a_listing_says_which_pack_has_each_file() {
+        let dir = TempDir::new("listing");
+        dir.write("low/textures/items/apple.png", b"low apple");
+        dir.write("low/textures/items/bread.png", b"low bread");
+        dir.write("low/textures/items/sub/not_this.png", b"deeper");
+        dir.write(
+            "high/__brarchive/textures/items.brarchive",
+            &archive(&[("apple.png", b"high apple"), ("coal.png", b"high coal")]),
+        );
+        let stack = stack_of(&dir, &["low", "high"]);
+        let files: Vec<(String, usize)> = stack.list("textures/items").into_iter().collect();
+        assert_eq!(
+            files,
+            [("apple.png".to_string(), 1), ("bread.png".to_string(), 0), ("coal.png".to_string(), 1)]
+        );
+        assert!(stack.list("textures/nothing").is_empty());
     }
 
     #[test]

@@ -22,6 +22,7 @@ use pumpkin_protocol::{
             CResourcePacksInfo, CStartGame, GameType,
         },
         server::{
+            mob_equipment::SMobEquipment,
             player_auth_input::{InputData, SPlayerAuthInput},
             request_chunk_radius::SRequestChunkRadius,
             resource_pack_client_response::SResourcePackClientResponse,
@@ -40,6 +41,7 @@ use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tracing::{debug, info, warn};
 
 use crate::{
+    inventory::CONTAINER_MAIN,
     clock::TICK,
     game::{Effect, Game},
     login,
@@ -636,6 +638,31 @@ impl Session {
     }
 
     /// Frames and queues one packet for the server.
+    /// Selects a hotbar slot, and tells the server, as the official client does on every
+    /// change. The packet names the item now in hand.
+    pub fn select_slot(&mut self, slot: u8) {
+        if !self.game.inventory_mut().select(slot) {
+            return;
+        }
+        let Some(player) = self.game.player() else {
+            return;
+        };
+        self.send(&SMobEquipment {
+            entity_runtime_id: VarULong(player.runtime_id),
+            item: self.game.inventory().held().clone(),
+            slot,
+            selected_slot: slot,
+            container_id: CONTAINER_MAIN as u8,
+        });
+    }
+
+    /// Drops one of the held item, if there is one.
+    pub fn drop_held(&mut self) {
+        if let Some(transaction) = self.game.inventory_mut().drop_one() {
+            self.send(&transaction);
+        }
+    }
+
     fn send<P: BClientPacket>(&self, packet: &P) {
         let batch = match packets::frame(packet) {
             Ok(batch) => batch,

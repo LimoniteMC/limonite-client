@@ -38,7 +38,13 @@ use self::{
     screens::hud::{self, Hud, HudState},
     tree::Tree,
 };
-use crate::{game::Game, settings::UiScale};
+use crate::{
+    blocks::appearance::AppearanceTable,
+    game::Game,
+    inventory::items::{self, ItemIcons},
+    render::tint::Tints,
+    settings::UiScale,
+};
 
 /// The smallest screen the UI is laid out for, in UI units (m5-plan Decision 14).
 const MIN_SCREEN: [u32; 2] = [320, 240];
@@ -64,24 +70,26 @@ pub struct Assets {
     /// Uploaded when the GPU comes up, then freed.
     pub picture: RgbaImage,
     pub font: Font,
+    pub lang: Lang,
+    pub icons: ItemIcons,
 }
 
 /// Reads the strings, the sprites the screens ask for and the font's sheets, and logs
 /// what it found and what's missing. A missing sprite draws as nothing, and a missing
 /// sheet's characters as spaces: the game goes on.
-pub fn load(stack: &PackStack) -> Assets {
-    load_with(stack, &[])
+pub fn load(stack: &PackStack, table: &AppearanceTable, tints: &Tints) -> Assets {
+    load_with(stack, table, tints, &[])
 }
 
 /// As [`load`], with some more sprites.
-fn load_with(stack: &PackStack, extra: &[&str]) -> Assets {
+fn load_with(stack: &PackStack, table: &AppearanceTable, tints: &Tints, extra: &[&str]) -> Assets {
     let start = Instant::now();
     let (lang, problems) = Lang::load(stack);
     for problem in &problems {
         warn!("Skipped a strings file: {problem}");
     }
     let mut missing = Vec::new();
-    let mut inputs: Vec<Input> = Vec::new();
+    let (pictures, mut inputs) = items::read_pictures(stack);
     let mut take = |path: &str, read: Result<Input, String>| match read {
         Ok(input) => inputs.push(input),
         Err(reason) => missing.push(format!("{path} ({reason})")),
@@ -104,6 +112,7 @@ fn load_with(stack: &PackStack, extra: &[&str]) -> Assets {
         warn!("{ASCII_CELLS} is missing or not as expected, so the font's cells are taken to be square");
     }
     let font = Font::new(&atlas, &picture, cells.unwrap_or(AsciiCells::PLAIN), &pages);
+    let icons = items::build_icons(&pictures, &atlas, table, tints);
 
     if !missing.is_empty() {
         warn!("Missing from the install, so the UI goes without: {}", missing.join("; "));
@@ -124,7 +133,13 @@ fn load_with(stack: &PackStack, extra: &[&str]) -> Assets {
         STRINGS.len(),
         start.elapsed().as_secs_f64() * 1000.0,
     );
-    Assets { atlas, picture, font }
+    Assets {
+        atlas,
+        picture,
+        font,
+        lang,
+        icons,
+    }
 }
 
 /// How many window pixels a UI unit is.
@@ -144,6 +159,8 @@ pub struct Ui {
     hud: Hud,
     atlas: Atlas,
     font: Font,
+    lang: Lang,
+    icons: ItemIcons,
     setting: UiScale,
     /// The window's size in pixels, and how many pixels a UI unit is.
     window: [u32; 2],
@@ -155,7 +172,7 @@ pub struct Ui {
 impl Ui {
     /// Builds the screens.
     #[must_use]
-    pub fn new(atlas: Atlas, font: Font, setting: UiScale) -> Self {
+    pub fn new(atlas: Atlas, font: Font, lang: Lang, icons: ItemIcons, setting: UiScale) -> Self {
         let mut tree = Tree::new();
         let hud = Hud::build(&mut tree, &atlas);
         Self {
@@ -163,6 +180,8 @@ impl Ui {
             hud,
             atlas,
             font,
+            lang,
+            icons,
             setting,
             window: [1, 1],
             scale: 1,
@@ -183,7 +202,7 @@ impl Ui {
 
     /// Brings the screens up to date with the game.
     pub fn update(&mut self, game: &Game) {
-        self.hud.update(&mut self.tree, HudState::of(game).as_ref());
+        self.hud.update(&mut self.tree, &self.icons, &self.lang, HudState::of(game).as_ref());
     }
 
     /// Shows a line above the hotbar, or nothing.
@@ -200,6 +219,7 @@ impl Ui {
         let looks = Looks {
             atlas: &self.atlas,
             font: &self.font,
+            icons: &self.icons,
             scale: self.scale as f32,
         };
         layout::run(&mut self.tree, screen, &looks);
@@ -263,6 +283,10 @@ pub mod tests {
         Atlas::pack(inputs).0
     }
 
+    fn ui(setting: UiScale) -> Ui {
+        Ui::new(atlas(), Font::default(), Lang::default(), ItemIcons::default(), setting)
+    }
+
     #[test]
     fn the_automatic_scale_is_the_largest_that_fits() {
         let auto = |width, height| scale_for(UiScale::Auto, width, height);
@@ -282,7 +306,7 @@ pub mod tests {
 
     #[test]
     fn nothing_changing_draws_nothing_new() {
-        let mut ui = Ui::new(atlas(), Font::default(), UiScale::Auto);
+        let mut ui = ui(UiScale::Auto);
         ui.resize(1280, 720);
         assert!(ui.drawing().is_some(), "the first frame");
         assert!(ui.drawing().is_none());
@@ -297,7 +321,7 @@ pub mod tests {
 
     #[test]
     fn a_minimised_window_keeps_its_last_size() {
-        let mut ui = Ui::new(atlas(), Font::default(), UiScale::Auto);
+        let mut ui = ui(UiScale::Auto);
         ui.resize(1280, 720);
         ui.drawing();
         ui.resize(0, 0);
@@ -307,7 +331,7 @@ pub mod tests {
 
     #[test]
     fn the_screen_is_in_units_and_the_pointer_too() {
-        let mut ui = Ui::new(atlas(), Font::default(), UiScale::Fixed(2));
+        let mut ui = ui(UiScale::Fixed(2));
         ui.resize(800, 600);
         assert_eq!(ui.screen(), [400.0, 300.0]);
         // Nothing on the HUD takes a click, so the game gets it.

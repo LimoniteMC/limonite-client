@@ -19,8 +19,9 @@ use pumpkin_util::GameMode;
 
 use super::{Ui, load_with, render::UiRenderer, screens::hud::HudState, tree::Node};
 use crate::{
-    install,
-    render::{Gpu, Needs},
+    blocks, install,
+    inventory::{HOTBAR, Item},
+    render::{self, Gpu, Needs, terrain::Terrain},
     settings::UiScale,
     ui::layout::{Anchor, Layout},
 };
@@ -145,6 +146,20 @@ pub fn read_back(gpu: &Gpu, target: &wgpu::Texture, mut encoder: wgpu::CommandEn
     })
 }
 
+/// A hotbar of these items, with a few to a stack here and there.
+fn hotbar_of(names: &[&str; HOTBAR]) -> [Option<Item>; HOTBAR] {
+    std::array::from_fn(|slot| {
+        let wanted = format!("minecraft:{}", names[slot]);
+        let items = pumpkin_data::item::BedrockItem::ALL_BEDROCK_ITEMS;
+        let item = items.iter().find(|item| item.registry_key == wanted);
+        item.map(|item| Item {
+            id: item.id,
+            aux: 0,
+            count: if slot % 3 == 0 { 64 } else { 1 },
+        })
+    })
+}
+
 /// The crops, one above another, each twice the size so its pixels can be counted.
 fn zoomed(pictures: &[RgbaImage]) -> RgbaImage {
     let [x, y, width, height] = CROP;
@@ -160,28 +175,34 @@ fn zoomed(pictures: &[RgbaImage]) -> RgbaImage {
 #[test]
 #[ignore = "needs a GPU and a Bedrock install; set LIMONITE_BEDROCK"]
 fn hud_sheets() {
+    let _ = tracing_subscriber::fmt().try_init();
     let dir = std::env::var_os("LIMONITE_BEDROCK").expect("LIMONITE_BEDROCK is set");
     let install = install::find(Some(std::path::Path::new(&dir))).unwrap();
     let vanilla = install::load_vanilla(&install).unwrap();
-    let assets = load_with(&vanilla.stack, &[NINE_SLICED]);
+    let palette = blocks::load_palette().unwrap();
+    let mut jar = blocks::find_jar(None).unwrap();
+    let looks = blocks::build_appearance(&palette, &vanilla, jar.as_mut());
+    let tints = render::load_tints(&vanilla.stack);
+    let assets = load_with(&vanilla.stack, &looks.table, &tints, &[NINE_SLICED]);
     let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../run/sheets");
     std::fs::create_dir_all(&out).unwrap();
     assets.picture.save(out.join("hud-atlas.png")).unwrap();
 
     let needs = Needs {
-        texture_layers: 1,
+        texture_layers: looks.textures.layers,
         uncapped: false,
     };
     let mut gpu = Gpu::offscreen(WIDTH, HEIGHT, &needs).expect("a GPU");
     println!("The frame is {:?}, and the UI draws in {:?}", gpu.config.format, gpu.ui_format);
-    let mut gamma = UiRenderer::new(&gpu, &assets.picture);
+    let terrain = Terrain::new(&gpu, &looks.textures);
+    let mut gamma = UiRenderer::new(&gpu, &assets.picture, &terrain.texture_view);
     let frame_format = gpu.config.format;
     let gamma_format = std::mem::replace(&mut gpu.ui_format, frame_format);
-    let mut linear = UiRenderer::new(&gpu, &assets.picture);
+    let mut linear = UiRenderer::new(&gpu, &assets.picture, &terrain.texture_view);
     gpu.ui_format = gamma_format;
     let sheet = Sheet::new(gpu);
 
-    let mut ui = Ui::new(assets.atlas, assets.font, UiScale::Auto);
+    let mut ui = Ui::new(assets.atlas, assets.font, assets.lang, assets.icons, UiScale::Auto);
     ui.resize(WIDTH, HEIGHT);
     let base = HudState {
         gamemode: GameMode::Survival,
@@ -191,6 +212,8 @@ fn hud_sheets() {
         armour: 0,
         air: 300.0,
         selected: 0,
+        hotbar: hotbar_of(&["dirt", "oak_log", "poppy", "torch", "oak_stairs", "diamond_sword", "apple", "oak_fence", "grass_block"]),
+        tick: 0,
     };
     let cases = [
         ("survival-full", base, None),
@@ -218,7 +241,7 @@ fn hud_sheets() {
     ];
     let mut pictures = Vec::new();
     for (name, state, note) in &cases {
-        ui.hud.update(&mut ui.tree, Some(state));
+        ui.hud.update(&mut ui.tree, &ui.icons, &ui.lang, Some(state));
         ui.set_note(*note);
         let picture = sheet.draw(&mut ui, &mut gamma, gamma_format);
         picture.save(out.join(format!("hud-{name}.png"))).unwrap();
@@ -226,7 +249,7 @@ fn hud_sheets() {
     }
 
     // The same, blended in linear light, as on an adapter without the second view.
-    ui.hud.update(&mut ui.tree, Some(&cases[1].1));
+    ui.hud.update(&mut ui.tree, &ui.icons, &ui.lang, Some(&cases[1].1));
     ui.set_note(None);
     ui.tree.invalidate();
     pictures.push(sheet.draw(&mut ui, &mut linear, frame_format));

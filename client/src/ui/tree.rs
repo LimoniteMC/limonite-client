@@ -19,6 +19,7 @@ use super::{
     atlas::SpriteId,
     layout::{Layout, Offset, Rect},
 };
+use crate::render::icons::Icon;
 
 /// A node of a [`Tree`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -32,6 +33,8 @@ pub enum Blend {
     Alpha,
     /// It inverts what's behind it, so the crosshair shows against anything.
     Invert,
+    /// As its alpha says, from the terrain's textures: a block icon.
+    Block,
 }
 
 /// A picture, or nothing yet.
@@ -54,6 +57,8 @@ pub enum Kind {
     Panel,
     Image(Image),
     Label(Label),
+    /// What an item looks like, or nothing.
+    Icon(Option<Icon>),
 }
 
 /// One widget.
@@ -97,6 +102,11 @@ impl Node {
     pub fn label(layout: Layout, text: &str) -> Self {
         let text = text.to_string();
         Self::new(layout, Kind::Label(Label { text }))
+    }
+
+    #[must_use]
+    pub fn icon(layout: Layout) -> Self {
+        Self::new(layout, Kind::Icon(None))
     }
 
     /// Starts hidden.
@@ -189,6 +199,17 @@ impl Tree {
             && image.sprite != sprite
         {
             image.sprite = sprite;
+            self.changed = true;
+        }
+    }
+
+    /// Changes an icon.
+    pub fn set_icon(&mut self, id: NodeId, icon: Option<Icon>) {
+        let node = self.node_mut(id);
+        if let Kind::Icon(current) = &mut node.kind
+            && *current != icon
+        {
+            *current = icon;
             self.changed = true;
         }
     }

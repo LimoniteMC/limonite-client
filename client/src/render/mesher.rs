@@ -273,6 +273,16 @@ impl Neighbourhood {
         }
     }
 
+    /// One block alone, in the middle of a sub-chunk at the origin: an icon's.
+    #[must_use]
+    pub fn single(table: &AppearanceTable, biome: u32, id: u32) -> Self {
+        let mut n = Self::empty([0, 0, 0], table);
+        n.biomes = [biome; 256];
+        // The cells count from the border, so block 8 is cell 9.
+        n.set(table, 0, cell(9, 9, 9), id);
+        n
+    }
+
     /// A neighbourhood from a function of block coordinates relative to the
     /// sub-chunk (-1 to 16 on each axis) and the layer.
     #[cfg(test)]
