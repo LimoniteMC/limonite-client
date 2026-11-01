@@ -390,6 +390,16 @@ impl<'a> App<'a> {
                 // Until the pause menu (Step 16).
                 Action::Pause => self.release_cursor(),
                 Action::LogPose => self.log_pose(),
+                Action::Hotbar(slot) => self.session.select_slot(slot),
+                Action::HotbarNext => {
+                    let slot = self.session.game().inventory().next_slot();
+                    self.session.select_slot(slot);
+                }
+                Action::HotbarPrevious => {
+                    let slot = self.session.game().inventory().previous_slot();
+                    self.session.select_slot(slot);
+                }
+                Action::Drop => self.session.drop_held(),
                 _ => {}
             }
         }
