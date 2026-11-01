@@ -323,6 +323,9 @@ no Bedrock install needed):
 RUST_LOG=info,limonite_client=debug cargo run -p limonite-client -- --headless --map run/m3/map.png
 ```
 
+Add `--edits 4` to place and break blocks with the real packets, on a stone floor it builds for itself at y 200, and
+`--gamemode survival` for the server's times. A new world's spawn is random, so a check has to go the same in any.
+
 - **What it does:**
   1. Starts the embedded server and joins as the host.
   2. Walks 8 blocks east, has the server teleport it 5 blocks up, then waits for the join's

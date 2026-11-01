@@ -43,7 +43,7 @@ use pumpkin_util::{
     GameMode,
     math::{position::BlockPos, vector2::Vector2, vector3::Vector3},
 };
-use pumpkin_world::{CURRENT_BEDROCK_MC_PROTOCOL, CURRENT_BEDROCK_MC_VERSION};
+use pumpkin_world::{CURRENT_BEDROCK_MC_PROTOCOL, CURRENT_BEDROCK_MC_VERSION, world::BlockFlags};
 use tracing::{debug, error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
@@ -77,6 +77,9 @@ const SPAWN_DEADLINE: Duration = Duration::from_secs(120);
 const WALK_TICKS: u32 = 40;
 /// How far the scripted edits reach, which is in reach in any gamemode.
 const EDIT_REACH: f64 = 4.4;
+/// How high the scripted edits' floor is, and how far out it goes each way.
+const EDIT_FLOOR_Y: i32 = 200;
+const EDIT_FLOOR: i32 = 5;
 /// How far off it looks for something to click, so that the middle of a block put
 /// there is in reach too.
 const CLICK_REACH: f64 = 3.4;
@@ -734,9 +737,25 @@ fn edits_and_check(session: &mut Session, server: &EmbeddedServer, blocks: u32) 
     player.inventory().insert_stack(0, &mut ItemStack::new(64, &Item::DIRT));
     player.inventory().insert_stack(1, &mut ItemStack::new(64, &Item::OAK_LOG));
     player.sync_inventory_to_client();
-    // The teleport check left the host in the air, and the stacks take a tick or two.
+    // A floor of its own, high up in clear air, so that this goes the same in any world:
+    // a host can just as well spawn over the sea, with nothing in reach.
+    let at = player.position();
+    let (x, z) = (at.x.floor() as i32, at.z.floor() as i32);
+    for dx in -EDIT_FLOOR..=EDIT_FLOOR {
+        for dz in -EDIT_FLOOR..=EDIT_FLOOR {
+            let stone = Block::STONE.default_state.id;
+            world.set_block_state(&BlockPos::new(x + dx, EDIT_FLOOR_Y, z + dz), stone, BlockFlags::NOTIFY_ALL);
+        }
+    }
+    let on_it = Vector3::new(f64::from(x) + 0.5, f64::from(EDIT_FLOOR_Y) + 1.0, f64::from(z) + 0.5);
+    player.request_teleport(on_it, 0.0, 0.0);
+    // The stacks, the floor and the teleport all take a tick or two.
     let _ = session.run_until(Instant::now() + SETTLE, |session| {
-        session.game().player().is_some_and(|player| player.on_ground) && session.game().inventory().hotbar()[1].is_some()
+        let on_the_floor = session
+            .game()
+            .player()
+            .is_some_and(|player| player.on_ground && player.pose().feet.y >= f64::from(EDIT_FLOOR_Y));
+        on_the_floor && session.game().inventory().hotbar()[1].is_some()
     });
     let gamemode = session.game().player().map(|player| player.gamemode);
     let mut ground = clicks_in_reach(session).into_iter();
