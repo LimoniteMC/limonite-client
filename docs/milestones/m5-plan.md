@@ -1015,7 +1015,7 @@ irregular, and no easy way to check a given block, and suggested a debug world l
 
 - **Approval:** done on 2026-10-24, with five amendments (Status, at the top).
 - **Step 1:** the capture session (about 30 minutes). Keep Bedrock at 1.26.52 for the whole
-  milestone (STATUS.md, Gotchas, "Exact protocol").
+  milestone (STATUS.md, Gotchas, "Exact protocol"). The Store didn't (Deviation 47).
 - **Checkpoints:** after Steps 7, 11, 14 and 16 (5 to 10 minutes each). Each is a go/no-go point
   (Decision 1): the owner hears what's done, what's left and how long it took, and decides whether
   to go on or to tick M5 and split the rest off.
@@ -1342,6 +1342,16 @@ The questions as they were asked:
     use-item clicks with trigger 2 every tick. Pumpkin takes each for a click, so holding the button on a door would
     swing it to and fro. So ours clicks once, and only repeats with a block in hand and nothing that reacts, every 4
     ticks. That's Java's number: the capture's gaps run from 4 to 12, by where the aim went.
+47. **The official client moved to 1.26.60 by itself, so Step 12's capture waits for the fork to follow** (found at the
+    sync of 2026-11-02). The Microsoft Store updated it to 1.26.60.5 on 2026-10-28: the plan says to keep it at 1.26.52,
+    but nothing holds it there.
+    - **What it stops:** the fork takes only protocol 2193, and that check is an exact match, so the official client
+      can't join. That's the creative take (Deviation 4) and the join on the merged fork (Deviation 7). It hasn't been
+      tried, since the version alone says what would happen.
+    - **What still works:** comparing looks, with the official client in a world of its own. Step 1's capture stays good
+      for what it recorded.
+    - **What it needs:** upstream's port (protocol 2225) is the first commit that sync left out, by the owner's choice.
+      The owner decides when it comes, and `docs/upstream.md` has what waits with it.
 
 ## Results (filled in during execution)
 

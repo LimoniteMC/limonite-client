@@ -377,13 +377,14 @@ flowchart LR
 ### The Pumpkin fork
 
 Limonite embeds [LimoniteMC/Pumpkin](https://github.com/LimoniteMC/Pumpkin/tree/limonite),
-branch `limonite`, as a git submodule. Upstream Pumpkin's Bedrock support speaks NetherNet and
-accepts exactly one protocol: **Bedrock 1.26.51, protocol 2193**.
+branch `limonite`, as a git submodule. Pumpkin's Bedrock support speaks NetherNet and accepts
+exactly one protocol, and the fork is on **Bedrock 1.26.51, protocol 2193**. Upstream has moved to
+1.26.60, and the fork follows once that's been checked against the official client.
 
 The fork stays small on purpose. Changes to existing Pumpkin files only go through small, named
 seams, each with a doc comment saying why it exists, so merging upstream stays cheap. The fork
-merges upstream's `master` every week, and [docs/upstream.md](docs/upstream.md) logs what each
-sync brought in.
+merges upstream's `master` every week, holding back only a move to a new protocol, and
+[docs/upstream.md](docs/upstream.md) logs what each sync brought in.
 
 **What the fork adds**
 

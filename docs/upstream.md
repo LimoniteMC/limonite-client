@@ -20,6 +20,11 @@ newest first: what came in, what it changed for Limonite, and how the conflicts 
   official client is the project's control (PLAN.md, Risks). A sync that would change the protocol
   stops before merging. The owner decides when to update the test client, ideally between
   milestones.
+  - **The commits before the bump can still come in,** if the owner says so (2026-11-02): merge the
+    bump's parent, not `master`.
+  - **The Store doesn't wait:** it updates the official client by itself. Check it in step 1 with
+    `(Get-AppxPackage Microsoft.MinecraftUWP).Version`. Past the fork's protocol, it can't join until
+    the bump lands.
 
 ### The procedure
 
@@ -72,6 +77,127 @@ newest first: what came in, what it changed for Limonite, and how the conflicts 
      Only the owner can add the scope: `gh auth refresh -h github.com -s workflow`.
 
 ## Log
+
+### 2026-11-02: `5e9101f` to `eba538f`, 25 commits
+
+- **Commits:** fork `2c52f24` (the merge); superproject `1b226d9` (the bump). Upstream's commits are dated 2026-10-26 to
+  2026-10-29.
+- **It stops short of upstream's `master`, by the owner's choice.** Upstream's next commit, `f2cff8e`
+  (Pumpkin-MC/Pumpkin#4407), ports to Bedrock 1.26.60. It and the 14 after it wait ("What waits", below).
+- **Bedrock protocol:** unchanged, 2193.
+- **Block data:** unchanged. `assets/blocks.json`, the Bedrock palette and the generated block tables are identical,
+  so saved worlds and `run/m4-template` load the same.
+- **Lockfiles:** unchanged. No manifest, profile or toolchain file moved, so the root's `Cargo.lock` and `Cargo.toml`
+  stay as they were.
+
+**What it changes for Limonite**
+
+1. **Breaking and placing follow the same rules.** `BlockRegistry::placement_target` and
+   `can_replace_with_other_block` didn't change, and nothing touched how long mining takes, so `edit::plan_use` and
+   `edit::breaking_speed` still say what the server says. `--edits` agrees, in both gamemodes.
+   - Snow now gains its layers through `can_update_at`, and snow, candles, vines and sculk veins lost their
+     `use_with_item`. A block onto itself was already left to the server (`plan_use`).
+   - Of the blocks that react to a click, flower pots gain `normal_use` (`reacts_to_use` has them by tag), and vaults
+     lose theirs (they were never on the list).
+2. **The server has new thread pools** (`b70c7e1`), and each `Server` owns them, so the embedded one does too.
+   - **`Simulation-*`,** one thread per CPU, runs the tick. `install` runs a closure inside a pool, so every `par_iter`
+     in the tick uses that pool and not Rayon's global one.
+   - **`Compute-*`,** half as many (2 to 8), takes crypto, compression and Bedrock's chunk encoding.
+   - **Rayon's global pool** is left with reading saved chunks and the client's item icons, so `set_up_process`'s
+     comment changed. World generation has had its own pool, `ChunkGen-*`, since before the fork began.
+   - An idle pool costs no CPU. Step 17's bench will show if the split matters to frame times.
+3. **Bedrock's login checks more** (`8e21ebc`): the whitelist, bans, the player limit, a duplicate name or UUID and the
+   plugin pre-login event, as Java's does. The host passes, as every headless run shows. **For M7:** a guest with the
+   host's name is turned away. This touches the login, so the procedure's step 6 asks for an official-client join,
+   which has to wait (item 7).
+4. **More of what a Bedrock client sends now does something** (`9d9179d`, Pumpkin-MC/Pumpkin#4397).
+   - **Movement:** the server acts on the gliding, swimming and spin attack flags in `PlayerAuthInput`, and on those
+     and sneaking, sprinting and crawling in `PlayerAction`. Our client only sets sneak and sprint
+     (`player/movement.rs`), so nothing changes yet.
+   - **The hotbar:** `SPlayerHotbar` selects a slot now, as `MobEquipment` does. The client sends `MobEquipment`.
+   - **Attacks check reach** (`can_interact_with_entity`), with a block's grace. For Step 15.
+   - **Item stack requests** gain anvil, beacon, grindstone and loom actions, and answer `MineBlock` with the slot's
+     stack. For Step 12 and M5b.
+5. **Datapacks are read at runtime** (`cf4e476`, Pumpkin-MC/Pumpkin#4370): recipes, tags, predicates, item modifiers,
+   slot sources and dynamic registries. That bears on PLAN.md's open question, how the embedded server gets the vanilla
+   datapack without the binary bundling it. It isn't settled, and nobody has looked further yet.
+6. **World generation:** `edfbb48` aligns features with vanilla, and changes the stage hashes in `assets/tests/`, so
+   new chunks can differ from the same seed's chunks before. Chunks already saved don't change. `eba538f` is upstream's
+   cut of about a quarter in generation's CPU.
+7. **The official client can't join for now.** The Microsoft Store updated it to 1.26.60.5 on 2026-10-28, and the fork
+   only takes 2193, so it waits for the bump (m5-plan, Deviation 47). Comparing looks still works, with the official
+   client in a world of its own.
+8. **The Pumpkin bugs the M5 capture found:**
+   - **No fall damage:** Pumpkin-MC/Pumpkin#3396 is still open, and `player_auth_input.rs` still never calls
+     `LivingEntity::fall`.
+   - **Two items per placement:** Pumpkin-MC/Pumpkin#4130 is still open, and that code in `inventory_action.rs` didn't
+     change.
+   - **Block pick:** Pumpkin-MC/Pumpkin#4321 shows as closed, but only because of a line in our own commit `ad2eb64`
+     (STATUS.md, Gotchas). The handler hasn't changed, here or on upstream's `master`, so a pick is still ignored.
+
+**What waits**
+
+Upstream's 15 commits from `f2cff8e` to `83efbd3`. They bring the port to 1.26.60, NetherNet for ping with RakNet removed
+(`87531ab`), and fixes to cursor drags and item stack requests (`338317a`), which Step 12 will want.
+
+- **Why it's more than a merge:** a dry run against this merge conflicts in `pumpkin-core/src/lib.rs` and
+  `net/bedrock/mod.rs`, and `assets/bedrock/` changes, so saved worlds and the client's tables need checking.
+- **Step 1's capture is of 1.26.52,** so the client's packets need comparing with a new one on 1.26.60.
+
+**Conflicts, and how they were resolved**
+
+None. The fork's own diff is the same, file for file: `git diff 5e9101f 15745d6` and `git diff eba538f 2c52f24` both
+give 98 files, +4147 and -141.
+
+**Checks**
+
+- **Fork:** clippy is clean in all five configurations. The tests pass: 45 in `net::bedrock`, 210 in `pumpkin-protocol
+  --features client`, and 13 palette tests. The 3 ignored there, the golden tests that read private captures, also pass
+  when given them.
+- **Client:** 348 client and 28 `packs` tests pass, and clippy shows only its 2 older warnings.
+  - `--headless --edits 4` passes in creative and in survival, 8 PASS lines each, in new worlds, and again on the final
+    release build. `--headless --map` gives 7 PASS lines.
+  - The embedded server stops through `Server::stop` and saves ("Completed save!").
+  - A survival run's log has the same one warning as before the merge.
+- **The stock server** was rebuilt from the merge (4 min 54 s in release).
+- **Not done:** an official-client join over NetherNet on the merged server, and the creative-take capture (item 7).
+
+**Every upstream commit, by area**
+
+- **Server:**
+  - `b70c7e1` refactor(core): decouple tick simulation, compute pools, and Tokio runtime
+- **Bedrock:**
+  - `8e21ebc` fix(bedrock): enforce whitelist and bans on login
+  - `9d9179d` feat(bedrock): implement inventory transactions, combat parity, and player movement (#4397)
+- **Players:**
+  - `2cf1569` fix(player): save player data on the server runtime from the tick thread (#4335)
+- **Entities:**
+  - `53a0bb9` feat(entity): port squid and glow squid to vanilla behavior
+  - `4f4f505` fix(entity): close shared mob parity gaps
+  - `638bead` fix(entity): port vanilla entity save data (#4396)
+  - `de9538a` fix(entity): attribute projectile block hits to the correct block (#4179)
+- **Blocks, items and data:**
+  - `0a9ddfd` fix(block): align block behaviours with vanilla
+  - `4c8c7f3` fix(item): align item behaviours with vanilla
+  - `d1c399c` fix(block): relight campfires hit by burning projectiles (#3555)
+  - `48990c4` feat(block): dispense experience bottles as projectiles (#3645)
+  - `027ef56` feat(advancement): implement criteria triggers with loot predicate evaluation (#4369)
+  - `cf4e476` feat(data): implement DynamicRegistryManager with runtime datapack loaders (#4370)
+- **World generation:**
+  - `edfbb48` fix(world): align feature generation with vanilla
+  - `eba538f` perf(worldgen): cut chunk generation CPU by about a quarter (#4401)
+- **Protocol and codecs:**
+  - `59eecff` fix(protocol): read zero LpVector3d from a single byte (#4308)
+  - `5061cf8` refactor(codec): improve deserialization by adding size checks and a reusable read_count function (#4394)
+- **Plugins:**
+  - `1ec04f6` feat(plugin): expand v0.2 player and inventory APIs for Bukkit parity
+- **Tests and CI:**
+  - `463274e` test(bot): align allay interact polling timeout with standard bot poll ticks
+  - `86f36e0` fix(ci): skip doctests for affected packages without a library (#4381)
+  - `ff873cb` fix(docker): switch to glibc base image and standard binary (#4390)
+  - `09e63cb` Add link to CI Badge (#4170)
+  - `ee25c91` chore(deps): bump crate-ci/typos from 1.50.2 to 1.51.1 (#4319)
+  - `ac98a5d` chore(deps): bump actions/setup-python from 6 to 7 (#4318)
 
 ### 2026-10-26: `aac0a82` to `5e9101f`, 44 commits
 

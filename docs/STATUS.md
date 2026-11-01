@@ -64,7 +64,8 @@ _Last updated: 2026-11-01._
     where the result is certain (`client/src/edit/`). A table takes back what the server refuses, and `--headless
     --edits <n>` checks it all against the real server. Not pushed yet.
   - **Next:** the owner's checkpoint: build something in creative and in survival, about 10 minutes, which takes in
-    the walk beside the official client: the HUD, the hotbar, the outline and the crack. Then Step 12.
+    the walk beside the official client: the HUD, the hotbar, the outline and the crack. Then the 1.26.60 bump, when
+    the owner says, since Step 12's capture needs it (m5-plan, Deviation 47). Then Step 12.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -73,11 +74,12 @@ _Last updated: 2026-11-01._
 - **Upstream syncs are weekly** (owner, 2026-10-26): merge upstream Pumpkin's `master` into the
   fork once a calendar week. `docs/upstream.md` has the procedure, and a log of what each sync
   brought in.
-  - **Last sync:** 2026-10-26, upstream `5e9101f` (44 commits). The fork's `limonite` is at
-    `f9badd8`, and `main` bumped it in `a8f0271`.
-  - **Next sync due:** 2026-11-02, and waiting on the owner: upstream has moved to Bedrock 1.26.60 (protocol 2225, in
-    `f2cff8e65`), and a protocol bump is the owner's to decide (`docs/upstream.md`). The 25 commits before it,
-    up to `eba538f28`, change neither the protocol nor the block data, and merge without conflicts.
+  - **Last sync:** 2026-11-02, upstream `eba538f` (25 commits, those before 1.26.60, the owner's choice). The fork's
+    `limonite` is at `2c52f24`, and `main` bumped it in `1b226d9`. Not pushed yet.
+  - **Next sync due:** 2026-11-09.
+  - **The 1.26.60 bump is the owner's to decide, and Step 12 needs it.** Upstream's next commit, `f2cff8e`, moves to
+    protocol 2225. The official client here updated itself to 1.26.60.5 on 2026-10-28, so it can't join the fork
+    until the bump lands (m5-plan, Deviation 47).
 - **Milestone 4 is done (2026-10-24).** Plan, results and deviations: `docs/milestones/m4-plan.md`.
   - **What it built:** a window (winit) with a wgpu device and a fly camera that flies the host;
     CPU meshes for every loaded sub-chunk, drawn with vanilla textures read at runtime from the
@@ -542,6 +544,8 @@ the gitignored folder.
   identity. Never commit it, paste it, or print its contents.
 - **Exact protocol:** Pumpkin accepts one Bedrock protocol only. Don't update the Bedrock client
   mid-milestone; if it updates past 2193, the official client can no longer join.
+  - **The Store updates it unasked:** it took it to 1.26.60.5 on 2026-10-28, so that's where it stands until the fork
+    takes the bump (`docs/upstream.md`). In a world of its own, it still works for comparing looks.
 - **Stopping the server:** stopping a background shell doesn't always kill `pumpkin.exe` on
   Windows. Check with `Get-Process pumpkin`.
 - **Telemetry:** Pumpkin's defaults to **on** (heartbeat to `market.pumpkinmc.org`). Keep it off in
