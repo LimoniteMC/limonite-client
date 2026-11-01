@@ -49,10 +49,13 @@ _Last updated: 2026-11-01._
   - **Step 7d is done (2026-10-31):** flipbooks animate (`render/animation.rs`), fluids slope and flow,
     and `--debug-world` holds every block state (`debug_world.rs`).
   - **Step 8 is done (2026-11-01):** the client's own UI (`client/src/ui/`), and the HUD on it: the crosshair,
-    the hotbar, hearts, hunger and air, in the install's own sprites and font. The slots stay empty, and the
-    armour row hidden, until Step 9. Not pushed yet.
-  - **Next:** Step 9, items, icons and the hotbar. The owner's walk, in the debug world and beside the
-    official client, is still to come, and now takes in the HUD.
+    the hotbar, hearts, hunger and air, in the install's own sprites and font. Not pushed yet.
+  - **Step 9 is done (2026-11-01):** the hotbar shows what the player carries (`client/src/inventory/`), with
+    block icons from the world's own mesher (`render/icons.rs`), counts and the held item's name. 1 to 9 and the
+    wheel select, and Q drops, byte for byte as the official client does. Picking waits for Step 10, and armour
+    for Step 12. Not pushed yet.
+  - **Next:** Step 10, aiming at blocks. The owner's walk, in the debug world and beside the official client, is
+    still to come, and now takes in the HUD and the hotbar.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -92,7 +95,8 @@ _Last updated: 2026-11-01._
     clone in `run/wiki`. It goes after `main`, since its pages name `main`'s commit;
   - the org's page, `https://github.com/LimoniteMC/.github` (`main`), from its clone in
     `run/org-profile`. It goes last, since it claims what `main` has and links to its images.
-- **No upstream PR is open.** The candidates are listed under "Upstream PR candidates".
+- **No upstream PR is open.** The candidates are listed under "Upstream PR candidates". Step 9 adds one: a
+  Bedrock player gets no armour slots or off hand from the server, only container 0's 36 slots.
 
   Ask the owner before pushing anything, and before opening an upstream PR.
 - **Where the repos are:** the owner moved both to the `LimoniteMC` org by 2026-11-01. `.gitmodules`
@@ -243,7 +247,7 @@ picture: a name, a gamemode, health, hunger, a pose as the `P` key logs it, and 
 copy of the list is in `run/step8`. The world is a copy, because the run changes it.
 
 ```bash
-LIMONITE_SHOTS=run/step8/shots-world.txt LIMONITE_SHOTS_ARGS="--data-dir run/step8/shots-world --home run/step8/home --radius 16" CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo test --release -p limonite-client --bin limonite-client screenshots -- --ignored --nocapture
+LIMONITE_SHOTS=run/step8/shots-world.txt LIMONITE_SHOTS_ARGS="--data-dir run/step8/shots-world --home run/step8/home --radius 16" LIMONITE_SHOTS_HOTBAR="dirt*64,oak_log*12,poppy,torch*32,oak_stairs*16,diamond_sword,apple*5,oak_fence*8,grass_block*64" CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo test --release -p limonite-client --bin limonite-client screenshots -- --ignored --nocapture
 ```
 
 The HUD alone, every piece of it over stripes, goes to `run/sheets`:
@@ -450,8 +454,8 @@ the gitignored folder.
     2026-10-25, cropped below the title bar and saved as 1600 px JPEGs. The before-and-after pair
     is one pose in Limonite and in the official client, taken with the comparison recipe above.
     Retake both once M5 draws light.
-    - **`hud.jpg`** is the owner's pick from the screenshot tool (2026-11-01), kept at 1920 px with no
-      colour subsampling, so that the HUD's pixels stay sharp. Retake it once the hotbar has items.
+    - **`hud.jpg`** is the owner's pick from the screenshot tool (2026-11-01), retaken once the hotbar had
+      items, and kept at 1920 px with no colour subsampling, so that the HUD's pixels stay sharp.
   - **After pushing a changed image,** github.com can show the old one for about 5 minutes, while
     GitHub's raw-file cache expires.
 - **The org's page** (`https://github.com/LimoniteMC`) is `profile/README.md` in the separate

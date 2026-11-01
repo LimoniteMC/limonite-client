@@ -1309,6 +1309,15 @@ The questions as they were asked:
 36. **Screenshots with no window** (Step 8; the owner's ask, 2026-11-01): `client/src/shots.rs`, an ignored
     test that runs the real server, client and renderer, and saves frames to `run/screenshots`.
 
+37. **A block's icon is its real mesh** (Step 9), not the three faces of Decision 10. The world's mesher
+    already handles every shape, so an icon meshes the block alone, turns the quads to the inventory's
+    angle, and flattens them, back to front, with no depth buffer. Stairs look like stairs, and it's less code
+    than three faces and a list of exceptions.
+38. **Picking waits for Step 10** (Step 9). A middle click picks the block aimed at, and nothing aims yet.
+39. **Armour waits for Step 12, or for Pumpkin** (Step 9), and not for Step 9 as Deviation 33 said. Container
+    0 is only the 36 main slots, and Pumpkin's Bedrock path sends no armour slots or off hand. The client can
+    know what it put there itself once the inventory screen moves things. It's on the upstream list.
+
 ## Results (filled in during execution)
 
 ### Step 1: what the official client sends (2026-10-26)
@@ -1624,6 +1633,40 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 9: Items, icons and the hotbar (2026-11-01)
+
+- **Commits:** `e02a1a2` (the items and their icons) and `ceae086` (the keys).
+- **The census:** of 2,076 items known, the server can send 1,587. 538 have a picture, 998 draw as blocks, in
+  4,070 quads, and 51 draw the missing texture: spawn eggs for newer mobs and harnesses, whose files aren't
+  among the others, and a few that are never held, such as air.
+- **At startup,** in a release build: 586 sprites in a 1024 × 691 atlas, 157 ms for the whole UI. `PackStack::list`
+  is what keeps that down: it says which pack has each file, so about a thousand pictures don't each ask all 55
+  packs in turn. Icons are meshed in parallel.
+- **The bench** first read 0.87 ms against Step 8's 0.43, which nothing in this step could explain. So the old
+  build and the new took turns, 15 s each, at radius 8:
+
+  | | Round 1 | Round 2 | Round 3 |
+  | --- | --- | --- | --- |
+  | Before the HUD | 0.80 ms | 0.88 ms | 0.72 ms |
+  | Step 9 | 0.82 ms | 0.85 ms | 0.75 ms |
+
+  It was the machine, with other programs busy, and a frame costs about what it did. The two runs below it in
+  Step 8's table are from a quieter machine, so neither table can be set against the other.
+- **Against the real server,** with a temporary check that's since been reverted:
+  - a hotbar filled on the server reached the client as packets, with the same counts on both sides;
+  - Q took 5 dirt to 4 on both sides, once, and dropping a slot's last item emptied it;
+  - selecting slot 2 moved the server's selected slot to 2.
+- **Byte for byte:** Q's transaction matches the official client's. The first try didn't: it needed a falling
+  even id and a line naming the slot it predicts (container 29), which Results, Step 1 had written down.
+- **Checks:** 288 client tests, the headless run's 7 PASS lines, and clippy with the same 2 warnings.
+- **Not verified:** nobody has pressed 1 to 9, the wheel or Q in the window, since the checks call what they call.
+  Nobody has seen the icons beside the official client: their angle and shading are Java's GUI numbers.
+- **Left:**
+  - all potions show one bottle, and an item whose `item_texture.json` key has several pictures shows its first;
+  - no durability bars, no enchantment glint;
+  - a name stays for 3 seconds, then goes, with no fade;
+  - blocks with no item picture show their world model, so a few differ from Bedrock's icons.
 
 ### Step 8: The UI, and the HUD (2026-11-01)
 

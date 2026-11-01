@@ -152,8 +152,10 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
   them. Chests, banners, heads and shulker boxes stay simple boxes until entity models arrive.
 - **Textures and fluids that move.** Flipbooks animate, and water and lava slope and flow.
 - **A HUD in the game's own look.** The crosshair, the hotbar, hearts, hunger and air, in the sprites and
-  the bitmap font from your install, blended the way the game blends them. The hotbar stays empty until
-  items arrive.
+  the bitmap font from your install, blended the way the game blends them.
+- **A hotbar with what you carry.** Block icons come from the world's own meshes, so stairs look like stairs,
+  and items from your install's pictures, with counts and the held item's name. 1 to 9 and the wheel select,
+  and Q drops.
 - **A debug world.** `--debug-world` holds every block state in a grid, and you can jump to any of them.
 - **Bedrock-native world state.** Chunks decode straight into Bedrock's own palette format, and
   the client's world equals the server's, block for block and biome for biome. That's checked on
@@ -169,10 +171,10 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
 
 The HUD, over a jungle coast:
 
-<img src="docs/readme/screenshots/hud.jpg" alt="A jungle coast in Limonite, with a crosshair, an empty hotbar, six and a half hearts and three and a half drumsticks" width="100%">
+<img src="docs/readme/screenshots/hud.jpg" alt="A jungle coast in Limonite, with a crosshair, a hotbar of blocks and items, six and a half hearts and three and a half drumsticks" width="100%">
 
-<sub>The sprites and the font come from your install. The health and hunger were set on the server to show
-the half icons, and reached the HUD as packets, as they do in play.</sub>
+<sub>The sprites and the font come from your install. The health, the hunger and the hotbar were set on the
+server for the picture, and reached the HUD as packets, as they do in play.</sub>
 
 The same spot in the same world, at the same pose, in both clients:
 
@@ -246,6 +248,8 @@ flies). Closing the window saves the world.
 | <kbd>Left Shift</kbd> | Sneak, which stops you at edges |
 | <kbd>Left Ctrl</kbd> | Sprint |
 | <kbd>Space</kbd> twice | In creative: fly, or land. Flying, <kbd>Space</kbd> and <kbd>Left Shift</kbd> rise and sink |
+| <kbd>1</kbd> to <kbd>9</kbd>, the wheel | Select a hotbar slot |
+| <kbd>Q</kbd> | Drops one of the held item |
 | <kbd>Esc</kbd> | Releases the mouse |
 | <kbd>P</kbd> | Logs where you are as a `/tp` command |
 
@@ -392,6 +396,7 @@ limonite-client/          # cargo workspace
 ├── client/               # the binary: window, renderer, world state, input, embedded server
 │   └── src/
 │       ├── blocks/       # the block palette, and how each block looks
+│       ├── inventory/    # what the player carries, and what each item looks like
 │       ├── render/       # wgpu device, camera, mesher, textures, terrain shader
 │       ├── ui/           # the client's own UI: sprites, font, strings, layout, and the HUD
 │       └── world/        # Bedrock-native chunks and their decoder
