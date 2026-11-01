@@ -9,7 +9,7 @@
 use std::{fmt, thread, time::Instant};
 
 use bytes::Bytes;
-use glam::DVec3;
+use glam::{DVec3, IVec3};
 use pumpkin_core::net::bedrock::{
     level_chunk::CLevelChunk,
     local::{LocalClientEnd, LocalConnector},
@@ -22,6 +22,7 @@ use pumpkin_protocol::{
             CResourcePacksInfo, CStartGame, GameType,
         },
         server::{
+            block_pick_request::SBlockPickRequest,
             mob_equipment::SMobEquipment,
             player_auth_input::{InputData, SPlayerAuthInput},
             request_chunk_radius::SRequestChunkRadius,
@@ -35,13 +36,13 @@ use pumpkin_protocol::{
 };
 use pumpkin_util::{
     GameMode,
-    math::{vector2::Vector2, vector3::Vector3},
+    math::{position::BlockPos, vector2::Vector2, vector3::Vector3},
 };
 use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tracing::{debug, info, warn};
 
 use crate::{
-    inventory::CONTAINER_MAIN,
+    inventory::{CONTAINER_MAIN, HOTBAR},
     clock::TICK,
     game::{Effect, Game},
     login,
@@ -653,6 +654,17 @@ impl Session {
             slot,
             selected_slot: slot,
             container_id: CONTAINER_MAIN as u8,
+        });
+    }
+
+    /// Asks the server for the block at `block` in the hotbar, as a middle click
+    /// does. Pumpkin ignores this until upstream fixes it (m5-plan Deviation 8):
+    /// it takes `max_slots` for the slot to fill, and it's always 9.
+    pub fn pick_block(&mut self, block: IVec3) {
+        self.send(&SBlockPickRequest {
+            position: BlockPos::new(block.x, block.y, block.z),
+            with_data: false,
+            max_slots: HOTBAR as u8,
         });
     }
 

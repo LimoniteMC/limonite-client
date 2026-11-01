@@ -404,6 +404,11 @@ impl<'a> App<'a> {
                     self.session.select_slot(slot);
                 }
                 Action::Drop => self.session.drop_held(),
+                Action::Pick => {
+                    if let Some(hit) = &self.aimed {
+                        self.session.pick_block(hit.block);
+                    }
+                }
                 _ => {}
             }
         }
