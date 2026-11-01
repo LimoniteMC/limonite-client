@@ -276,7 +276,14 @@ impl Neighbourhood {
     /// One block alone, in the middle of a sub-chunk at the origin: an icon's.
     #[must_use]
     pub fn single(table: &AppearanceTable, biome: u32, id: u32) -> Self {
-        let mut n = Self::empty([0, 0, 0], table);
+        Self::single_at(table, biome, id, [8, 8, 8])
+    }
+
+    /// One block alone, in the middle of a sub-chunk placed to put it at `at`, for what
+    /// depends on where a block is: a crack's.
+    #[must_use]
+    pub fn single_at(table: &AppearanceTable, biome: u32, id: u32, at: [i32; 3]) -> Self {
+        let mut n = Self::empty(at.map(|axis| axis - 8), table);
         n.biomes = [biome; 256];
         // The cells count from the border, so block 8 is cell 9.
         n.set(table, 0, cell(9, 9, 9), id);

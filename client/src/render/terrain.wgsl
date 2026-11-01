@@ -72,6 +72,17 @@ fn vertex_main(v: Vertex) -> Varyings {
     return out;
 }
 
+// A crack multiplies what's under it, as Java's does: 50% grey leaves it as it is,
+// darker darkens and lighter lightens. That's in encoded values, and these are in
+// linear light, where encoded values to the power of 2.2 are 2^2.2 times the texel.
+// The blend doubles what's returned, which lets it go over 1.
+@fragment
+fn fragment_crack(in: Varyings) -> @location(0) vec4<f32> {
+    let texel = textureSample(block_textures, block_sampler, in.uv, in.layer);
+    let factor = mix(vec3<f32>(1.0), texel.rgb * 4.595, texel.a);
+    return vec4<f32>(factor * 0.5, 1.0);
+}
+
 @fragment
 fn fragment_main(in: Varyings) -> @location(0) vec4<f32> {
     // Sampled first, while every invocation still runs: mipmapping needs

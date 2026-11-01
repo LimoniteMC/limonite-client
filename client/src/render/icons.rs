@@ -24,7 +24,7 @@ use crate::blocks::{
 };
 
 /// Where an icon's biome tints come from: plains.
-const PLAINS: u32 = 1;
+pub const PLAINS: u32 = 1;
 /// How wide and tall a block ends up, turned to the inventory's angle and with sides of
 /// 1: a cube's corners reach 0.787 up and down from its middle. Dividing by this makes
 /// a cube fill the icon, top to bottom.

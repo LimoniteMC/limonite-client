@@ -35,6 +35,7 @@ struct FrameUniform {
 pub struct Terrain {
     opaque: wgpu::RenderPipeline,
     blend: wgpu::RenderPipeline,
+    cracking: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
     /// The texture array, which animation writes into.
     textures: wgpu::Texture,
@@ -166,8 +167,9 @@ impl Terrain {
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("terrain.wgsl"));
         let format = gpu.config.format;
-        let opaque = pipeline(device, &pipeline_layout, &shader, format, false);
-        let blend = pipeline(device, &pipeline_layout, &shader, format, true);
+        let opaque = pipeline(device, &pipeline_layout, &shader, format, Kind::Opaque);
+        let blend = pipeline(device, &pipeline_layout, &shader, format, Kind::Blend);
+        let cracking = pipeline(device, &pipeline_layout, &shader, format, Kind::Crack);
         let (depth, depth_size) = depth_view(gpu);
         let (indices, index_quads) = index_buffer(device, 4096);
         let instance_capacity = 1024;
@@ -179,6 +181,7 @@ impl Terrain {
             texture_view,
             opaque,
             blend,
+            cracking,
             bind_group,
             frame,
             depth,
@@ -308,6 +311,7 @@ impl Terrain {
             self.draws += 1;
         }
         if self.crack.quads() > 0 {
+            pass.set_pipeline(&self.cracking);
             pass.set_vertex_buffer(0, self.crack.vertices().slice(..));
             pass.draw_indexed(
                 0..self.crack.quads() * INDICES_PER_QUAD,
@@ -365,19 +369,34 @@ fn upload_textures(gpu: &Gpu, textures: &TextureArray) -> (wgpu::Texture, wgpu::
     (texture, view)
 }
 
-/// The opaque pipeline writes depth; the blend pipeline blends and doesn't.
-/// Both cull the back of every quad: counter-clockwise is the front.
+/// Which of the terrain's pipelines.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    /// Writes depth.
+    Opaque,
+    /// Blends, and doesn't write depth.
+    Blend,
+    /// Multiplies what's there, and doesn't write depth: the same quads as the block's,
+    /// so a depth bias keeps it in front of them (`crack.rs`).
+    Crack,
+}
+
+/// Each culls the back of every quad: counter-clockwise is the front.
 fn pipeline(
     device: &wgpu::Device,
     layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
     format: wgpu::TextureFormat,
-    blended: bool,
+    kind: Kind,
 ) -> wgpu::RenderPipeline {
     let vertex_attributes = wgpu::vertex_attr_array![0 => Sint16x4, 1 => Uint8x4, 2 => Unorm8x4];
     let instance_attributes = wgpu::vertex_attr_array![3 => Float32x4];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-        label: Some(if blended { "terrain, blended" } else { "terrain" }),
+        label: Some(match kind {
+            Kind::Opaque => "terrain",
+            Kind::Blend => "terrain, blended",
+            Kind::Crack => "terrain, cracked",
+        }),
         layout: Some(layout),
         vertex: wgpu::VertexState {
             module: shader,
@@ -404,19 +423,43 @@ fn pipeline(
         },
         depth_stencil: Some(wgpu::DepthStencilState {
             format: DEPTH_FORMAT,
-            depth_write_enabled: Some(!blended),
+            depth_write_enabled: Some(kind == Kind::Opaque),
             depth_compare: Some(wgpu::CompareFunction::Less),
             stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState::default(),
+            bias: if kind == Kind::Crack {
+                wgpu::DepthBiasState {
+                    constant: -8,
+                    slope_scale: -2.0,
+                    clamp: 0.0,
+                }
+            } else {
+                wgpu::DepthBiasState::default()
+            },
         }),
         multisample: wgpu::MultisampleState::default(),
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fragment_main"),
+            entry_point: Some(if kind == Kind::Crack { "fragment_crack" } else { "fragment_main" }),
             compilation_options: wgpu::PipelineCompilationOptions::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: blended.then_some(wgpu::BlendState::ALPHA_BLENDING),
+                blend: match kind {
+                    Kind::Opaque => None,
+                    Kind::Blend => Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // Twice what's returned, times what's there.
+                    Kind::Crack => Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Dst,
+                            dst_factor: wgpu::BlendFactor::Src,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::Zero,
+                            dst_factor: wgpu::BlendFactor::One,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                },
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),

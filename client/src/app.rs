@@ -48,6 +48,7 @@ use crate::{
         Frame, Gpu, Needs,
         animation::Animator,
         camera::{Camera, FOV_Y},
+        crack::Cracked,
         meshes::{self, Meshes},
         terrain::Terrain,
         textures::TextureArray,
@@ -479,10 +480,10 @@ impl<'a> App<'a> {
             terrain.outline.show(gpu, camera.position, boxes);
         }
         let cracked = self.session.crack().and_then(|(block, stage)| {
-            let hit = self.aimed.as_ref().filter(|hit| hit.block == block)?;
-            Some((block, stage, hit.boxes.as_slice()))
+            let id = self.session.world().block(block.x, block.y, block.z, 0)?;
+            Some(Cracked { block, id, stage })
         });
-        terrain.crack.show(gpu, cracked);
+        terrain.crack.show(gpu, &self.table, &self.tints, cracked);
         if self.animated_tick != Some(self.animation_tick) {
             self.animated_tick = Some(self.animation_tick);
             terrain.animate(gpu, &mut self.animator, self.animation_tick);
