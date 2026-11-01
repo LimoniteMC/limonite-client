@@ -186,6 +186,10 @@ Write-Page '_Sidebar' (@(
     ''
     "- [README]($site#readme)"
     "- [CLAUDE.md]($site/blob/main/CLAUDE.md)"
+    ''
+    '**Community**'
+    ''
+    '- [Discord](https://discord.gg/C7DHyAYGun)'
 ))
 $written['_Sidebar'] = $true
 
