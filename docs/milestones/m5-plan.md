@@ -1322,6 +1322,15 @@ The questions as they were asked:
     traces were recorded, within 40 blocks of the origin on x and z, but an `f32`'s steps grow with distance. Now,
     where the nearest would put the box into something, the position takes the next one back. Nothing else changes:
     the traces replay as they did.
+41. **The outline draws a shape's edges, not each box's** (Step 10). Decision 8 said boxes, but a stair is two, so
+    each box's twelve edges would put lines across it where they meet. `render/outline.rs` keeps a line only where
+    the surface they make together folds.
+42. **A plant's outline goes where it's drawn** (Step 10), not where Pumpkin's boxes say. They follow Java's nudge,
+    while the mesher draws plants in the middle of their block, all but bamboo's stalk. So plants other than bamboo
+    are put in the middle, here only: physics still has Pumpkin's boxes. When plants are nudged as they're drawn
+    (STATUS.md, "Plant offsets"), this goes.
+43. **A pick sends `with_data` false** (Step 10). Results, Step 1 says it was true on the first and false after: of
+    the capture's 17 picks, only the first is true, and nothing about it says why. Pumpkin doesn't read it.
 
 ## Results (filled in during execution)
 
@@ -1638,6 +1647,35 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 10: Aim at blocks (2026-11-01)
+
+- **Commits:** `25b6726` (the ray and the outline), `ad2eb64` (the pick) and `ff7b25a` (plants).
+- **The ray against testing every block:** 20,000 rays, at four places out to the edge of the world, each of them
+  compared with the nearest hit among all the blocks in reach. None differ, so the walk skips nothing.
+- **Against the real server,** with a temporary check that's since been removed:
+  - of 612 rays from one spot in a new world, 252 hit something, and the server has the same block at each;
+  - the official client's pick, with `max_slots` 9, changes nothing and keeps the connection (Deviation 8);
+  - the same packet with a slot Pumpkin takes, 3, brings the aimed block's item to that slot as packets, and selects
+    it. So the position gets there, and picking works as soon as upstream fixes `max_slots`.
+- **Looking at it,** in pictures from the screenshot tool (`run/step10/shots`, gitignored): stairs, a fence, an anvil, a
+  composter, a door, a wall and glass all show their shape with no lines through it; the ground and a plant in a
+  real world have theirs; the sky has none.
+- **What a frame pays:** 3.8 µs to aim and find the edges, in a release build.
+- **A Pumpkin bug, found by a ray that missed:** looking straight down through short grass hit the ground under it.
+  `get_block_outline_shapes_at` adds a nudge on the understanding that each box was sampled where the nudge is at its
+  lower limit. That holds for flowers. But the boxes of 17 of the 39 blocks it moves sit in the middle of the block
+  there, so the game they came from doesn't move them at all, and Pumpkin's end up as far as half a block off:
+  grass, ferns, tall flowers and roots. It's on the upstream list.
+- **Checks:** 311 client tests, the headless run's 7 PASS lines, and clippy with the same 2 warnings.
+- **Not verified:**
+  - nobody has aimed or pressed the middle button in the window;
+  - nobody has held the lines up against the official client's. They're one pixel wide, as line lists are, and take
+    40% off what's behind them, as Java's do. Bedrock's width and darkness are for the next checkpoint to compare.
+- **Left:**
+  - the reach is Pumpkin's, as Decision 8 chose: the official client may reach further;
+  - pointed dripstone and sulfur spikes collide where Pumpkin nudges them, but are drawn and aimed at in the middle;
+  - nothing yet hides the outline while a menu is open (Step 16 has the menus).
 
 ### The walls that gave way (2026-11-01)
 

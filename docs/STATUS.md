@@ -57,8 +57,11 @@ _Last updated: 2026-11-01._
   - **Fixed (2026-11-01, the owner's report):** walls gave way along any axis from about 256 blocks out from the
     origin, because a position's rounding could carry the box inside them (`ad5e250`; m5-plan Deviation 40, and
     Results, "The walls that gave way").
-  - **Next:** Step 10, aiming at blocks. The owner's walk, in the debug world and beside the official client, is
-    still to come, and now takes in the HUD and the hotbar.
+  - **Step 10 is done (2026-11-01):** a ray from the eyes finds the block aimed at, within Pumpkin's reach
+    (`client/src/edit/aim.rs`), with an outline along its shape (`render/outline.rs`). A middle click sends the
+    official client's pick, which Pumpkin ignores for now. Not pushed yet.
+  - **Next:** Step 11, breaking and placing, then its checkpoint. The owner's walk, in the debug world and beside
+    the official client, is still to come, and now takes in the HUD, the hotbar and the outline's width and darkness.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -99,7 +102,9 @@ _Last updated: 2026-11-01._
   - the org's page, `https://github.com/LimoniteMC/.github` (`main`), from its clone in
     `run/org-profile`. It goes last, since it claims what `main` has and links to its images.
 - **No upstream PR is open.** The candidates are listed under "Upstream PR candidates". Step 9 adds one: a
-  Bedrock player gets no armour slots or off hand from the server, only container 0's 36 slots.
+  Bedrock player gets no armour slots or off hand from the server, only container 0's 36 slots. Step 10 adds
+  another: `get_block_outline_shapes_at` moves the boxes of grass, ferns, tall flowers and roots, which Java doesn't
+  move, by as much as half a block (m5-plan Results, Step 10).
 
   Ask the owner before pushing anything, and before opening an upstream PR.
 - **Where the repos are:** the owner moved both to the `LimoniteMC` org by 2026-11-01. `.gitmodules`
@@ -594,7 +599,8 @@ Found in M4:
     (m4-plan Results, Step 10).
 - **Plant offsets:** Java and Bedrock nudge flowers, grass and other plants off-centre per block.
   M4 draws every cross centred; only the bamboo stalk is nudged. Moving crosses, and bamboo's
-  leaves, needs vertex positions that can leave their block: a bias in the vertex format.
+  leaves, needs vertex positions that can leave their block: a bias in the vertex format. The outline
+  stays where a plant is drawn (`shapes::outline_boxes`), so it has to move with them.
 - **Tints:** one water colour everywhere (`#44AFF5` at 65%), no per-biome overrides and no blending
   between biomes. The official client's deep ocean is darker (m4-plan Decision 8).
 - **Special shapes:** a to-do list, sorted by how often they occur, is under "Special shapes to

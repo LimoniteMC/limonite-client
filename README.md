@@ -156,6 +156,8 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
 - **A hotbar with what you carry.** Block icons come from the world's own meshes, so stairs look like stairs,
   and items from your install's pictures, with counts and the held item's name. 1 to 9 and the wheel select,
   and Q drops.
+- **An outline on what you aim at.** Thin dark lines along the shape of the block you're looking at, within
+  reach: 4.5 blocks, or 5 in creative.
 - **A debug world.** `--debug-world` holds every block state in a grid, and you can jump to any of them.
 - **Bedrock-native world state.** Chunks decode straight into Bedrock's own palette format, and
   the client's world equals the server's, block for block and biome for biome. That's checked on
@@ -250,6 +252,7 @@ flies). Closing the window saves the world.
 | <kbd>Space</kbd> twice | In creative: fly, or land. Flying, <kbd>Space</kbd> and <kbd>Left Shift</kbd> rise and sink |
 | <kbd>1</kbd> to <kbd>9</kbd>, the wheel | Select a hotbar slot |
 | <kbd>Q</kbd> | Drops one of the held item |
+| <kbd>Middle click</kbd> | Picks the block you aim at, once [Pumpkin stops ignoring it](https://github.com/Pumpkin-MC/Pumpkin/issues/4321) |
 | <kbd>Esc</kbd> | Releases the mouse |
 | <kbd>P</kbd> | Logs where you are as a `/tp` command |
 
@@ -396,6 +399,7 @@ limonite-client/          # cargo workspace
 ├── client/               # the binary: window, renderer, world state, input, embedded server
 │   └── src/
 │       ├── blocks/       # the block palette, and how each block looks
+│       ├── edit/         # what you aim at
 │       ├── inventory/    # what the player carries, and what each item looks like
 │       ├── render/       # wgpu device, camera, mesher, textures, terrain shader
 │       ├── ui/           # the client's own UI: sprites, font, strings, layout, and the HUD
