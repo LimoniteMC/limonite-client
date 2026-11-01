@@ -49,11 +49,11 @@ _Last updated: 2026-11-01._
   - **Step 7d is done (2026-10-31):** flipbooks animate (`render/animation.rs`), fluids slope and flow,
     and `--debug-world` holds every block state (`debug_world.rs`).
   - **Step 8 is done (2026-11-01):** the client's own UI (`client/src/ui/`), and the HUD on it: the crosshair,
-    the hotbar, hearts, hunger and air, in the install's own sprites and font. Not pushed yet.
+    the hotbar, hearts, hunger and air, in the install's own sprites and font.
   - **Step 9 is done (2026-11-01):** the hotbar shows what the player carries (`client/src/inventory/`), with
     block icons from the world's own mesher (`render/icons.rs`), counts and the held item's name. 1 to 9 and the
     wheel select, and Q drops, byte for byte as the official client does. Picking waits for Step 10, and armour
-    for Step 12. Not pushed yet.
+    for Step 12.
   - **Next:** Step 10, aiming at blocks. The owner's walk, in the debug world and beside the official client, is
     still to come, and now takes in the HUD and the hotbar.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
@@ -84,7 +84,7 @@ _Last updated: 2026-11-01._
   deliberate non-seam edit: a `Weather::downfall()` accessor in `pumpkin-util/src/biome.rs`, an
   upstream candidate.
 - **Pushed, all public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
-  2026-10-24, the README and the wiki on 2026-10-25, the upstream sync and M5 through Step 7d on
+  2026-10-24, the README and the wiki on 2026-10-25, the upstream sync and M5 through Step 9 on
   2026-11-01):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
