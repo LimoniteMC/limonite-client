@@ -20,6 +20,7 @@ mod session;
 mod settings;
 #[cfg(test)]
 mod test_util;
+mod ui;
 mod world;
 
 use std::{
