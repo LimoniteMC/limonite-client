@@ -132,8 +132,9 @@ newest first: what came in, what it changed for Limonite, and how the conflicts 
      `LivingEntity::fall`.
    - **Two items per placement:** Pumpkin-MC/Pumpkin#4130 is still open, and that code in `inventory_action.rs` didn't
      change.
-   - **Block pick:** Pumpkin-MC/Pumpkin#4321 shows as closed, but only because of a line in our own commit `ad2eb64`
-     (STATUS.md, Gotchas). The handler hasn't changed, here or on upstream's `master`, so a pick is still ignored.
+   - **Block pick:** a line in our own commit `ad2eb64` closed Pumpkin-MC/Pumpkin#4321 by mistake on 2026-11-01
+     (STATUS.md, Gotchas), and the owner reopened it. The handler hasn't changed, here or on upstream's `master`, so a
+     pick is still ignored.
 
 **What waits**
 

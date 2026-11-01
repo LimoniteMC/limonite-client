@@ -62,7 +62,7 @@ _Last updated: 2026-11-01._
     official client's pick, which Pumpkin ignores for now.
   - **Step 11 is built (2026-11-02):** blocks break and place, with the official client's packets, and show at once
     where the result is certain (`client/src/edit/`). A table takes back what the server refuses, and `--headless
-    --edits <n>` checks it all against the real server. Not pushed yet.
+    --edits <n>` checks it all against the real server.
   - **Next:** the owner's checkpoint: build something in creative and in survival, about 10 minutes, which takes in
     the walk beside the official client: the HUD, the hotbar, the outline and the crack. Then the 1.26.60 bump, when
     the owner says, since Step 12's capture needs it (m5-plan, Deviation 47). Then Step 12.
@@ -75,7 +75,7 @@ _Last updated: 2026-11-01._
   fork once a calendar week. `docs/upstream.md` has the procedure, and a log of what each sync
   brought in.
   - **Last sync:** 2026-11-02, upstream `eba538f` (25 commits, those before 1.26.60, the owner's choice). The fork's
-    `limonite` is at `2c52f24`, and `main` bumped it in `1b226d9`. Not pushed yet.
+    `limonite` is at `2c52f24`, and `main` bumped it in `1b226d9`.
   - **Next sync due:** 2026-11-09.
   - **The 1.26.60 bump is the owner's to decide, and Step 12 needs it.** Upstream's next commit, `f2cff8e`, moves to
     protocol 2225. The official client here updated itself to 1.26.60.5 on 2026-10-28, so it can't join the fork
@@ -97,11 +97,11 @@ _Last updated: 2026-11-01._
   deliberate non-seam edit: a `Weather::downfall()` accessor in `pumpkin-util/src/biome.rs`, an
   upstream candidate.
 - **Pushed, all public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
-  2026-10-24, the README and the wiki on 2026-10-25, and the upstream sync and M5 through Step 10
-  on 2026-11-01):
+  2026-10-24, the README and the wiki on 2026-10-25, the first upstream sync and M5 through Step 10
+  on 2026-11-01, and the second sync and Step 11 on 2026-11-02):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
-  - the fork's `limonite` branch, at `15745d6`, with the M1 to M4 fork commits, the upstream sync
+  - the fork's `limonite` branch, at `2c52f24`, with the M1 to M4 fork commits, the upstream syncs
     and M5's play codecs. It tracks `origin/limonite`. The fork goes first, since `main`'s submodule
     pointer names its commit;
   - the wiki, `https://github.com/LimoniteMC/limonite-client.wiki.git` (`master`), from its
@@ -223,9 +223,9 @@ Windows 11, with Git Bash and PowerShell both used.
 
 **Pumpkin fork: `pumpkin/`**
 - A git submodule of `https://github.com/LimoniteMC/Pumpkin`, branch **`limonite`**, at
-  `15745d6`: the M1 to M4 commits on upstream `aac0a82`, with upstream `master` `5e9101f`
-  (2026-10-26) merged in (`845450b`), then the NBT reader fix and M5's play codecs. Its git directory is
-  `.git/modules/pumpkin`.
+  `2c52f24`: the M1 to M4 commits on upstream `aac0a82`, with upstream `master` `5e9101f`
+  (2026-10-26) merged in (`845450b`), then the NBT reader fix and M5's play codecs, and last upstream
+  `eba538f` merged in (2026-11-02). Its git directory is `.git/modules/pumpkin`.
 - `upstream` points at `https://github.com/Pumpkin-MC/Pumpkin.git`, whose default branch is
   `master`. The fork merges it weekly (`docs/upstream.md`).
 - **The fork's whole diff:** `git -C pumpkin diff upstream/master` (after a fetch) shows exactly
@@ -779,8 +779,8 @@ upstream fixes it and a weekly sync brings the fix in:
 - **Block pick is always ignored:** Pumpkin-MC/Pumpkin#4321, opened by the owner's account on
   2026-10-26. `block_pick_request.rs:23-26` takes `max_slots` as the slot to fill, and the official
   client always sends 9, so the handler returns.
-  - **It shows as closed, by mistake:** a line in our own commit `ad2eb64` closed it on 2026-11-01 (Gotchas). The handler
-    hasn't changed, here or on upstream's `master`. It needs reopening from the owner's account.
+  - **Closed by mistake, and reopened:** a line in our own commit `ad2eb64` closed it on 2026-11-01 (Gotchas), and the
+    owner reopened it on 2026-11-02. The handler hasn't changed, here or on upstream's `master`.
 - **A survival placement costs two items:** Pumpkin-MC/Pumpkin#4130, already open. The official
   client's use-item transaction carries its predicted slot change, which `inventory_action.rs`
   applies (`:87-135`) before its own `stack.decrement(1)` (`:289`).
