@@ -4,7 +4,7 @@ A living page: where the project is, how to build and run it, and what bites. Up
 milestone step lands. Architecture decisions live in `docs/PLAN.md`; this page is about progress
 and environment.
 
-_Last updated: 2026-10-26._
+_Last updated: 2026-11-01._
 
 ## Where we are
 
@@ -48,8 +48,11 @@ _Last updated: 2026-10-26._
     Nothing derived from a jar goes in the repo (CLAUDE.md, Rules).
   - **Step 7d is done (2026-10-31):** flipbooks animate (`render/animation.rs`), fluids slope and flow,
     and `--debug-world` holds every block state (`debug_world.rs`).
-  - **Next:** the owner's walk, in the debug world and beside the official client, and Step 8, the UI and
-    the HUD.
+  - **Step 8 is done (2026-11-01):** the client's own UI (`client/src/ui/`), and the HUD on it: the crosshair,
+    the hotbar, hearts, hunger and air, in the install's own sprites and font. The slots stay empty, and the
+    armour row hidden, until Step 9. Not pushed yet.
+  - **Next:** Step 9, items, icons and the hotbar. The owner's walk, in the debug world and beside the
+    official client, is still to come, and now takes in the HUD.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -233,6 +236,21 @@ cargo run -p limonite-client
     M4's 70-degree field of view, whatever the settings say.
 - **Dev builds** compile the client crate at `opt-level = 1` (root `Cargo.toml`), so meshing keeps
   up after a join. Overflow checks and debug assertions stay on.
+
+**Screenshots with no window** (m5-plan Step 8): the real server, client and renderer, saving frames as
+PNGs to `run/screenshots`, gitignored. `client/src/shots.rs` has the format of the list, and each line is one
+picture: a name, a gamemode, health, hunger, a pose as the `P` key logs it, and seconds to wait. The owner's
+copy of the list is in `run/step8`. The world is a copy, because the run changes it.
+
+```bash
+LIMONITE_SHOTS=run/step8/shots-world.txt LIMONITE_SHOTS_ARGS="--data-dir run/step8/shots-world --home run/step8/home --radius 16" CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo test --release -p limonite-client --bin limonite-client screenshots -- --ignored --nocapture
+```
+
+The HUD alone, every piece of it over stripes, goes to `run/sheets`:
+
+```bash
+LIMONITE_BEDROCK="C:/XboxGames/Minecraft for Windows/Content" cargo test -p limonite-client --bin limonite-client hud_sheets -- --ignored --nocapture
+```
 
 **The debug world** (m5-plan Step 7d): every block state in a grid, and water and lava set out beside it,
 in `run/debug-world`. `]` and `[` go to the next and last block, `.` and `,` to the next and last state, and

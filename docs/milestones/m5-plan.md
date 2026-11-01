@@ -1287,6 +1287,28 @@ The questions as they were asked:
     animation in M8, and PLAN.md left fluids as flat steps. The owner saw both on the walk, and asked
     for them after Step 7b, along with a debug world, which nothing in the plan had.
 
+30. **The UI blends in gamma, through a second view of the frame** (Step 8). Decision 14 said only
+    alpha-blended. In the frame's own sRGB view, blending happens in linear light, and the hotbar's
+    half-transparent slots come out visibly paler than the art means. The second view needs
+    `SURFACE_VIEW_FORMATS`, a capability that's asked for (Decision 21). Without it, the shader converts
+    to linear, and the slots are pale.
+31. **A third pipeline, for the crosshair** (Step 8), beside Decision 14's second for block icons. It
+    inverts what's behind it, as Java's does, and as the official client's looks. Nobody has checked
+    that side by side yet.
+32. **Some of Decision 14's widgets wait for their screens** (Step 8): buttons, item slots, scroll views,
+    text fields, and keyboard focus, which only Step 16's command line needs. So `ui/input.rs` has only
+    the pointer. Each arrives with the first thing that uses it, as crates do (Decision 22).
+33. **Breath isn't an attribute, and armour isn't sent** (Step 8). Step 5 read `minecraft:air`, but
+    Bedrock has none: Pumpkin sends `AIR_SUPPLY` in `SetActorData`, so the client's air never moved, and
+    `Game` now reads that. Bedrock works armour out from what's worn, so its row waits for Step 9.
+34. **The font's cells are 8 × 12, not 8 × 8** (Step 8), and start 3 units above the line, as
+    `font/default8.json` says. Finding 16 hadn't noticed the file. Accented letters come from the glyph
+    pages, a little thinner, rather than `default8`'s own further down its sheet.
+35. **A label above the hotbar came early** (Step 8). It's the one the held item's name will use (Decision
+    15), and the debug world says what you're looking at with it for now.
+36. **Screenshots with no window** (Step 8; the owner's ask, 2026-11-01): `client/src/shots.rs`, an ignored
+    test that runs the real server, client and renderer, and saves frames to `run/screenshots`.
+
 ## Results (filled in during execution)
 
 ### Step 1: what the official client sends (2026-10-26)
@@ -1602,6 +1624,42 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 8: The UI, and the HUD (2026-11-01)
+
+- **Commits:** `1fe5995` (this plan's lost heading), `2daa7a4` (breath), `3c8173c` (sprites, text, strings
+  and layout) and `699647b` (drawing, and the HUD).
+- **At startup:** 29 sprites in a 1024 × 515 atlas, none missing, with ASCII and 4 glyph pages, which are what
+  `en_US.lang` needs; 13,413 strings, with all 10 that the menus will want; 122 ms in a release build.
+- **Where things go,** from the install's `ui/hud_screen.json`, read while writing this and not at runtime:
+  - **The hotbar's bottom is 1.5 units above the window's.** Its panel is 31 tall, 13 up, and the hotbar
+    hangs 16 below the middle of the 5-tall experience bar at the top of it. So a selected slot's frame
+    has room for its 24 units, as it wouldn't if the hotbar were flush.
+  - **Hearts and hunger are 41 units up,** 8 apart, spanning 91 units either side of the middle. That the
+    renderer draws from its control's top is inferred: it fits a 1-unit gap above the experience bar.
+- **The bench,** at radius 8 in creative, one after the other on the same day:
+
+  | | Average | p50 | p95 | p99 | fps |
+  | --- | --- | --- | --- | --- | --- |
+  | Before | 0.41 ms | 0.35 | 0.72 | 1.24 | 2,430 |
+  | With the HUD | 0.43 ms | 0.36 | 0.76 | 1.17 | 2,337 |
+
+  The HUD stays on in the bench, since it's part of a real frame.
+- **In a real window:** `--debug-world` and the bench ran clean, with the surface in `Bgra8UnormSrgb` and the
+  UI in `Bgra8Unorm`, and the block's name above the hotbar followed typed jumps.
+- **Found by the tests:** a full breath showed an eleventh, bursting bubble. A tenth of a bubble per tick
+  isn't exact in an `f32`, so the sum now multiplies first.
+- **Found by looking:** text was garbled until `default8.json` turned up (Deviation 34).
+- **Checks:** 260 client tests, the headless run's 7 PASS lines, and clippy with the same 2 warnings as
+  before. `hud_sheets` draws every piece over stripes, and `screenshots` takes real frames.
+- **Not verified:** nobody has seen the HUD beside the official client. Its height above the bottom, and
+  whether its crosshair inverts, are the things to look at.
+- **Left:**
+  - hearts don't flash, wobble at low health, or change for poison, wither, frost or absorption;
+  - more than ten hearts stay ten;
+  - the experience bar isn't in Decision 15, so its gap stays empty;
+  - text is white for now, as colours arrive with chat in Step 16;
+  - nothing updates the selected slot or the armour row until Step 9.
 
 ### Step 7d: Animated textures, fluids that flow, and a debug world (2026-10-31)
 

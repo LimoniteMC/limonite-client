@@ -31,8 +31,8 @@
 
 > [!WARNING]
 > **Limonite is under heavy construction, so expect little to no functionality.** Today you can
-> walk and fly around a singleplayer world drawn with vanilla textures, and that's it: no lighting,
-> sky, mobs or HUD yet.
+> walk and fly around a singleplayer world drawn with vanilla textures, with a HUD, and that's it: no
+> lighting, sky or mobs yet, and nothing to build with.
 
 > [!IMPORTANT]
 > **Current phase of development: [Milestone 5, playable singleplayer](docs/milestones/m5-plan.md).**
@@ -151,6 +151,9 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
   dripstone, beds and signs all come out exact. Without a jar, hand-made models stand in for most of
   them. Chests, banners, heads and shulker boxes stay simple boxes until entity models arrive.
 - **Textures and fluids that move.** Flipbooks animate, and water and lava slope and flow.
+- **A HUD in the game's own look.** The crosshair, the hotbar, hearts, hunger and air, in the sprites and
+  the bitmap font from your install, blended the way the game blends them. The hotbar stays empty until
+  items arrive.
 - **A debug world.** `--debug-world` holds every block state in a grid, and you can jump to any of them.
 - **Bedrock-native world state.** Chunks decode straight into Bedrock's own palette format, and
   the client's world equals the server's, block for block and biome for biome. That's checked on
@@ -289,7 +292,7 @@ cargo run -p limonite-client -- --headless --map run/m3/map.png
 - **Your world carries over.** Each run starts where the last one ended. Delete `run/client/` for a
   fresh world.
 - **Your settings** are in `run/home/settings.toml`: your name, the view distance, the field of
-  view, the mouse sensitivity, the gamemode for new worlds, and every key. The first run writes it
+  view, the mouse sensitivity, the UI scale, the gamemode for new worlds, and every key. The first run writes it
   with comments. Edit it while the client is closed; a setting that's missing or wrong gets its
   default back.
 - **Your identity** is in `run/home/identity.toml`, made on the first run. Worlds remember your
@@ -383,6 +386,7 @@ limonite-client/          # cargo workspace
 │   └── src/
 │       ├── blocks/       # the block palette, and how each block looks
 │       ├── render/       # wgpu device, camera, mesher, textures, terrain shader
+│       ├── ui/           # the client's own UI: sprites, font, strings, layout, and the HUD
 │       └── world/        # Bedrock-native chunks and their decoder
 ├── packs/                # the pack filesystem: vanilla stack, __brarchive, registry merging
 ├── pumpkin/              # the Pumpkin fork, as a git submodule
