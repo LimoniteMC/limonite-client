@@ -28,6 +28,7 @@ mod ui;
 mod world;
 
 use std::{
+    collections::HashSet,
     io,
     path::{Path, PathBuf},
     process::ExitCode,
@@ -35,9 +36,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use glam::DVec3;
+use pumpkin_core::world::World as ServerWorld;
+use pumpkin_data::{Block, item::Item, item_stack::ItemStack};
 use pumpkin_util::{
     GameMode,
-    math::{vector2::Vector2, vector3::Vector3},
+    math::{position::BlockPos, vector2::Vector2, vector3::Vector3},
 };
 use pumpkin_world::{CURRENT_BEDROCK_MC_PROTOCOL, CURRENT_BEDROCK_MC_VERSION};
 use tracing::{debug, error, info, warn};
@@ -46,9 +50,15 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 use crate::{
     checks::Check,
     clock::TICK,
+    edit::{
+        UsePlan,
+        aim::{self, Hit},
+    },
     embedded::{EmbeddedServer, HostOperator},
     home::Home,
     identity::Identity,
+    inventory::items,
+    render::camera::look_direction,
     session::{Session, Stage},
     settings::{MAX_RADIUS, MIN_RADIUS, Overrides, Settings},
     world::{BlockTable, World},
@@ -59,12 +69,17 @@ const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [
                      [--name <name>] [--gamemode <mode>] [--radius <chunks>] [--bench <seconds>]\n       \
                      limonite-client --headless [--home <path>] [--data-dir <path>] [--name <name>] \
                      [--gamemode <mode>] [--radius <chunks>] [--linger <seconds>] [--measure] \
-                     [--map <path.png>] [--stream <blocks>]";
+                     [--map <path.png>] [--stream <blocks>] [--edits <blocks>]";
 
 /// Login and spawn must finish within this.
 const SPAWN_DEADLINE: Duration = Duration::from_secs(120);
 /// The walk: 40 ticks at 0.2 blocks a tick is 8 blocks east.
 const WALK_TICKS: u32 = 40;
+/// How far the scripted edits reach, which is in reach in any gamemode.
+const EDIT_REACH: f64 = 4.4;
+/// How far off it looks for something to click, so that the middle of a block put
+/// there is in reach too.
+const CLICK_REACH: f64 = 3.4;
 /// How long to wait for the server to apply the walk before checking it.
 const SETTLE: Duration = Duration::from_secs(5);
 /// How far up the teleport check moves the host, in blocks.
@@ -113,6 +128,9 @@ struct Args {
     map: Option<PathBuf>,
     /// After the join, fly this many blocks east and log how chunks stream.
     stream: Option<u32>,
+    /// Place and break this many blocks near the host with the real packets, and
+    /// check that the server applied them.
+    edits: Option<u32>,
     /// Fly the window's camera east for this long, log the frame times, and
     /// exit (`bench.rs`).
     bench: Option<Duration>,
@@ -132,11 +150,12 @@ impl Args {
         let mut measure = false;
         let mut map = None;
         let mut stream = None;
+        let mut edits = None;
         let mut bench = None;
         // The scripted session's flags, which mean nothing to the window.
         let mut headless_only = Vec::new();
         while let Some(arg) = args.next() {
-            if matches!(arg.as_str(), "--linger" | "--measure" | "--map" | "--stream") {
+            if matches!(arg.as_str(), "--linger" | "--measure" | "--map" | "--stream" | "--edits") {
                 headless_only.push(arg.clone());
             }
             match arg.as_str() {
@@ -195,6 +214,14 @@ impl Args {
                             .map_err(|_| format!("--stream: `{blocks}` isn't a number of blocks"))?,
                     );
                 }
+                "--edits" => {
+                    let blocks = args.next().ok_or("--edits needs a number of blocks")?;
+                    edits = Some(
+                        blocks
+                            .parse()
+                            .map_err(|_| format!("--edits: `{blocks}` isn't a number of blocks"))?,
+                    );
+                }
                 "--bench" => {
                     let secs = args.next().ok_or("--bench needs a number of seconds")?;
                     let secs = secs
@@ -241,6 +268,7 @@ impl Args {
             measure,
             map: map.as_deref().map(absolute).transpose()?,
             stream,
+            edits,
             bench,
         })
     }
@@ -457,6 +485,9 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             // `PlayerSpawn` only means the server has queued enough chunks,
             // not that they've arrived, so wait for them before checking.
             let join_chunks = wait_for_chunks(&mut session);
+            if let Some(blocks) = args.edits {
+                checks.push(edits_and_check(&mut session, server, blocks));
+            }
             if args.measure {
                 measure(&mut session, server, join_chunks);
             }
@@ -490,6 +521,7 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             "not checked: never spawned".to_string(),
         ));
     }
+    session.log_edits();
     let mut passed = checks::report(&checks);
     if let Some(path) = &args.map {
         passed &= write_map(&session, path);
@@ -574,6 +606,201 @@ fn teleport_and_check(session: &mut Session, server: &EmbeddedServer) -> Check {
     player.request_teleport(to, entity.yaw.load(), entity.pitch.load());
     let _ = session.run_until(asked + TELEPORT_DEADLINE, |s| s.teleport_report().is_some());
     checks::teleport(session.teleport_report(), eyes, asked.elapsed())
+}
+
+/// What the host can click on from where it stands: looking around, each block a ray
+/// hits, once, that a block can go against, and not so close that it'd be in the way.
+fn clicks_in_reach(session: &Session) -> Vec<Hit> {
+    let Some(player) = session.game().player() else {
+        return Vec::new();
+    };
+    let eyes = player.pose().eyes();
+    let feet = player.pose().feet.floor().as_ivec3();
+    let world = session.game().world();
+    let mut seen = HashSet::new();
+    let mut found = Vec::new();
+    for pitch in (10..=80).step_by(5) {
+        for yaw in (0..360).step_by(15) {
+            let look = look_direction(pitch as f32, yaw as f32).as_dvec3();
+            let Some(hit) = aim::in_world(world, eyes, look, CLICK_REACH) else {
+                continue;
+            };
+            let near = (hit.block - feet).abs();
+            if near.x.max(near.z) > 1 && seen.insert(hit.block) {
+                found.push(hit);
+            }
+        }
+    }
+    found
+}
+
+/// Runs `ticks` ticks at most with neither button held, until `done` says so.
+fn edit_ticks(session: &mut Session, ticks: u32, mut done: impl FnMut(&Session) -> bool) -> bool {
+    for _ in 0..ticks {
+        if done(session) {
+            return true;
+        }
+        session.edit_tick(false, false, None);
+        session.tick();
+        thread::sleep(TICK);
+    }
+    done(session)
+}
+
+/// What the client expects a click on `hit` to do, and the block in hand.
+fn plan_for(session: &Session, hit: &Hit) -> Result<(UsePlan, &'static Block), String> {
+    let player = session.game().player().ok_or("no player")?;
+    let held = session.game().inventory().held();
+    let item = items::placed_block(held.id, held.aux_value.0).ok_or("nothing to place in hand")?;
+    let plan = edit::plan_use(session.game().world(), player.pose().feet, player.abilities.build, Some(item), hit.block, hit.face);
+    if plan.places {
+        Ok((plan, item))
+    } else {
+        Err(format!("the client says {} won't take a block", hit.block))
+    }
+}
+
+/// One click and one break, of whatever's in the hand, checked on both sides.
+fn place_and_break(session: &mut Session, world: &ServerWorld, hit: &Hit) -> Result<(), String> {
+    let (plan, item) = plan_for(session, hit)?;
+    let eyes = session.game().player().ok_or("no player")?.pose().eyes();
+    let at = plan.result;
+    let pos = BlockPos::new(at.x, at.y, at.z);
+    let shown = |session: &Session| session.game().world().block(at.x, at.y, at.z, 0);
+    let client_has_it = |session: &Session| {
+        shown(session)
+            .and_then(|id| session.game().world().blocks().java_state(id))
+            .is_some_and(|state| Block::from_state_id(state).id == item.id)
+    };
+    let before = shown(session);
+
+    session.use_pressed(Some(hit));
+    let first_look = shown(session);
+    match plan.shows {
+        Some(id) if first_look != Some(id) => {
+            return Err(format!("at {at} the client shows {first_look:?} right after the click, not {id}"));
+        }
+        None if first_look != before => return Err(format!("at {at} the client guessed a block it can't be sure of")),
+        _ => {}
+    }
+    if !edit_ticks(session, 40, |_| world.get_block(&pos).id == item.id) {
+        return Err(format!("the server has {} at {at}, not {}", world.get_block(&pos).name, item.name));
+    }
+    if !edit_ticks(session, 20, client_has_it) {
+        return Err(format!("the client doesn't have what the server has at {at}: {}", item.name));
+    }
+
+    // Now to break it, holding the button until it goes.
+    let middle = at.as_dvec3() + DVec3::splat(0.5);
+    let aimed = aim::in_world(session.game().world(), eyes, (middle - eyes).normalize(), EDIT_REACH)
+        .filter(|aimed| aimed.block == at)
+        .ok_or_else(|| format!("nothing to aim at, at {at}"))?;
+    session.attack_pressed(Some(&aimed));
+    let start = session.game().ticks();
+    let mut broke = false;
+    for _ in 0..300 {
+        session.edit_tick(true, false, Some(&aimed));
+        session.tick();
+        thread::sleep(TICK);
+        if !client_has_it(session) {
+            broke = true;
+            break;
+        }
+    }
+    let took = session.game().ticks() - start;
+    session.edit_tick(false, false, None);
+    if !broke {
+        return Err(format!("{} at {at} never broke, in {took} ticks", item.name));
+    }
+    if !edit_ticks(session, 40, |_| world.get_block(&pos).id != item.id) {
+        return Err(format!("the server still has {} at {at}", item.name));
+    }
+    info!("Placed and broke {} at {at}; it took {took} ticks to break", item.name);
+    Ok(())
+}
+
+/// Places and breaks `blocks` blocks near the host, and one log, with the real packets,
+/// and checks that the server applied each. Then a click the server refuses, which has
+/// to snap back (m5-plan Step 11).
+fn edits_and_check(session: &mut Session, server: &EmbeddedServer, blocks: u32) -> Check {
+    const NAME: &str = "edits";
+    let players = server.server.get_all_players();
+    let Some(player) = players.first() else {
+        return Check::new(NAME, false, "the server has no player".to_string());
+    };
+    let world = player.world().clone();
+    // Through the server, as anything gets into a slot.
+    let _runtime = server.runtime.enter();
+    player.inventory().insert_stack(0, &mut ItemStack::new(64, &Item::DIRT));
+    player.inventory().insert_stack(1, &mut ItemStack::new(64, &Item::OAK_LOG));
+    player.sync_inventory_to_client();
+    // The teleport check left the host in the air, and the stacks take a tick or two.
+    let _ = session.run_until(Instant::now() + SETTLE, |session| {
+        session.game().player().is_some_and(|player| player.on_ground) && session.game().inventory().hotbar()[1].is_some()
+    });
+    let gamemode = session.game().player().map(|player| player.gamemode);
+    let mut ground = clicks_in_reach(session).into_iter();
+
+    let mut problems = Vec::new();
+    let mut done = 0;
+    while done < blocks {
+        let Some(hit) = ground.next() else {
+            problems.push(format!("only {done} places in reach"));
+            break;
+        };
+        // What's been edited already may not take a block any more, which is no fault.
+        if plan_for(session, &hit).is_ok() {
+            match place_and_break(session, &world, &hit) {
+                Ok(()) => done += 1,
+                Err(problem) => problems.push(problem),
+            }
+        }
+    }
+    session.select_slot(1);
+    let log = ground.find(|hit| plan_for(session, hit).is_ok()).map(|hit| place_and_break(session, &world, &hit));
+    session.select_slot(0);
+    match log {
+        Some(Ok(())) => {}
+        Some(Err(problem)) => problems.push(problem),
+        None => problems.push("nothing left in reach for the log".to_string()),
+    }
+
+    // The server takes the right to build away, and the client hasn't heard yet.
+    let refused = match ground.find(|hit| plan_for(session, hit).is_ok_and(|(plan, _)| plan.shows.is_some())) {
+        Some(hit) => {
+            let at = plan_for(session, &hit).map_or(hit.block, |(plan, _)| plan.result);
+            let shown = |session: &Session| session.game().world().block(at.x, at.y, at.z, 0);
+            let before = shown(session);
+            player.set_gamemode(GameMode::Adventure);
+            session.use_pressed(Some(&hit));
+            let predicted = shown(session);
+            let settled = edit_ticks(session, 40, |session| shown(session) == before);
+            player.set_gamemode(gamemode.unwrap_or(GameMode::Creative));
+            let _ = session.run_until(Instant::now() + SETTLE, |session| session.game().player().is_some_and(|player| player.abilities.build));
+            if predicted == before {
+                problems.push(format!("the refused click at {at} showed nothing"));
+            }
+            if !settled {
+                problems.push(format!("the refused click at {at} didn't snap back"));
+            }
+            settled
+        }
+        None => {
+            problems.push("nothing left in reach for the refused click".to_string());
+            false
+        }
+    };
+    Check::new(
+        NAME,
+        problems.is_empty(),
+        if problems.is_empty() {
+            format!(
+                "placed and broke {done} blocks and a log in {gamemode:?} with the real packets, the server applied each, and a refused click snapped back ({refused})"
+            )
+        } else {
+            problems.join("; ")
+        },
+    )
 }
 
 /// Compares every decoded chunk the server still has loaded with the
