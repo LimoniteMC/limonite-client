@@ -146,8 +146,8 @@ impl Abilities {
     }
 }
 
-/// The attributes the server sends (`UpdateAttributes`, `SetHealth`), with
-/// vanilla's values until it does.
+/// What the server says about the player's body (`UpdateAttributes`, `SetHealth`,
+/// `SetActorData`), with vanilla's values until it does.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Attributes {
     /// `minecraft:movement`: the walking speed.
@@ -162,7 +162,7 @@ pub struct Attributes {
     /// `minecraft:player.hunger`, 0 to 20, and `minecraft:player.saturation`.
     pub hunger: f32,
     pub saturation: f32,
-    /// `minecraft:air`: breath, in ticks.
+    /// Breath, in ticks: `AIR_SUPPLY` in `SetActorData`, not an attribute.
     pub air: f32,
 }
 
@@ -196,7 +196,6 @@ impl Attributes {
                 }
                 "minecraft:player.hunger" => self.hunger = value,
                 "minecraft:player.saturation" => self.saturation = value,
-                "minecraft:air" => self.air = value,
                 other => debug!("Attribute {other} = {value}: not kept"),
             }
         }

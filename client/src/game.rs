@@ -19,7 +19,9 @@ use pumpkin_protocol::{
     bedrock::client::{
         CCorrectPlayerMovePrediction, CMovePlayer, CSetActorMotion, CSetHealth, CSetPlayerGameType,
         CSetTime, CStartGame, CUpdateAbilities, CUpdateAttributes, GameType,
-        network_chunk_publisher_update::CNetworkChunkPublisherUpdate, update_block::CUpdateBlock,
+        network_chunk_publisher_update::CNetworkChunkPublisherUpdate,
+        set_actor_data::{CSetActorData, MetadataValue, entity_data_key},
+        update_block::CUpdateBlock,
     },
     packet::Packet,
     serial::PacketRead,
@@ -220,6 +222,16 @@ impl Game {
                 let set: CSetHealth = read(packet)?;
                 player.attributes.health = set.health.0 as f32;
             }
+            // Breath isn't an attribute on Bedrock, but one of the actor's data.
+            CSetActorData::PACKET_ID => {
+                let data: CSetActorData = read(packet)?;
+                if data.target_runtime_id.0 != player.runtime_id {
+                    return Ok(Effect::Ignored);
+                }
+                if let Some(MetadataValue::Short(air)) = data.actor_data.0.get(&entity_data_key::AIR_SUPPLY) {
+                    player.attributes.air = f32::from(*air);
+                }
+            }
             _ => return Ok(Effect::Ignored),
         }
         Ok(Effect::Player)
@@ -245,7 +257,9 @@ mod tests {
         BClientPacket,
         bedrock::client::{
             AttributeData, CommandPermissionLevel, PlayerPermissionLevel, SerializedAbilitiesData,
-            SerializedAbilitiesDataSerializedLayer, update_abilities::Ability,
+            SerializedAbilitiesDataSerializedLayer,
+            set_actor_data::{PropertySyncData, SyncedActorDataList},
+            update_abilities::Ability,
         },
         codec::{var_int::VarInt, var_ulong::VarULong},
     };
@@ -402,6 +416,25 @@ mod tests {
 
         apply(&mut game, &CSetHealth { health: VarInt(9) });
         assert_eq!(player(&game).attributes.health, 9.0);
+    }
+
+    #[test]
+    fn breath_comes_from_our_actors_data() {
+        let mut game = game();
+        let data = |id, air| {
+            let mut actor_data = SyncedActorDataList::new();
+            actor_data.set(entity_data_key::AIR_SUPPLY, MetadataValue::Short(air));
+            CSetActorData {
+                target_runtime_id: VarULong(id),
+                actor_data,
+                synced_properties: PropertySyncData::default(),
+                tick: VarULong(0),
+            }
+        };
+        assert_eq!(apply(&mut game, &data(OTHER, 10)), Effect::Ignored, "a fish's breath isn't ours");
+        assert_eq!(player(&game).attributes.air, 300.0);
+        assert_eq!(apply(&mut game, &data(ID, 120)), Effect::Player);
+        assert_eq!(player(&game).attributes.air, 120.0);
     }
 
     #[test]
