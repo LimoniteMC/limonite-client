@@ -1698,7 +1698,7 @@ by Pumpkin's own reader with no bytes left over.
 
   The refused click takes away the right to build on the server, before the client has read that. The log is what
   shows a place that isn't predicted: nothing appears until the server says. The check builds its own stone floor at
-  y 200, after a world whose spawn was over the sea left it nothing to click. It then passed in six new worlds.
+  y 200, after a world whose spawn was over the sea left it nothing to click. It then passed in five new worlds.
 - **Looking at it:** pictures of the crack on stone, stairs, a slab, a fence and glass (`run/step11/shots`, gitignored),
   which is how Deviation 44 came about.
 - **A scare that wasn't:** the screenshot run once took 27 minutes where it takes 26 s. The same run straight after,
