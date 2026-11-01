@@ -54,6 +54,9 @@ _Last updated: 2026-11-01._
     block icons from the world's own mesher (`render/icons.rs`), counts and the held item's name. 1 to 9 and the
     wheel select, and Q drops, byte for byte as the official client does. Picking waits for Step 10, and armour
     for Step 12.
+  - **Fixed (2026-11-01, the owner's report):** walls gave way along any axis from about 256 blocks out from the
+    origin, because a position's rounding could carry the box inside them (`ad5e250`; m5-plan Deviation 40, and
+    Results, "The walls that gave way"). Not pushed yet.
   - **Next:** Step 10, aiming at blocks. The owner's walk, in the debug world and beside the official client, is
     still to come, and now takes in the HUD and the hotbar.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.

@@ -1317,6 +1317,11 @@ The questions as they were asked:
 39. **Armour waits for Step 12, or for Pumpkin** (Step 9), and not for Step 9 as Deviation 33 said. Container
     0 is only the 36 main slots, and Pumpkin's Bedrock path sends no armour slots or off hand. The client can
     know what it put there itself once the inventory screen moves things. It's on the upstream list.
+40. **A position never rounds into a box** (the owner's report, 2026-11-01). Step 6 rounded each tick's position
+    to the nearest `f32`, as the official client keeps it, and forgave overlaps under 0.00001. That held where the
+    traces were recorded, within 40 blocks of the origin on x and z, but an `f32`'s steps grow with distance. Now,
+    where the nearest would put the box into something, the position takes the next one back. Nothing else changes:
+    the traces replay as they did.
 
 ## Results (filled in during execution)
 
@@ -1633,6 +1638,59 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### The walls that gave way (2026-11-01)
+
+The owner, in a world whose spawn is at x -588, found they could walk through blocks at some yaws, wherever they
+went, and logged the poses at x -535.88, z -10.13.
+
+- **Commit:** `ad5e250`.
+- **The cause is the axis and the distance, not the angle.** A player stopped by a wall has its box's edge exactly
+  on the wall's face. Then its position rounds to the nearest `f32`, whose steps widen with distance from the origin.
+  Half the player's width, 0.3, decides which way that goes, and it's the same walking either way along an axis:
+
+  | Wall at, either side of the origin | An `f32`'s step | The box, after rounding | |
+  | --- | --- | --- | --- |
+  | 100 | 0.000008 | 0.000003 short of the face | Held |
+  | 200 | 0.000015 | 0.000003 short of the face | Held |
+  | 300 | 0.000031 | 0.000012 past the face | Gave way |
+  | 535 | 0.000061 | 0.000012 past the face | Gave way |
+  | 2000 | 0.000122 | 0.000049 short of the face | Held |
+  | 5000 | 0.000488 | 0.000195 past the face | Gave way |
+  | 20000 | 0.001953 | 0.000781 short of the face | Held |
+
+  Collisions forgive 0.00001. Past that, the box counts as inside the block, and a block doesn't stop a box that's
+  inside it, so the player walks on. Each block ahead rounds the same way, so it walks on through them all. At the
+  owner's spot, every wall along x gave way and none along z, whose coordinate was near 0. So it looked like yaw.
+- **At the owner's spot,** in a copy of its world, with a temporary check that's since been removed. Each run walks
+  forward for 100 ticks from `-535.88 -42.00 -10.13`, on the real server and the real chunks:
+
+  | Yaw | Ended, before | Ticks inside blocks, before | Ended, after | Ticks inside blocks, after |
+  | --- | --- | --- | --- | --- |
+  | -76.1 | x -518.69 | 77 | x -531.30, at the wall | 0 |
+  | -68.7 | x -520.33 | 77 | x -531.30, at the wall | 0 |
+  | 85.8 | x -556.72, down a slope | 0 | The same | 0 |
+  | 86.7 | x -556.74, down a slope | 0 | The same | 0 |
+  | 0 | z -7.30, at the wall | 0 | The same | 0 |
+  | 180 | z -24.70, at the wall | 0 | The same | 0 |
+
+  The first tick inside had the box 0.0000122 past the face, as the table above says it would. Yaws 85.8 and 86.7 met
+  no wall from there, so these runs don't show that direction; the tests below do.
+- **Why nothing caught it:** every trace was recorded within 40 blocks of the origin on x and z, and every test's
+  wall stood within a few blocks of it.
+- **The new tests** walk at walls, on every side, from x 0 to the edge of the world at 29,999,984:
+  - before the fix, 92 of the 168 kinds of wall in `a_wall_stops_the_player_however_far_it_is_from_the_origin` let
+    the player through, by up to 58 blocks in the first version's longer walk;
+  - a move that ends just short of a wall, with nothing to stop it, could round in as well: 506 of 924 got through
+    before the fix, and none now;
+  - after it, a player still slides along a wall, fits through a one-block gap, and walks out of a block it's inside;
+  - `every_wall_stops_the_player`, ignored for its 111 s in a release build, takes every yaw in 10-degree steps, every
+    gait, and faces on every sixteenth, for fences and doors: 731,136 walks, all stopped.
+  - Ceilings and floors held at every height from -64 to 320, before the fix and after. Their test stays.
+- **Checks:** 293 client tests, the official client's traces among them, and clippy with the same 2 warnings.
+- **Not verified:** nobody has walked at a wall in the window with this in.
+- **Left:** a player saved against a wall by an older build starts a hair inside it, so that one wall gives way
+  once.
 
 ### Step 9: Items, icons and the hotbar (2026-11-01)
 
