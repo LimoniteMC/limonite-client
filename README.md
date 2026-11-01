@@ -18,8 +18,9 @@
 [![Current milestone: 5, playable singleplayer](https://img.shields.io/badge/current_milestone-5_%C2%B7_playable_singleplayer-818600?style=for-the-badge&labelColor=1A1A1A)](#roadmap)
 [![Developed AI-first with Claude](https://img.shields.io/badge/AI--first-Claude-818600?style=for-the-badge&logo=claude&logoColor=white&labelColor=1A1A1A)](#how-its-made)
 [![Last commit](https://img.shields.io/github/last-commit/LimoniteMC/limonite-client?style=for-the-badge&labelColor=1A1A1A&color=818600)](https://github.com/LimoniteMC/limonite-client/commits/main)
+[![Discord: join us](https://img.shields.io/badge/Discord-join_us-818600?style=for-the-badge&logo=discord&logoColor=white&labelColor=1A1A1A)](https://discord.gg/C7DHyAYGun)
 
-[**What it is**](#what-limonite-is) · [**Try it**](#try-it) · [**How it works**](#how-it-works) · [**Roadmap**](#roadmap) · [**Docs**](#documentation)
+[**What it is**](#what-limonite-is) · [**Try it**](#try-it) · [**How it works**](#how-it-works) · [**Roadmap**](#roadmap) · [**Docs**](#documentation) · [**Discord**](https://discord.gg/C7DHyAYGun)
 
 <br>
 
@@ -488,6 +489,12 @@ Limonite is for your own worlds and your own LAN.
 The same documents are on the [wiki](https://github.com/LimoniteMC/limonite-client/wiki), with
 a sidebar for getting around. It's generated from `docs/` by `scripts/sync-wiki.ps1`, so edit the
 files here, not the wiki.
+
+## Community
+
+Questions, ideas, or just want to watch it get built? Come and talk on
+[Discord](https://discord.gg/C7DHyAYGun). Bugs and feature requests are best kept as
+[issues](https://github.com/LimoniteMC/limonite-client/issues/new/choose), so they don't get lost.
 
 ## Acknowledgements
 
