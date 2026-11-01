@@ -1026,8 +1026,9 @@ fn set_up_process() {
     // process picks one before any client can be created.
     let _ = rustls::crypto::ring::default_provider().install_default();
 
-    // Pumpkin runs worldgen and chunk encoding on Rayon's global pool. Naming
-    // its threads makes them recognisable in a debugger or profiler.
+    // Pumpkin reads saved chunks on Rayon's global pool, and the client makes
+    // item icons on it: the tick, worldgen and chunk encoding have pools of their
+    // own. Naming its threads makes them recognisable in a debugger or profiler.
     if let Err(err) = rayon::ThreadPoolBuilder::new()
         .thread_name(|i| format!("Rayon-Worker-{i}"))
         .build_global()
