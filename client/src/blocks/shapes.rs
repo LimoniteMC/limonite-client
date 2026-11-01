@@ -22,6 +22,10 @@ use crate::world::BlockTable;
 /// 0.000015, so a player standing on the ground can end up 0.000005 inside
 /// it. Yet it's narrow enough that the official client's player, 0.000035
 /// below a ladder's top, still counts as touching it (`ladder.bin`).
+///
+/// Further from the origin the steps are wider than this, so physics doesn't
+/// lean on it there: a position never rounds into a box at all
+/// (`single_precision`, in `player/physics.rs`).
 pub const EPSILON: f64 = 1e-5;
 
 /// An axis-aligned box, in blocks.

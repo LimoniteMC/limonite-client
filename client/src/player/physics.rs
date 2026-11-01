@@ -330,7 +330,7 @@ pub fn step(body: &mut Body, intent: &Intent, rules: &Rules, terrain: &impl Terr
         velocity.y = LADDER_SPEED;
     }
     body.velocity = velocity;
-    single_precision(body);
+    single_precision(body, rules.no_clip, terrain);
 
     Outcome {
         horizontal_collision: stopped_x || stopped_z,
@@ -352,18 +352,48 @@ pub fn step(body: &mut Body, intent: &Intent, rules: &Rules, terrain: &impl Terr
 /// Standing on something, the height rounds up rather than to the nearest:
 /// the official client rests at 201.62001 on a floor whose top is 200, the
 /// next `f32` above 201.62, never just inside the floor.
-fn single_precision(body: &mut Body) {
-    let exact = body.feet.y + EYE_HEIGHT;
-    let mut eyes_y = exact as f32;
-    if body.on_ground && f64::from(eyes_y) < exact {
-        eyes_y = eyes_y.next_up();
+///
+/// **Rounding never carries the box into anything.** The further from the
+/// origin, the wider an `f32`'s steps: 0.00006 at x 535. So the nearest one to
+/// a place against a wall can be inside the wall by more than collisions
+/// forgive ([`EPSILON`](crate::blocks::shapes::EPSILON)), and a box that's
+/// inside a block isn't stopped by it, so the player would walk on through.
+/// Where that would happen, the position takes the `f32` on the near side of
+/// where the move ended. Rounding keeps the order of two numbers, and the move
+/// began on an `f32`, so that one can't be further back than where it began.
+fn single_precision(body: &mut Body, no_clip: bool, terrain: &impl Terrain) {
+    // What Bedrock stores: the feet's x and z, and the eyes' height.
+    let lift = DVec3::Y * EYE_HEIGHT;
+    let exact = body.feet + lift;
+    let mut stored = exact.as_vec3();
+    if body.on_ground && f64::from(stored.y) < exact.y {
+        stored.y = stored.y.next_up();
     }
-    body.feet = DVec3::new(
-        f64::from(body.feet.x as f32),
-        f64::from(eyes_y) - EYE_HEIGHT,
-        f64::from(body.feet.z as f32),
-    );
+    for axis in 0..3 {
+        let mut feet = body.feet;
+        feet[axis] = f64::from(stored[axis]) - lift[axis];
+        if !no_clip && enters(terrain, player_box(body.feet), player_box(feet)) {
+            stored[axis] = if f64::from(stored[axis]) > exact[axis] {
+                stored[axis].next_down()
+            } else {
+                stored[axis].next_up()
+            };
+            feet[axis] = f64::from(stored[axis]) - lift[axis];
+        }
+        body.feet = feet;
+    }
     body.velocity = body.velocity.as_vec3().as_dvec3();
+}
+
+/// Whether a box moved from `before` to `after` overlaps something it didn't.
+/// One that's already inside a block is free to walk out, as in vanilla.
+fn enters(terrain: &impl Terrain, before: Aabb, after: Aabb) -> bool {
+    if before == after {
+        return false;
+    }
+    let mut boxes = Vec::new();
+    boxes_near(terrain, after, &mut boxes);
+    boxes.iter().any(|other| after.intersects(other) && !before.intersects(other))
 }
 
 /// The keys' push for `move_vec`, turned to face `yaw`: forward goes along
@@ -844,5 +874,267 @@ pub mod tests {
         };
         run_rules(&mut body, &walk(-90.0), &rules, 20, &solid);
         assert!(body.feet.x > 5.0, "{:?}", body.feet);
+    }
+
+    /// Block coordinates to try walls at: either side of each place an `f32`'s
+    /// step doubles, and where the owner found this (x -535).
+    const FAR: [i32; 21] = [
+        0, 127, 128, 255, 256, 300, 511, 512, 535, 1023, 1024, 2048, 4095, 4096, 8192, 16384, 65536, 131_072,
+        1_048_576, 8_388_608, 29_999_984,
+    ];
+    /// The ways of moving a wall has to stop: sprinting, and flying.
+    const GAITS: [(bool, bool); 4] = [(false, false), (true, false), (false, true), (true, true)];
+
+    /// Solid from `face` on along `axis`, the way `sign` points: a wall or a
+    /// ceiling, or a floor when `axis` is y and `sign` is negative. Its face
+    /// can be on any sixteenth, as a fence's or a door's is. A wall stands on
+    /// a floor with its top at y 64.
+    struct Wall {
+        axis: usize,
+        sign: f64,
+        face: f64,
+    }
+
+    impl Wall {
+        /// How far past the face a player with its feet at `feet` is.
+        fn past(&self, feet: DVec3) -> f64 {
+            let area = player_box(feet);
+            let edge = if self.sign > 0.0 { area.max[self.axis] } else { area.min[self.axis] };
+            (edge - self.face) * self.sign
+        }
+
+        /// How far past the face the player gets, moving `intent` under
+        /// `rules` from `feet`, over `ticks` ticks.
+        fn deepest(&self, feet: DVec3, intent: &Intent, rules: &Rules, ticks: usize) -> f64 {
+            let mut body = Body {
+                // A position is always an `f32`, by the time it moves.
+                feet: feet.as_vec3().as_dvec3(),
+                velocity: DVec3::ZERO,
+                on_ground: self.axis != 1,
+            };
+            let mut deepest = f64::NEG_INFINITY;
+            for _ in 0..ticks {
+                step(&mut body, intent, rules, self);
+                deepest = deepest.max(self.past(body.feet));
+            }
+            deepest
+        }
+    }
+
+    impl Terrain for Wall {
+        fn collision_boxes(&self, x: i32, y: i32, z: i32, out: &mut Vec<Aabb>) {
+            let mut cube = Aabb::cube(x, y, z);
+            if self.axis != 1 && y < 64 {
+                out.push(cube);
+                return;
+            }
+            if self.sign > 0.0 {
+                cube.min[self.axis] = cube.min[self.axis].max(self.face);
+            } else {
+                cube.max[self.axis] = cube.max[self.axis].min(self.face);
+            }
+            if cube.min[self.axis] < cube.max[self.axis] {
+                out.push(cube);
+            }
+        }
+
+        fn surface(&self, _: i32, _: i32, _: i32) -> Surface {
+            Surface::default()
+        }
+
+        fn ready(&self, _: DVec3) -> bool {
+            true
+        }
+    }
+
+    /// Walks at walls every way along x and z, at each of `distances` either
+    /// side of the origin. What's returned says what got through.
+    fn sweep_walls(distances: &[i32], sixteenths: &[i32], offs: &[f32], sides: &[f64], gaits: &[(bool, bool)]) -> String {
+        use std::fmt::Write as _;
+        let mut runs = 0;
+        let mut through = std::collections::BTreeMap::new();
+        for axis in [0, 2] {
+            for sign in [1.0, -1.0] {
+                let square = match (axis, sign > 0.0) {
+                    (0, true) => -90.0,
+                    (0, false) => 90.0,
+                    (_, true) => 0.0,
+                    (_, false) => 180.0,
+                };
+                for &distance in distances {
+                    for whole in [distance, -distance] {
+                        for &sixteenth in sixteenths {
+                            let face = f64::from(whole) + f64::from(sixteenth) / 16.0;
+                            let wall = Wall { axis, sign, face };
+                            for &side in sides {
+                                let mut feet = DVec3::new(side, 64.0, side);
+                                // Far enough that rounding can't start it in the wall.
+                                feet[axis] = 2.5f64.mul_add(-sign, face);
+                                for &off in offs {
+                                    for &(sprinting, flying) in gaits {
+                                        let intent = Intent {
+                                            sprinting,
+                                            ..walk(square + off)
+                                        };
+                                        let rules = Rules {
+                                            flying,
+                                            was_flying: flying,
+                                            ..Rules::default()
+                                        };
+                                        runs += 1;
+                                        let deepest = wall.deepest(feet, &intent, &rules, 40);
+                                        if deepest > crate::blocks::shapes::EPSILON {
+                                            let key = (axis, sign > 0.0, whole);
+                                            let entry = through.entry(key).or_insert((0, 0.0_f64));
+                                            entry.0 += 1;
+                                            entry.1 = entry.1.max(deepest);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if through.is_empty() {
+            return String::new();
+        }
+        let mut report = format!("of {runs} runs, {} (axis, towards +, wall) let some through:\n", through.len());
+        for (key, (count, deepest)) in &through {
+            writeln!(report, "{key:?}: {count} runs, {deepest:.6} past the face").unwrap();
+        }
+        report
+    }
+
+    #[test]
+    fn a_wall_stops_the_player_however_far_it_is_from_the_origin() {
+        // The owner's yaws were 4 to 21 degrees off square.
+        let report = sweep_walls(&FAR, &[0], &[-60.0, -21.0, -4.0, 0.0, 14.0], &[0.5, 535.5], &GAITS);
+        assert!(report.is_empty(), "{report}");
+        // A face on any sixteenth: fences, doors, panes.
+        let all: Vec<i32> = (1..16).collect();
+        let report = sweep_walls(&FAR, &all, &[14.0], &[0.5], &[(false, false), (true, true)]);
+        assert!(report.is_empty(), "{report}");
+    }
+
+    /// Every yaw, gait and sixteenth together.
+    #[test]
+    #[ignore = "every combination; the test above takes a slice of it"]
+    fn every_wall_stops_the_player() {
+        let all: Vec<i32> = (0..16).collect();
+        let offs: Vec<f32> = (-8..=8).map(|step| step as f32 * 10.0).collect();
+        let report = sweep_walls(&FAR, &all, &offs, &[0.5, 10.25, 535.5, 5000.5], &GAITS);
+        assert!(report.is_empty(), "{report}");
+    }
+
+    #[test]
+    fn a_ceiling_or_a_floor_holds_at_every_height() {
+        let mut through = Vec::new();
+        for height in -64..=320 {
+            for sixteenth in [0, 3, 13] {
+                let face = f64::from(height) + f64::from(sixteenth) / 16.0;
+                let side = 535.5;
+                let flying = Rules {
+                    flying: true,
+                    was_flying: true,
+                    ..Rules::default()
+                };
+                let up = Intent {
+                    jump: true,
+                    ..Intent::default()
+                };
+                let down = Intent {
+                    descend: true,
+                    ..Intent::default()
+                };
+                let ceiling = Wall { axis: 1, sign: 1.0, face };
+                let floor = Wall { axis: 1, sign: -1.0, face };
+                let below = DVec3::new(side, face - HEIGHT - 2.5, side);
+                let above = DVec3::new(side, face + 2.5, side);
+                let high = DVec3::new(side, face + 30.0, side);
+                let tries = [
+                    ("flying up", ceiling.deepest(below, &up, &flying, 40)),
+                    ("flying down", floor.deepest(above, &down, &flying, 40)),
+                    ("falling", floor.deepest(high, &Intent::default(), &Rules::default(), 60)),
+                ];
+                for (how, deepest) in tries {
+                    if deepest > crate::blocks::shapes::EPSILON {
+                        through.push(format!("{how} at {face}: {deepest:.6} past the face"));
+                    }
+                }
+            }
+        }
+        assert!(through.is_empty(), "{} got through:\n{}", through.len(), through.join("\n"));
+    }
+
+    #[test]
+    fn a_move_ending_just_short_of_a_wall_isnt_rounded_into_it() {
+        let mut through = Vec::new();
+        for distance in FAR {
+            for whole in [distance, -distance] {
+                for sign in [1.0, -1.0] {
+                    for gap in [0.0, 1e-6, 3e-6, 1e-5, 1.3e-5, 2e-5, 3e-5, 5e-5, 6e-5, 1e-4, 1e-3] {
+                        let face = f64::from(whole);
+                        let wall = Wall { axis: 0, sign, face };
+                        let start = f64::from((sign * 2.5f64).mul_add(-1.0, face) as f32);
+                        // No keys, so the velocity is the move, and nothing stops it.
+                        let end = face - sign * (HALF_WIDTH + gap);
+                        let mut body = Body {
+                            feet: DVec3::new(start, 64.0, 0.5),
+                            velocity: DVec3::new(end - start, 0.0, 0.0),
+                            on_ground: true,
+                        };
+                        step(&mut body, &Intent::default(), &Rules::default(), &wall);
+                        let mut deepest = wall.past(body.feet);
+                        // Then it walks on, into the wall.
+                        let yaw = if sign > 0.0 { -90.0 } else { 90.0 };
+                        for _ in 0..10 {
+                            step(&mut body, &walk(yaw), &Rules::default(), &wall);
+                            deepest = deepest.max(wall.past(body.feet));
+                        }
+                        if deepest > crate::blocks::shapes::EPSILON {
+                            through.push(format!("{face} walking {sign}, {gap} short: {deepest:.6} past the face"));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(through.is_empty(), "{} got through:\n{}", through.len(), through.join("\n"));
+    }
+
+    #[test]
+    fn far_out_a_player_still_slides_along_walls_and_fits_through_gaps() {
+        for distance in [300, 535, 5000, 65536] {
+            for whole in [distance, -distance] {
+                let face = f64::from(whole);
+                // Into a wall at an angle, it slides along it, on the floor.
+                let wall = Wall { axis: 0, sign: 1.0, face };
+                let mut body = standing(DVec3::new(face - 0.8, 64.0, 0.5));
+                let outcome = run(&mut body, &walk(-45.0), 60, &wall);
+                assert!(outcome.horizontal_collision, "at {face}");
+                assert!(body.feet.z > 5.0, "at {face}, it slid to {:?}", body.feet);
+                assert!(body.on_ground && (body.feet.y - 64.0).abs() < 0.01, "at {face}: {body:?}");
+                // A gap one block wide lets it through.
+                let gap = World(move |x, y, z| {
+                    if y < 64 || (x == whole && z != 0) { Kind::Stone } else { Kind::Air }
+                });
+                let mut body = standing(DVec3::new(face - 3.0, 64.0, 0.5));
+                run(&mut body, &walk(-90.0), 40, &gap);
+                assert!(body.feet.x > face + 1.3, "at {face}, it stopped at {:?}", body.feet);
+            }
+        }
+    }
+
+    #[test]
+    fn a_player_inside_a_block_can_still_walk_out() {
+        for whole in [0, 300, 535, -535, 5000] {
+            let block = World(move |x, y, z| {
+                if y < 64 || (x == whole && y == 64 && z == 0) { Kind::Stone } else { Kind::Air }
+            });
+            let mut body = standing(DVec3::new(f64::from(whole) + 0.5, 64.0, 0.5));
+            run(&mut body, &walk(-90.0), 20, &block);
+            assert!(body.feet.x > f64::from(whole) + 1.3, "from {whole}: {:?}", body.feet);
+        }
     }
 }
