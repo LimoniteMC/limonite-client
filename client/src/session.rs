@@ -22,9 +22,11 @@ use pumpkin_protocol::{
             CResourcePacksInfo, CStartGame, GameType,
         },
         server::{
+            animate::{ActorSwingSource, AnimateAction, SAnimate},
             block_pick_request::SBlockPickRequest,
             mob_equipment::SMobEquipment,
-            player_auth_input::{InputData, SPlayerAuthInput},
+            player_action::{PlayerActionType, SPlayerAction},
+            player_auth_input::{InputData, PlayerBlockAction, SPlayerAuthInput},
             request_chunk_radius::SRequestChunkRadius,
             resource_pack_client_response::SResourcePackClientResponse,
             set_local_player_as_initialized::SSetLocalPlayerAsInitialized,
@@ -42,13 +44,14 @@ use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tracing::{debug, info, warn};
 
 use crate::{
-    inventory::{CONTAINER_MAIN, HOTBAR},
+    edit::{self, Aimed, Command, Editor, View, aim::Hit},
+    inventory::{CONTAINER_MAIN, HOTBAR, items},
     clock::TICK,
     game::{Effect, Game},
     login,
     measure::Stats,
     packets,
-    player::{EYE_HEIGHT, Motion, movement::Flags},
+    player::{EYE_HEIGHT, Motion, movement::Flags, physics::{Fluid, Terrain as _}, terrain::WorldTerrain},
     render::camera::look_direction,
     world::{Applied, World},
 };
@@ -136,6 +139,10 @@ pub struct Session {
     spawn: Option<Spawn>,
     /// Everything the server has said about the game.
     game: Game,
+    /// Breaking and placing, from one tick to the next.
+    editor: Editor,
+    /// What the next input says about blocks.
+    block_actions: Vec<PlayerBlockAction>,
     /// The eyes the last input reported, for the next one's `delta`.
     reported: Option<DVec3>,
     /// The last input that reported a teleport, until it's taken.
@@ -179,6 +186,8 @@ impl Session {
             stage: Stage::LoggingIn,
             spawn: None,
             game: Game::default(),
+            editor: Editor::default(),
+            block_actions: Vec::new(),
             reported: None,
             teleport_report: None,
             input_tick: 0,
@@ -604,6 +613,13 @@ impl Session {
             (flags, move_vec, move_vec, delta)
         };
         self.reported = Some(eyes);
+        let mut flags = flags;
+        let block_actions = if self.block_actions.is_empty() {
+            None
+        } else {
+            flags.set(InputData::PerformBlockActions);
+            Some(std::mem::take(&mut self.block_actions))
+        };
         if flags.has(InputData::HandledTeleport) {
             self.teleport_report = Some(TeleportReport {
                 eyes: position,
@@ -627,7 +643,7 @@ impl Session {
             interact_yaw: yaw,
             tick: VarULong(self.input_tick),
             delta,
-            block_actions: None,
+            block_actions,
             item_interaction: None,
             item_stack_request: None,
             vehicle_rotation: None,
@@ -636,6 +652,88 @@ impl Session {
             camera_orientation: Vector3::new(forward.x, forward.y, forward.z),
             raw_move,
         })
+    }
+
+    /// What the editor needs to know: who the player is, and how fast what `hit`
+    /// names breaks with what's in hand.
+    fn edit_view(&self, hit: Option<&Hit>) -> Option<View> {
+        let player = self.game.player()?;
+        let world = self.game.world();
+        let aimed = hit.map(|hit| {
+            let state = world
+                .block(hit.block.x, hit.block.y, hit.block.z, 0)
+                .and_then(|id| world.blocks().java_state(id));
+            let held = self.game.inventory().held();
+            let eyes = player.pose().eyes().floor().as_ivec3();
+            let in_water = WorldTerrain::new(world).surface(eyes.x, eyes.y, eyes.z).fluid == Some(Fluid::Water);
+            Aimed {
+                block: hit.block,
+                face: hit.face as i32,
+                speed: state.map_or(0.0, |state| {
+                    edit::breaking_speed(state, &items::held_stack(held.id, held.aux_value.0), player.on_ground, in_water)
+                }),
+            }
+        });
+        Some(View {
+            creative: player.gamemode == GameMode::Creative,
+            may_mine: player.abilities.mine,
+            aimed,
+        })
+    }
+
+    /// The attack button went down, with `hit` aimed at.
+    pub fn attack_pressed(&mut self, hit: Option<&Hit>) {
+        if let Some(view) = self.edit_view(hit) {
+            let commands = self.editor.attack_pressed(&view);
+            self.carry_out(commands);
+        }
+    }
+
+    /// One tick of editing, before the tick's input goes.
+    pub fn edit_tick(&mut self, attack_held: bool, hit: Option<&Hit>) {
+        if let Some(view) = self.edit_view(hit) {
+            let commands = self.editor.tick(attack_held, &view);
+            self.carry_out(commands);
+        }
+    }
+
+    /// The block being broken, and which of the crack's stages it's at.
+    #[must_use]
+    pub fn crack(&self) -> Option<(IVec3, usize)> {
+        self.editor.crack()
+    }
+
+    /// A frame has been drawn.
+    pub fn frame_drawn(&mut self) {
+        self.game.predictions_mut().frame_drawn(Instant::now());
+    }
+
+    /// Logs how long edits took, if there were any (m5-plan Decision 9).
+    pub fn log_edits(&self) {
+        if let Some(summary) = self.game.predictions().summary() {
+            info!("{summary}");
+        }
+    }
+
+    fn carry_out(&mut self, commands: Vec<Command>) {
+        let Some(runtime_id) = self.game.player().map(|player| player.runtime_id) else {
+            return;
+        };
+        let now = Instant::now();
+        for command in commands {
+            match command {
+                Command::CreativeDestroy { block, face } => {
+                    self.send(&player_action(runtime_id, PlayerActionType::CreativeDestroyBlock, block, IVec3::ZERO, face));
+                }
+                Command::Block { step, block, face } => self.block_actions.push(PlayerBlockAction {
+                    action: step.action(),
+                    block_pos: block_pos(block),
+                    face: VarInt(face),
+                }),
+                Command::Swing => self.send(&swing(runtime_id, ActorSwingSource::Mine)),
+                Command::Broke(at) => self.game.predict_break(at, now),
+            }
+        }
     }
 
     /// Frames and queues one packet for the server.
@@ -662,7 +760,7 @@ impl Session {
     /// it takes `max_slots` for the slot to fill, and it's always 9.
     pub fn pick_block(&mut self, block: IVec3) {
         self.send(&SBlockPickRequest {
-            position: BlockPos::new(block.x, block.y, block.z),
+            position: block_pos(block),
             with_data: false,
             max_slots: HOTBAR as u8,
         });
@@ -695,6 +793,31 @@ impl Session {
                 debug!("Not sending packet {}: connection closed", P::PACKET_ID);
             }
         }
+    }
+}
+
+fn block_pos(block: IVec3) -> BlockPos {
+    BlockPos::new(block.x, block.y, block.z)
+}
+
+/// A `PlayerAction` packet.
+fn player_action(runtime_id: u64, action: PlayerActionType, block: IVec3, result: IVec3, face: i32) -> SPlayerAction {
+    SPlayerAction {
+        player_runtime_id: VarULong(runtime_id),
+        action,
+        block_position: block_pos(block),
+        result_pos: block_pos(result),
+        face: VarInt(face),
+    }
+}
+
+/// An `Animate` packet: the player's arm swings.
+fn swing(runtime_id: u64, source: ActorSwingSource) -> SAnimate {
+    SAnimate {
+        action: AnimateAction::SwingArm,
+        target_actor_runtime_id: VarULong(runtime_id),
+        data: 0.0,
+        swing_source: Some(source.into()),
     }
 }
 

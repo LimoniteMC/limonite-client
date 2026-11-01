@@ -7,6 +7,7 @@
 //! for context, and no code path reads them.
 
 pub mod camera;
+pub mod crack;
 pub mod icons;
 pub mod mesher;
 pub mod meshes;

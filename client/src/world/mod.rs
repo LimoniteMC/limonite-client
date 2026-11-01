@@ -64,6 +64,9 @@ pub enum Change {
     Chunk { x: i32, z: i32 },
     /// The block at this position changed, on either layer.
     Block { x: i32, y: i32, z: i32 },
+    /// The player changed this block, or the server took that back: it should show
+    /// in this very frame.
+    Edit { x: i32, y: i32, z: i32 },
     /// A chunk was dropped, because the server's view left it.
     Dropped { x: i32, z: i32 },
 }
@@ -239,6 +242,16 @@ impl World {
         self.chunks
             .get_mut(&(x >> 4, z >> 4))
             .is_some_and(|chunk| chunk.set_block((x & 15) as usize, y, (z & 15) as usize, layer, id))
+    }
+
+    /// Sets a block for the player's own edit, ahead of the server. Returns false if
+    /// its chunk (or its sub-chunk) isn't loaded.
+    pub fn edit(&mut self, x: i32, y: i32, z: i32, layer: usize, id: u32) -> bool {
+        let set = self.set_block(x, y, z, layer, id);
+        if set {
+            self.record(Change::Edit { x, y, z });
+        }
+        set
     }
 
     /// The block network id at a world position, or `None` if its chunk isn't

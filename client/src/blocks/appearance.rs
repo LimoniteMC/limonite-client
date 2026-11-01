@@ -42,6 +42,7 @@ use super::{
     shapes,
 };
 use crate::{
+    edit::CRACK_STAGES,
     render::{
         animation::Animator,
         textures::{self, AlphaUse, JAVA_TEXTURE, TextureArray},
@@ -473,6 +474,9 @@ pub struct Built {
     pub java: Option<Stats>,
 }
 
+/// The textures of the crack on a block being broken, each with its stage after it.
+const CRACK_TEXTURES: &str = "textures/environment/destroy_stage_";
+
 /// One face before textures are loaded: which requested texture, if any.
 #[derive(Clone, Copy, Default)]
 struct FacePlan {
@@ -545,7 +549,11 @@ pub fn build(
         }
     }
 
-    let loaded = textures::load(stack, resolver.jar.as_deref_mut(), flipbooks, &resolver.requests);
+    // The crack on a block being broken.
+    let crack: Vec<usize> = (0..CRACK_STAGES)
+        .map(|stage| resolver.request(format!("{CRACK_TEXTURES}{stage}"), AlphaUse::Coverage))
+        .collect();
+    let mut loaded = textures::load(stack, resolver.jar.as_deref_mut(), flipbooks, &resolver.requests);
     let mut failed_names: HashMap<&str, String> = HashMap::new();
     let mut by_id = HashMap::with_capacity(plans.len());
     for (id, name, plan) in plans {
@@ -632,7 +640,18 @@ pub fn build(
             None => {}
         }
     }
-    report.failed_textures = loaded.failed;
+    // Breaking works without them, so they aren't among the blocks' failures.
+    let (no_crack, failed): (Vec<_>, Vec<_>) =
+        loaded.failed.into_iter().partition(|(path, _)| path.starts_with(CRACK_TEXTURES));
+    if !no_crack.is_empty() {
+        tracing::warn!("No crack on blocks being broken: {no_crack:?}");
+    }
+    report.failed_textures = failed;
+    loaded.array.crack = crack
+        .iter()
+        .map(|&index| loaded.layers[index].map(|layer| layer.index))
+        .collect::<Option<Vec<u16>>>()
+        .and_then(|layers| layers.try_into().ok());
     Built {
         table: AppearanceTable { by_id },
         textures: loaded.array,

@@ -286,6 +286,12 @@ impl Input {
         }
     }
 
+    /// Whether `action` is held down.
+    #[must_use]
+    pub fn is_held(&self, action: Action) -> bool {
+        self.held.contains(&action)
+    }
+
     /// The wheel turned by `notches`, + away from the player. Each whole
     /// notch presses what `WheelUp` or `WheelDown` is bound to, once: a wheel
     /// is never held.

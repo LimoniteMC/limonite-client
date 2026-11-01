@@ -123,6 +123,32 @@ impl MeshStats {
     }
 }
 
+/// The sub-chunks a block's change touches: its own, and across any border it's on,
+/// since the face beside it is in the neighbour's mesh.
+fn touched(x: i32, y: i32, z: i32) -> Vec<SubChunkKey> {
+    let key = SubChunkKey {
+        x: x >> 4,
+        y: y >> 4,
+        z: z >> 4,
+    };
+    let edge = |c: i32| match c & 15 {
+        0 => -1,
+        15 => 1,
+        _ => 0,
+    };
+    let mut keys = vec![key];
+    for (dx, dy, dz) in [(edge(x), 0, 0), (0, edge(y), 0), (0, 0, edge(z))] {
+        if (dx, dy, dz) != (0, 0, 0) {
+            keys.push(SubChunkKey {
+                x: key.x + dx,
+                y: key.y + dy,
+                z: key.z + dz,
+            });
+        }
+    }
+    keys
+}
+
 #[derive(Default)]
 pub struct Meshes {
     meshes: HashMap<SubChunkKey, GpuMesh>,
@@ -135,6 +161,8 @@ pub struct Meshes {
     sorted: Option<(Instant, SubChunkKey)>,
     /// Whether sub-chunks became dirty since the last sort.
     fresh_work: bool,
+    /// Sub-chunks the player's edits made dirty, to mesh ahead of the queue.
+    urgent: Vec<SubChunkKey>,
     /// The most quads in any mesh, which the shared index buffer must cover.
     max_quads: u32,
     pub stats: MeshStats,
@@ -163,26 +191,14 @@ impl Meshes {
                     }
                 }
                 Change::Block { x, y, z } => {
-                    let key = SubChunkKey {
-                        x: x >> 4,
-                        y: y >> 4,
-                        z: z >> 4,
-                    };
-                    self.mark(key);
-                    // On a border, the face beside it is in the neighbour's mesh.
-                    let edge = |c: i32| match c & 15 {
-                        0 => -1,
-                        15 => 1,
-                        _ => 0,
-                    };
-                    for (dx, dy, dz) in [(edge(x), 0, 0), (0, edge(y), 0), (0, 0, edge(z))] {
-                        if (dx, dy, dz) != (0, 0, 0) {
-                            self.mark(SubChunkKey {
-                                x: key.x + dx,
-                                y: key.y + dy,
-                                z: key.z + dz,
-                            });
-                        }
+                    for key in touched(x, y, z) {
+                        self.mark(key);
+                    }
+                }
+                Change::Edit { x, y, z } => {
+                    for key in touched(x, y, z) {
+                        self.mark(key);
+                        self.urgent.push(key);
                     }
                 }
                 Change::Dropped { x, z } => {
@@ -195,6 +211,17 @@ impl Meshes {
                     });
                     self.dirty.retain(|key| !(key.x == x && key.z == z));
                 }
+            }
+        }
+    }
+
+    /// Meshes what the player just edited, whatever the budget says (m5-plan Decision
+    /// 9, "An urgent lane"). The queue is only sorted now and then, so during a join an
+    /// edit could otherwise wait 100 ms for its turn.
+    pub fn build_urgent(&mut self, device: &wgpu::Device, world: &World, table: &AppearanceTable, tints: &Tints) {
+        for key in std::mem::take(&mut self.urgent) {
+            if self.dirty.remove(&key) {
+                self.mesh_one(device, world, table, tints, key);
             }
         }
     }
@@ -230,6 +257,7 @@ impl Meshes {
         camera: DVec3,
         budget: Duration,
     ) {
+        self.build_urgent(device, world, table, tints);
         if self.dirty.is_empty() {
             self.check_caught_up();
             return;

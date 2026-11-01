@@ -23,6 +23,7 @@ use limonite_packs::{PackStack, json};
 use pumpkin_data::{
     Block, BlockState,
     item::{BedrockItem, JavaToBedrockItemMapping},
+    item_stack::ItemStack,
 };
 use rayon::prelude::*;
 use tracing::{info, warn};
@@ -52,6 +53,14 @@ pub fn block_of(id: i16, aux: u32) -> Option<u32> {
     let mapping = JavaToBedrockItemMapping::from_bedrock(id, aux)?;
     let block = Block::from_item_id(mapping.java_item.id)?;
     Some(BlockState::to_be_network_id(block.default_state.id))
+}
+
+/// The Java stack for the item with Bedrock id `id`: what knows how fast it digs. An
+/// empty hand, or an item the table doesn't know, is no tool at all.
+#[must_use]
+pub fn held_stack(id: i16, aux: u32) -> ItemStack {
+    JavaToBedrockItemMapping::from_bedrock(id, aux)
+        .map_or_else(|| ItemStack::EMPTY.clone(), |mapping| ItemStack::new(1, mapping.java_item))
 }
 
 /// The item's name without its namespace.

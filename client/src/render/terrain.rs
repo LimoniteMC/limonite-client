@@ -15,7 +15,10 @@
 use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, Vec3};
 
-use super::{Gpu, SKY, animation::Animator, camera::Camera, meshes::Meshes, outline::Outline, textures::TextureArray};
+use super::{
+    Gpu, SKY, animation::Animator, camera::Camera, crack::Crack, meshes::Meshes, outline::Outline,
+    textures::TextureArray,
+};
 
 const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Six indices per quad: two triangles, 0-1-2 and 0-2-3, counter-clockwise.
@@ -49,6 +52,8 @@ pub struct Terrain {
     /// The lines around the block aimed at, drawn among the terrain since they
     /// need its depth.
     pub outline: Outline,
+    /// The crack on a block being broken.
+    pub crack: Crack,
     /// The last frame's numbers, for the title and the benchmark.
     pub draws: u32,
     pub visible: u32,
@@ -168,6 +173,7 @@ impl Terrain {
         let instance_capacity = 1024;
         let instances = instance_buffer(device, instance_capacity);
         let outline = Outline::new(device, format, DEPTH_FORMAT, &frame);
+        let crack = Crack::new(device, textures.crack);
         Self {
             textures: uploaded,
             texture_view,
@@ -182,6 +188,7 @@ impl Terrain {
             instances,
             instance_capacity,
             outline,
+            crack,
             draws: 0,
             visible: 0,
         }
@@ -220,18 +227,24 @@ impl Terrain {
             };
             gpu.queue.write_buffer(&self.frame, 0, bytemuck::bytes_of(&uniform));
         }
-        if visible.len() > self.instance_capacity {
-            self.instance_capacity = visible.len().next_power_of_two();
+        // One more for the crack, whose offset follows the sub-chunks'.
+        if visible.len() + 1 > self.instance_capacity {
+            self.instance_capacity = (visible.len() + 1).next_power_of_two();
             self.instances = instance_buffer(&gpu.device, self.instance_capacity);
         }
         if meshes.max_quads() > self.index_quads {
             (self.indices, self.index_quads) =
                 index_buffer(&gpu.device, meshes.max_quads().next_power_of_two());
         }
-        let offsets: Vec<[f32; 4]> = visible
+        let mut offsets: Vec<[f32; 4]> = visible
             .iter()
             .map(|(_, offset)| [offset.x, offset.y, offset.z, 0.0])
             .collect();
+        let crack_instance = offsets.len() as u32;
+        if let Some(camera) = camera.filter(|_| self.crack.quads() > 0) {
+            let offset = (self.crack.origin() - camera.position).as_vec3();
+            offsets.push([offset.x, offset.y, offset.z, 0.0]);
+        }
         if !offsets.is_empty() {
             gpu.queue.write_buffer(&self.instances, 0, bytemuck::cast_slice(&offsets));
         }
@@ -293,6 +306,14 @@ impl Terrain {
             let base = (mesh.opaque_quads * 4) as i32;
             pass.draw_indexed(0..mesh.blend_quads * INDICES_PER_QUAD, base, instance..instance + 1);
             self.draws += 1;
+        }
+        if self.crack.quads() > 0 {
+            pass.set_vertex_buffer(0, self.crack.vertices().slice(..));
+            pass.draw_indexed(
+                0..self.crack.quads() * INDICES_PER_QUAD,
+                0,
+                crack_instance..crack_instance + 1,
+            );
         }
     }
 }

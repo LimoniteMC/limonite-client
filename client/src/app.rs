@@ -111,6 +111,7 @@ pub fn run(
         error!("The window's event loop failed: {err}");
         return ExitCode::FAILURE;
     }
+    app.session.log_edits();
     // Dropping the app drops the session, so the host leaves before the
     // caller stops the server.
     match app.failure {
@@ -222,6 +223,10 @@ impl<'a> App<'a> {
     fn run_ticks(&mut self) {
         for _ in 0..self.ticks.due(Instant::now()) {
             let motion = self.motion();
+            if self.bench.is_none() {
+                let hit = self.camera.as_ref().and_then(|camera| aim::from_camera(self.session.game(), camera));
+                self.session.edit_tick(self.input.is_held(Action::Attack), hit.as_ref());
+            }
             self.session.step(motion);
             self.animation_tick += 1;
         }
@@ -382,6 +387,15 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Shows the player's edits in this very frame.
+    fn mesh_edits(&mut self) {
+        let changes = self.session.world_mut().take_changes();
+        self.meshes.apply(changes, self.session.world());
+        if let Some(gpu) = &self.gpu {
+            self.meshes.build_urgent(&gpu.device, self.session.world(), &self.table, &self.tints);
+        }
+    }
+
     fn redraw(&mut self) {
         self.debug_typed();
         let now = Instant::now();
@@ -389,8 +403,10 @@ impl<'a> App<'a> {
         let seconds = frame_time.as_secs_f64().min(MAX_FRAME_SECONDS);
         self.last_frame = now;
 
+        let mut attack_pressed = false;
         for action in self.input.take_pressed() {
             match action {
+                Action::Attack => attack_pressed = true,
                 // Until the pause menu (Step 16).
                 Action::Pause => self.release_cursor(),
                 Action::LogPose => self.log_pose(),
@@ -437,6 +453,10 @@ impl<'a> App<'a> {
             .as_ref()
             .filter(|_| self.bench.is_none())
             .and_then(|camera| aim::from_camera(self.session.game(), camera));
+        if attack_pressed {
+            self.session.attack_pressed(self.aimed.as_ref());
+        }
+        self.mesh_edits();
 
         self.ui.update(self.session.game());
 
@@ -453,6 +473,11 @@ impl<'a> App<'a> {
             let boxes = self.aimed.as_ref().map_or(&[][..], |hit| &hit.boxes);
             terrain.outline.show(gpu, camera.position, boxes);
         }
+        let cracked = self.session.crack().and_then(|(block, stage)| {
+            let hit = self.aimed.as_ref().filter(|hit| hit.block == block)?;
+            Some((block, stage, hit.boxes.as_slice()))
+        });
+        terrain.crack.show(gpu, cracked);
         if self.animated_tick != Some(self.animation_tick) {
             self.animated_tick = Some(self.animation_tick);
             terrain.animate(gpu, &mut self.animator, self.animation_tick);
@@ -464,6 +489,7 @@ impl<'a> App<'a> {
             ui_renderer.draw(&views.ui, encoder);
         });
         if drawn == Frame::Drawn {
+            self.session.frame_drawn();
             self.frames_this_second += 1;
             if let Some(bench) = &mut self.bench {
                 let sample = Sample {

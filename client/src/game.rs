@@ -10,9 +10,9 @@
 //! directly") now holds for the player and the clock too, not just chunks.
 //! Entities and the inventory join it in later steps.
 
-use std::fmt;
+use std::{fmt, time::Instant};
 
-use glam::DVec3;
+use glam::{DVec3, IVec3};
 use pumpkin_core::net::bedrock::level_chunk::CLevelChunk;
 use pumpkin_protocol::{
     RawPacket,
@@ -34,10 +34,11 @@ use tracing::warn;
 
 use crate::{
     clock::TimeOfDay,
+    edit::predict::Predictions,
     inventory::{CONTAINER_MAIN, Inventory},
     packets::PacketName,
     player::{self, Abilities, Motion, Player, Pose, terrain::WorldTerrain},
-    world::{Applied, ApplyError, World},
+    world::{AIR, Applied, ApplyError, World},
 };
 
 /// What a packet changed.
@@ -77,6 +78,8 @@ pub struct Game {
     /// From `StartGame` on.
     player: Option<Player>,
     inventory: Inventory,
+    /// What the world shows that the server hasn't agreed to yet.
+    predictions: Predictions,
     time: TimeOfDay,
     /// Ticks stepped since `StartGame`.
     ticks: u64,
@@ -90,6 +93,7 @@ impl Default for Game {
             world: World::new(),
             player: None,
             inventory: Inventory::default(),
+            predictions: Predictions::default(),
             time: TimeOfDay::default(),
             ticks: 0,
             world_gamemode: GameType::Default,
@@ -132,6 +136,30 @@ impl Game {
         self.ticks
     }
 
+    pub const fn predictions_mut(&mut self) -> &mut Predictions {
+        &mut self.predictions
+    }
+
+    pub const fn predictions(&self) -> &Predictions {
+        &self.predictions
+    }
+
+    /// Shows the block at `at` broken, ahead of the server, from a click at `clicked`:
+    /// air, or the water it held. Bedrock keeps a waterlogged block's water in the
+    /// second layer, and water on its own in the first.
+    pub fn predict_break(&mut self, at: IVec3, clicked: Instant) {
+        let Some(server) = self.world.block(at.x, at.y, at.z, 0) else {
+            return;
+        };
+        let water = self.world.block(at.x, at.y, at.z, 1).filter(|&id| id != AIR);
+        if self.world.edit(at.x, at.y, at.z, 0, water.unwrap_or(AIR)) {
+            if water.is_some() {
+                self.world.edit(at.x, at.y, at.z, 1, AIR);
+            }
+            self.predictions.add(at, water.unwrap_or(AIR), server, water, self.ticks, clicked);
+        }
+    }
+
     /// Takes the player from `StartGame`: its ids, its gamemode, and where it
     /// starts.
     pub fn start(&mut self, start_game: &CStartGame) {
@@ -162,6 +190,14 @@ impl Game {
     pub fn tick(&mut self, motion: Motion) {
         self.ticks += 1;
         self.time.tick();
+        // What the server didn't agree to in time goes back to what it last said.
+        for refused in self.predictions.expired(self.ticks) {
+            let at = refused.at;
+            self.world.edit(at.x, at.y, at.z, 0, refused.server);
+            if let Some(water) = refused.water {
+                self.world.edit(at.x, at.y, at.z, 1, water);
+            }
+        }
         let terrain = WorldTerrain::new(&self.world);
         if let Some(player) = &mut self.player {
             player.step(motion, &terrain);
@@ -174,8 +210,29 @@ impl Game {
     /// If the packet doesn't decode, or the world can't take it.
     pub fn apply(&mut self, packet: &RawPacket) -> Result<Effect, GameError> {
         match packet.id {
-            CLevelChunk::PACKET_ID | CUpdateBlock::PACKET_ID | CNetworkChunkPublisherUpdate::PACKET_ID => {
+            CUpdateBlock::PACKET_ID => {
+                let update: CUpdateBlock = read(packet)?;
+                let at = update.block_position.0;
+                // The second layer is water, which predictions don't wait on.
+                if update.layer.0 == 0
+                    && self
+                        .predictions
+                        .note(IVec3::new(at.x, at.y, at.z), update.block_runtime_id.0, Instant::now())
+                {
+                    return Ok(Effect::World(Applied::Block {
+                        x: at.x,
+                        y: at.y,
+                        z: at.z,
+                    }));
+                }
                 self.world.apply(packet).map(Effect::World).map_err(GameError::World)
+            }
+            CLevelChunk::PACKET_ID | CNetworkChunkPublisherUpdate::PACKET_ID => {
+                let applied = self.world.apply(packet).map_err(GameError::World)?;
+                if let Applied::Chunk { x, z } = applied {
+                    self.predictions.forget_chunk(x, z);
+                }
+                Ok(Effect::World(applied))
             }
             CSetTime::PACKET_ID => {
                 let set: CSetTime = read(packet)?;

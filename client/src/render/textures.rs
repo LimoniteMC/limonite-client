@@ -25,7 +25,7 @@ use limonite_packs::{
 };
 
 use super::animation::{Animator, Step, Timeline};
-use crate::blocks::jar::Jar;
+use crate::{blocks::jar::Jar, edit::CRACK_STAGES};
 
 /// Bedrock's own texture for anything that can't be resolved. It's always
 /// layer 0.
@@ -58,6 +58,8 @@ pub struct TextureArray {
     /// The mip levels, largest first. Level n holds every layer at
     /// `size >> n` texels square, one after another, as RGBA bytes.
     pub mips: Vec<Vec<u8>>,
+    /// The layers of the crack on a block being broken, if the packs have them all.
+    pub crack: Option<[u16; CRACK_STAGES]>,
 }
 
 impl TextureArray {
@@ -202,6 +204,7 @@ pub fn load(
             size,
             layers: strips.len() as u32,
             mips: levels,
+            crack: None,
         },
         layers,
         failed,
