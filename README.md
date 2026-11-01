@@ -20,7 +20,7 @@
 [![Last commit](https://img.shields.io/github/last-commit/LimoniteMC/limonite-client?style=for-the-badge&labelColor=1A1A1A&color=818600)](https://github.com/LimoniteMC/limonite-client/commits/main)
 [![Discord: join us](https://img.shields.io/badge/Discord-join_us-818600?style=for-the-badge&logo=discord&logoColor=white&labelColor=1A1A1A)](https://discord.gg/C7DHyAYGun)
 
-<a href='https://ko-fi.com/T6I429UZBJ' target='_blank'><img height='36' style='border:0px;height:36px;' src='https://storage.ko-fi.com/cdn/kofi5.png?v=6' border='0' alt='Help support at ko-fi.com' /></a>
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/T6I429UZBJ)
 
 [**What it is**](#what-limonite-is) · [**Try it**](#try-it) · [**How it works**](#how-it-works) · [**Roadmap**](#roadmap) · [**Docs**](#documentation) · [**Discord**](https://discord.gg/C7DHyAYGun)
 
