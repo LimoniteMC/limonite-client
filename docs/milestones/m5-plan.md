@@ -906,7 +906,8 @@ irregular, and no easy way to check a given block, and suggested a debug world l
   - survival times: dirt by hand in 15 ticks, stone by hand in 150, and stone with a wooden pickaxe
     in 23;
   - the place target: against a face, and into replaceable grass.
-- **Owner checkpoint:** build something in creative and in survival (about 10 minutes).
+- **Owner checkpoint:** build something in creative and in survival (about 10 minutes), with `--hotbar` for the blocks
+  (Deviation 48).
 - **Commits:** "Break blocks, predicted"; "Place blocks, predicted where the result is certain".
 
 ## Step 12: The inventory screens (client)
@@ -1352,6 +1353,10 @@ The questions as they were asked:
       for what it recorded.
     - **What it needs:** upstream's port (protocol 2225) is the first commit that sync left out, by the owner's choice.
       The owner decides when it comes, and `docs/upstream.md` has what waits with it.
+48. **Step 11's checkpoint needed a way to get blocks** (found when the owner asked what to do at it, 2026-11-02). It
+    says to build in creative and in survival, but the inventory screen is Step 12, chat is Step 16, and Pumpkin ignores
+    a pick (Step 10), so a new creative player has nothing to place. `--hotbar <items>` fills the hotbar on joining,
+    through the server, as the screenshot tool already could. It stays after Step 12, for tests.
 
 ## Results (filled in during execution)
 

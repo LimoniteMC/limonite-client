@@ -63,8 +63,9 @@ _Last updated: 2026-11-01._
   - **Step 11 is built (2026-11-02):** blocks break and place, with the official client's packets, and show at once
     where the result is certain (`client/src/edit/`). A table takes back what the server refuses, and `--headless
     --edits <n>` checks it all against the real server.
-  - **Next:** the owner's checkpoint: build something in creative and in survival, about 10 minutes, which takes in
-    the walk beside the official client: the HUD, the hotbar, the outline and the crack. Then the 1.26.60 bump, when
+  - **Next:** the owner's checkpoint: build something in creative and in survival, about 10 minutes, with `--hotbar` for
+    the blocks, which takes in the walk beside the official client: the HUD, the hotbar, the outline and the crack. Then
+    the 1.26.60 bump, when
     the owner says, since Step 12's capture needs it (m5-plan, Deviation 47). Then Step 12.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
@@ -346,6 +347,9 @@ Add `--edits 4` to place and break blocks with the real packets, on a stone floo
   - `--name <name>`, `--radius <chunks>` and `--gamemode <mode>` override the settings file for
     one run, without saving. The name is 1 to 16 characters; the radius is 2 to 32, which the
     embedded server allows; the gamemode is survival, creative, adventure or spectator.
+  - `--hotbar <items>` fills the hotbar on joining, through the server, as `LIMONITE_SHOTS_HOTBAR` does: up to 9 item
+    names separated by commas, each with `*` and a count if it isn't 1. It's how to get blocks until Step 12's inventory
+    screen. Headless, it adds a check that they arrived.
 - **The home folder** (m5-plan Decision 16), written on the first run:
   - `settings.toml`: the name, the view radius, the field of view, the mouse sensitivity, the UI
     scale, smooth lighting, the gamemode for new worlds (creative), and the keymap, each with a
