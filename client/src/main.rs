@@ -66,9 +66,10 @@ use crate::{
 
 const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [--java-jar <path>] [--data-dir <path>] \
                      [--debug-world] [--goto <text>] \
-                     [--name <name>] [--gamemode <mode>] [--radius <chunks>] [--bench <seconds>]\n       \
+                     [--name <name>] [--gamemode <mode>] [--radius <chunks>] [--hotbar <items>] \
+                     [--bench <seconds>]\n       \
                      limonite-client --headless [--home <path>] [--data-dir <path>] [--name <name>] \
-                     [--gamemode <mode>] [--radius <chunks>] [--linger <seconds>] [--measure] \
+                     [--gamemode <mode>] [--radius <chunks>] [--hotbar <items>] [--linger <seconds>] [--measure] \
                      [--map <path.png>] [--stream <blocks>] [--edits <blocks>]";
 
 /// Login and spawn must finish within this.
@@ -122,6 +123,9 @@ struct Args {
     /// What `--name`, `--radius` and `--gamemode` change in the settings for
     /// this run.
     overrides: Overrides,
+    /// What the host gets in its hotbar on joining: the way to get blocks until there's
+    /// an inventory screen.
+    hotbar: Vec<(&'static Item, u8)>,
     /// How long to stay in the world after the checks, still sending input,
     /// so the process can be inspected from outside.
     linger: Duration,
@@ -149,6 +153,7 @@ impl Args {
         let mut home = PathBuf::from("run/home");
         let mut data_dir = None;
         let mut overrides = Overrides::default();
+        let mut hotbar = Vec::new();
         let mut linger = Duration::ZERO;
         let mut measure = false;
         let mut map = None;
@@ -189,6 +194,10 @@ impl Args {
                     overrides.gamemode = Some(mode.parse().map_err(|_| {
                         format!("--gamemode: `{mode}` isn't survival, creative, adventure or spectator")
                     })?);
+                }
+                "--hotbar" => {
+                    let list = args.next().ok_or("--hotbar needs a list of items")?;
+                    hotbar = embedded::parse_hotbar(&list).map_err(|err| format!("--hotbar: {err}"))?;
                 }
                 "--linger" => {
                     let secs = args.next().ok_or("--linger needs a number of seconds")?;
@@ -267,6 +276,7 @@ impl Args {
             home: absolute(&home)?,
             data_dir: absolute(&data_dir)?,
             overrides,
+            hotbar,
             linger,
             measure,
             map: map.as_deref().map(absolute).transpose()?,
@@ -395,7 +405,12 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
         debug_world::place(&server, &layout);
         debug_world::Browser::new(layout, args.goto.as_deref())
     });
-    let result = app::run(&server, settings, identity.xid(), needs, assets, args.bench, browser);
+    let extras = app::Extras {
+        bench: args.bench,
+        browser,
+        hotbar: args.hotbar.clone(),
+    };
+    let result = app::run(&server, settings, identity.xid(), needs, assets, extras);
     server.stop();
     result
 }
@@ -488,6 +503,9 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             // `PlayerSpawn` only means the server has queued enough chunks,
             // not that they've arrived, so wait for them before checking.
             let join_chunks = wait_for_chunks(&mut session);
+            if !args.hotbar.is_empty() {
+                checks.push(hotbar_and_check(&mut session, server, &args.hotbar));
+            }
             if let Some(blocks) = args.edits {
                 checks.push(edits_and_check(&mut session, server, blocks));
             }
@@ -593,6 +611,21 @@ fn walk_and_check(session: &mut Session, server: &EmbeddedServer, spawn: &sessio
 /// Asks the server to move the host [`TELEPORT_UP`] blocks up, as `/tp` does,
 /// then runs ticks until an input reports the teleport, for up to
 /// [`TELEPORT_DEADLINE`], and checks the report.
+fn hotbar_and_check(session: &mut Session, server: &EmbeddedServer, stacks: &[(&'static Item, u8)]) -> Check {
+    let held = |session: &Session| -> Vec<u16> {
+        session.game().inventory().hotbar().iter().flatten().map(|item| item.count).collect()
+    };
+    let wanted: Vec<u16> = stacks.iter().map(|&(_, count)| u16::from(count)).collect();
+    server.fill_hotbar(stacks);
+    let _ = session.run_until(Instant::now() + SETTLE, |session| held(session) == wanted);
+    let got = held(session);
+    Check::new(
+        "hotbar",
+        got == wanted,
+        format!("the client holds stacks of {got:?}, and {wanted:?} went in through the server"),
+    )
+}
+
 fn teleport_and_check(session: &mut Session, server: &EmbeddedServer) -> Check {
     let players = server.server.get_all_players();
     let Some(player) = players.first() else {

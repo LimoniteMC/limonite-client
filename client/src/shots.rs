@@ -40,7 +40,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use pumpkin_data::{item::Item, item_stack::ItemStack};
 use pumpkin_util::{GameMode, math::vector3::Vector3};
 
 use crate::{
@@ -48,7 +47,7 @@ use crate::{
     blocks::{self, appearance::AppearanceTable},
     debug_world::{self, Browser},
     edit::aim,
-    embedded::EmbeddedServer,
+    embedded::{EmbeddedServer, parse_hotbar},
     install, open_home,
     player::{Motion, Pose, EYE_HEIGHT},
     render::{
@@ -196,19 +195,9 @@ impl Studio {
         println!("Still loading after {} s; taking it anyway", LOADING.as_secs());
     }
 
-    /// Fills the hotbar through the server: item names, each with `*` and a count if it
-    /// isn't 1. It reaches the client as it does in play, as `InventorySlot`s.
+    /// Fills the hotbar through the server.
     fn fill_hotbar(&mut self, list: &str) {
-        let _runtime = self.server.runtime.enter();
-        let players = self.server.server.get_all_players();
-        let player = players.first().expect("the player");
-        for (slot, entry) in (0_i16..).zip(list.split(',')) {
-            let (name, count) = entry.split_once('*').unwrap_or((entry, "1"));
-            let item = Item::from_registry_key(name.trim()).unwrap_or_else(|| panic!("no item called `{name}`"));
-            let mut stack = ItemStack::new(count.parse().expect("a count"), item);
-            player.inventory().insert_stack(slot, &mut stack);
-        }
-        player.sync_inventory_to_client();
+        self.server.fill_hotbar(&parse_hotbar(list).expect("a list of items"));
     }
 
     /// Sets what the server knows of the player.

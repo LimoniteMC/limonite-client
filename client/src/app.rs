@@ -24,6 +24,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use pumpkin_data::item::Item;
 use pumpkin_util::math::vector3::Vector3;
 use tracing::{debug, error, info, warn};
 use winit::{
@@ -76,17 +77,26 @@ pub struct Assets {
 /// fling it far away.
 const MAX_FRAME_SECONDS: f64 = 0.25;
 
+/// What a run does besides playing, from the command line.
+pub struct Extras {
+    /// `--bench`: fly for this long, log the frame times, and leave.
+    pub bench: Option<Duration>,
+    /// `--debug-world`: where you are in it.
+    pub browser: Option<Browser>,
+    /// `--hotbar`: what the host gets on joining.
+    pub hotbar: Vec<(&'static Item, u8)>,
+}
+
 /// Opens the window, joins the embedded server as the host with this
 /// install's `xid`, and runs until the window closes, the server ends the
-/// connection, or a `bench` of that many seconds is done.
+/// connection, or a bench is done.
 pub fn run(
     server: &EmbeddedServer,
     settings: Settings,
     xid: &str,
     needs: Needs,
     assets: Assets,
-    bench: Option<Duration>,
-    browser: Option<Browser>,
+    extras: Extras,
 ) -> ExitCode {
     let radius = settings.radius;
     let mut session = match Session::connect(&server.connector, &settings.name, xid, radius) {
@@ -106,8 +116,9 @@ pub fn run(
         }
     };
     let mut app = App::new(server, session, settings, needs, assets);
-    app.bench = bench.map(|duration| Bench::new(duration, radius));
-    app.browser = browser;
+    app.bench = extras.bench.map(|duration| Bench::new(duration, radius));
+    app.browser = extras.browser;
+    app.hotbar = extras.hotbar;
     if let Err(err) = event_loop.run_app(&mut app) {
         error!("The window's event loop failed: {err}");
         return ExitCode::FAILURE;
@@ -166,6 +177,8 @@ pub struct App<'a> {
     bench: Option<Bench>,
     /// `--debug-world`: where you are in it.
     browser: Option<Browser>,
+    /// `--hotbar`: what the host gets once it has spawned.
+    hotbar: Vec<(&'static Item, u8)>,
     /// Set when the bench is done: the loop ends at its next pass.
     quit: bool,
     /// Why the loop ended early, if it did.
@@ -214,6 +227,7 @@ impl<'a> App<'a> {
             fps: 0.0,
             bench: None,
             browser: None,
+            hotbar: Vec::new(),
             quit: false,
             failure: None,
         }
@@ -286,6 +300,9 @@ impl<'a> App<'a> {
         self.camera = Some(camera);
         info!("The camera is at the host's spawn; click in the window to look around");
         self.session.check_gamemode(self.settings.gamemode);
+        if !self.hotbar.is_empty() {
+            self.server.fill_hotbar(&self.hotbar);
+        }
         if self.browser.is_some() {
             info!(
                 "Debug world: ] and [ go to the next and last block, . and , to the next and last state, \

@@ -279,6 +279,7 @@ your position. Every key can be changed in the settings file (below).
 | `--name <name>` | The host's display name, for this run |
 | `--gamemode <mode>` | The host's gamemode in a new world, for this run: `survival`, `creative`, `adventure` or `spectator` |
 | `--radius <chunks>` | The view distance to ask for, 2 to 32, for this run |
+| `--hotbar <items>` | Fills the hotbar when you join, since there's no inventory screen yet: item names separated by commas, each with `*` and a count if it isn't 1, like `"dirt*64,oak_log*32,torch"` |
 | `--bench <seconds>` | Flies east for that long and logs frame times; use a release build |
 
 `--name`, `--gamemode` and `--radius` override the settings file without changing it.
@@ -305,7 +306,7 @@ cargo run -p limonite-client -- --headless --map run/m3/map.png
 | `--measure` | Logs what the in-process channel costs, chunk encode and decode split into phases, and how fast a block change reaches the client; only meaningful in a release build |
 | `--stream <blocks>` | After joining, flies that many blocks east at creative flying speed and logs how fast new chunks arrive |
 
-`--home`, `--data-dir`, `--name`, `--gamemode` and `--radius` work here too.
+`--home`, `--data-dir`, `--name`, `--gamemode`, `--radius` and `--hotbar` work here too.
 
 </details>
 

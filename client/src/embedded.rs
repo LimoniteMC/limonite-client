@@ -14,11 +14,12 @@ use pumpkin_core::{
     net::bedrock::local::LocalConnector,
     server::Server,
 };
+use pumpkin_data::{item::Item, item_stack::ItemStack};
 use pumpkin_util::PermissionLvl;
 use tokio::runtime::{Handle, Runtime};
 use tracing::{error, info};
 
-use crate::{home::save_atomically, login, settings::Settings};
+use crate::{home::save_atomically, inventory::HOTBAR, login, settings::Settings};
 
 /// How long shutdown waits for the runtime's leftover tasks after the world is saved.
 const RUNTIME_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(5);
@@ -119,6 +120,33 @@ fn server_name(config: &PumpkinConfig, name: &str) -> String {
     format!("{}{name}", bedrock.username_prefix)
 }
 
+/// Reads what to put in the hotbar: item names separated by commas, each with `*` and a
+/// count if it isn't 1. It's `--hotbar`, for getting blocks until there's an inventory
+/// screen, and the screenshots' `LIMONITE_SHOTS_HOTBAR`.
+///
+/// # Errors
+/// If a name isn't an item's, a count isn't 1 to 64, or a hotbar can't hold them all.
+pub fn parse_hotbar(list: &str) -> Result<Vec<(&'static Item, u8)>, String> {
+    let stacks = list
+        .split(',')
+        .map(|entry| {
+            let (name, count) = entry.split_once('*').unwrap_or((entry, "1"));
+            let name = name.trim();
+            let item = Item::from_registry_key(name).ok_or(format!("no item called `{name}`"))?;
+            let count = count
+                .parse()
+                .ok()
+                .filter(|count| (1..=64).contains(count))
+                .ok_or(format!("`{count}` isn't a count from 1 to 64"))?;
+            Ok((item, count))
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    if stacks.len() > HOTBAR {
+        return Err(format!("that's {} stacks, and a hotbar holds {HOTBAR}", stacks.len()));
+    }
+    Ok(stacks)
+}
+
 /// A running embedded server.
 pub struct EmbeddedServer {
     /// Opens in-process connections to the server.
@@ -166,6 +194,20 @@ impl EmbeddedServer {
                 Err("the server thread ended before the server started".to_string())
             }
         }
+    }
+
+    /// Puts these in the host's hotbar, from the first slot, through the server. They
+    /// reach the client as they do in play, as `InventorySlot`s.
+    pub fn fill_hotbar(&self, stacks: &[(&'static Item, u8)]) {
+        let _runtime = self.runtime.enter();
+        let players = self.server.get_all_players();
+        let Some(player) = players.first() else {
+            return;
+        };
+        for (slot, &(item, count)) in (0_i16..).zip(stacks) {
+            player.inventory().insert_stack(slot, &mut ItemStack::new(count, item));
+        }
+        player.sync_inventory_to_client();
     }
 
     /// Stops the server, which kicks any players and saves the world, and waits
@@ -306,6 +348,31 @@ mod tests {
         let err = make_host_operator(dir.path(), &config(&Settings::default()), "Limonite", XID).unwrap_err();
         assert!(err.contains("isn't a list of operators"), "{err}");
         assert_eq!(fs::read(dir.path().join(OPERATORS)).unwrap(), b"not json");
+    }
+
+    #[test]
+    fn a_hotbar_list_names_items_with_their_counts() {
+        let stacks = parse_hotbar("dirt*64, oak_log*12,torch").unwrap();
+        let stacks: Vec<_> = stacks.iter().map(|&(item, count)| (item.id, count)).collect();
+        assert_eq!(stacks, [(Item::DIRT.id, 64), (Item::OAK_LOG.id, 12), (Item::TORCH.id, 1)]);
+    }
+
+    #[test]
+    fn a_bad_hotbar_list_says_what_is_wrong() {
+        let ten = ["dirt"; 10].join(",");
+        for (list, wrong) in [
+            ("dirt,cheese", "no item called `cheese`"),
+            ("dirt*0", "`0` isn't a count"),
+            ("dirt*65", "`65` isn't a count"),
+            ("dirt*many", "`many` isn't a count"),
+            (ten.as_str(), "that's 10 stacks"),
+        ] {
+            let Err(err) = parse_hotbar(list) else {
+                panic!("`{list}` should have failed");
+            };
+            assert!(err.contains(wrong), "{err}");
+        }
+        assert!(parse_hotbar(&["dirt"; HOTBAR].join(",")).is_ok());
     }
 
     #[test]
