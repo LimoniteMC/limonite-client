@@ -30,7 +30,7 @@ use pumpkin_protocol::{
     serial::PacketRead,
 };
 use pumpkin_util::{GameMode, math::vector3::Vector3};
-use tracing::warn;
+use tracing::{info, warn};
 
 use crate::{
     clock::TimeOfDay,
@@ -214,6 +214,14 @@ impl Game {
         // What the server didn't agree to in time goes back to what it last said.
         for refused in self.predictions.expired(self.ticks) {
             let at = refused.at;
+            if let Some(shown) = self.world.block(at.x, at.y, at.z, 0) {
+                let names = self.world.blocks();
+                info!(
+                    "The server didn't agree to {} at {at} in time, and says it's {}",
+                    names.name(shown),
+                    names.name(refused.server)
+                );
+            }
             self.world.edit(at.x, at.y, at.z, 0, refused.server);
             if let Some(water) = refused.water {
                 self.world.edit(at.x, at.y, at.z, 1, water);
