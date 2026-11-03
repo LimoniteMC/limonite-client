@@ -154,7 +154,7 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
   dripstone, beds and signs all come out exact. Without a jar, hand-made models stand in for most of
   them. Chests, banners, heads and shulker boxes stay simple boxes until entity models arrive.
 - **Textures and fluids that move.** Flipbooks animate, and water and lava slope and flow.
-- **A HUD in the game's own look.** The crosshair, the hotbar, hearts, hunger and air, in the sprites and
+- **A HUD in the game's own look.** The crosshair, the hotbar, the experience bar, hearts, hunger and air, in the sprites and
   the bitmap font from your install, blended the way the game blends them.
 - **A hotbar with what you carry.** Block icons come from the world's own meshes, so stairs look like stairs,
   and items from your install's pictures, with counts and the held item's name. 1 to 9 and the wheel select,

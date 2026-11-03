@@ -1,11 +1,14 @@
-//! The HUD: the crosshair and the hotbar, and in survival hearts, hunger, armour and
-//! air (m5-plan Decision 15). The slots stay empty until Step 9.
+//! The HUD: the crosshair and the hotbar, and in survival the experience bar, hearts,
+//! hunger, armour and air (m5-plan Decision 15 and Deviation 49).
 //!
 //! **Where everything goes** comes from the install's `ui/hud_screen.json`, read while
 //! this was written and not at runtime, until milestone 10's JSON UI:
 //! - the hotbar is 182 × 22: a cap, nine 20-wide slots, and a cap. Its bottom is 1.5
 //!   units above the window's, which is what the chain of offsets there comes to;
 //! - the selected slot's frame is 24 × 24, centred on the slot;
+//! - the experience bar is as wide as the hotbar and 5 tall, with its bottom 26 units up:
+//!   2.5 over the hotbar, which leaves room for the selected slot's frame, and 1 under the
+//!   hearts. The level goes on top of it, in the middle, once there is one;
 //! - hearts and hunger are 9 × 9 and 8 apart, so they overlap by a column. Their rows
 //!   span 91 units either side of the middle, 41 units up;
 //! - armour goes a row above the hearts, and air a row above the hunger;
@@ -13,10 +16,13 @@
 //!
 //! **Hunger and air fill from the right**, so those rows are built from their far end.
 //!
-//! **The experience bar** isn't in M5's HUD (Decision 15), though the space above the
-//! hotbar is its. **Armour** isn't sent by the server: Bedrock works it out from what the
-//! player wears, and Pumpkin doesn't send a Bedrock player's armour slots either. So its
-//! row waits for Step 12's inventory screen, where the client sees its own moves.
+//! **The experience bar** is three pictures: the empty bar, the full one on top of it with
+//! only its left part showing, and over both a tick every 11 units, from 5 in. Without it
+//! the hearts look adrift, since the gap above the hotbar is its.
+//!
+//! **Armour** isn't sent by the server: Bedrock works it out from what the player wears, and
+//! Pumpkin doesn't send a Bedrock player's armour slots either. So its row waits for Step
+//! 12's inventory screen, where the client sees its own moves.
 //!
 //! **A slot** is 20 × 22, with its icon 16 × 16 in the middle of it, as the JSON has them,
 //! and the count at its bottom right.
@@ -71,10 +77,13 @@ const AIR: Icons = Icons {
     full: "textures/ui/bubble",
     half: "textures/ui/bubble_pop",
 };
+const XP_EMPTY: &str = "textures/ui/experiencebarempty";
+const XP_FULL: &str = "textures/ui/experiencebarfull";
+const XP_TICK: &str = "textures/ui/experiencenub";
 const CROSSHAIR: &str = "crosshair";
 
 /// The whole pictures the HUD asks for.
-pub const SPRITES: [&str; 23] = [
+pub const SPRITES: [&str; 26] = [
     HOTBAR_START,
     HOTBAR_END,
     HOTBAR_SLOTS[0],
@@ -98,6 +107,9 @@ pub const SPRITES: [&str; 23] = [
     ARMOUR.half,
     AIR.full,
     AIR.half,
+    XP_EMPTY,
+    XP_FULL,
+    XP_TICK,
 ];
 
 /// A piece of a bigger picture.
@@ -126,6 +138,16 @@ const WIDTH: f32 = 182.0;
 const SLOT: f32 = 20.0;
 /// How far the hotbar's bottom is above the window's.
 const HOTBAR_UP: f32 = 1.5;
+/// How far the bottom of the experience bar is above the window's, and how tall it is.
+const XP_UP: f32 = 26.0;
+const XP_HEIGHT: f32 = 5.0;
+/// The picture of a tick on the bar, with the tick in its middle: how wide it is, how far
+/// in the first one starts, and how many reach across.
+const XP_TICK_WIDTH: f32 = 11.0;
+const XP_TICKS_IN: f32 = 5.0;
+const XP_TICKS: usize = 16;
+/// The colour of the level.
+const XP_TEXT: [u8; 4] = [128, 255, 0, 255];
 /// How far the bottom of the hearts and hunger is above the window's.
 const STATS_UP: f32 = 32.0;
 /// How much higher the next row is.
@@ -146,6 +168,9 @@ pub struct HudState {
     pub armour: u32,
     /// Breath, in ticks.
     pub air: f32,
+    /// How far through this level the player is, 0 to 1, and the level.
+    pub experience: f32,
+    pub level: u32,
     /// The selected hotbar slot, 0 to 8.
     pub selected: u8,
     pub hotbar: [Option<Item>; HOTBAR],
@@ -165,6 +190,8 @@ impl HudState {
             hunger: player.attributes.hunger,
             armour: 0,
             air: player.attributes.air,
+            experience: player.attributes.experience,
+            level: player.attributes.level as u32,
             selected: game.inventory().selected(),
             hotbar: game.inventory().hotbar(),
             tick: game.ticks(),
@@ -270,6 +297,10 @@ pub struct Hud {
     hunger: Row,
     armour: Row,
     air: Row,
+    experience_full: NodeId,
+    level: NodeId,
+    /// The level the label says.
+    shown_level: u32,
     note: NodeId,
     slots: [Slot; HOTBAR],
     /// What each slot shows now.
@@ -311,6 +342,20 @@ impl Hud {
         let armour = Row::build(tree, atlas, stats, left(STATS_UP + ROW_UP), ARMOUR, false);
         let air = Row::build(tree, atlas, stats, right(STATS_UP + ROW_UP), AIR, true);
 
+        let bar = Layout::px(WIDTH, XP_HEIGHT).at(Anchor::BottomMiddle).moved(0.0, -XP_UP);
+        let experience = tree.add(stats, Node::image(bar, atlas.sprite(XP_EMPTY)));
+        let experience_full = tree.add(experience, Node::image(Layout::px(WIDTH, XP_HEIGHT), atlas.sprite(XP_FULL)));
+        let ticks = Layout::content()
+            .at(Anchor::LeftMiddle)
+            .moved(XP_TICKS_IN, 0.0)
+            .arranged(Arrange::Stack(Axis::X));
+        let ticks = tree.add(experience, Node::panel(ticks));
+        for _ in 0..XP_TICKS {
+            tree.add(ticks, Node::image(Layout::px(XP_TICK_WIDTH, XP_HEIGHT), atlas.sprite(XP_TICK)));
+        }
+        let level = Layout::content().at(Anchor::BottomMiddle).moved(0.0, -(XP_UP + XP_HEIGHT));
+        let level = tree.add(stats, Node::label(level, "").colored(XP_TEXT).hidden());
+
         let hotbar_layout = Layout::content()
             .at(Anchor::BottomMiddle)
             .moved(0.0, -HOTBAR_UP)
@@ -344,6 +389,9 @@ impl Hud {
             hunger,
             armour,
             air,
+            experience_full,
+            level,
+            shown_level: 0,
             note,
             slots,
             shown: [None; HOTBAR],
@@ -393,6 +441,13 @@ impl Hud {
         tree.set_visible(self.air.node, state.air < MAX_AIR);
         let (full, popping) = bubbles(state.air);
         self.air.show_counted(tree, full, popping);
+
+        tree.set_shown(self.experience_full, state.experience.clamp(0.0, 1.0));
+        if state.level != self.shown_level {
+            self.shown_level = state.level;
+            tree.set_text(self.level, &state.level.to_string());
+            tree.set_visible(self.level, state.level > 0);
+        }
     }
 
     /// Puts what's in `hotbar` on the slots. Only a slot that changed costs anything.
@@ -457,6 +512,8 @@ mod tests {
             hunger: 20.0,
             armour: 0,
             air: MAX_AIR,
+            experience: 0.0,
+            level: 0,
             selected: 0,
             hotbar: [None; HOTBAR],
             tick: 0,
@@ -567,6 +624,47 @@ mod tests {
         assert_eq!(last_hunger.x + 9.0, MIDDLE + 91.0);
         assert_eq!(last_hunger.y, first_heart.y);
         assert_eq!(fixture.rect(fixture.hud.hunger.cells[1]).x, last_hunger.x - 8.0);
+    }
+
+    #[test]
+    fn the_experience_bar_fills_the_gap_between_the_hotbar_and_the_hearts() {
+        let fixture = Fixture::new();
+        let bar = fixture.rect(fixture.hud.experience_full);
+        let hotbar = fixture.rect(fixture.hud.hotbar);
+        let heart = fixture.rect(fixture.hud.hearts.cells[0]);
+        assert_eq!(bar.size(), [182.0, 5.0]);
+        assert_eq!(bar.x, hotbar.x, "as wide as the hotbar");
+        assert_eq!(bar.y + bar.height, SCREEN[1] - 26.0);
+        assert_eq!(hotbar.y - (bar.y + bar.height), 2.5, "over the hotbar");
+        assert_eq!(bar.y - (heart.y + heart.height), 1.0, "under the hearts");
+    }
+
+    #[test]
+    fn the_bar_fills_as_far_as_the_experience_goes() {
+        let shown = |fixture: &Fixture| match &fixture.tree.node(fixture.hud.experience_full).kind {
+            Kind::Image(image) => image.shown,
+            other => panic!("not a picture: {other:?}"),
+        };
+        let mut fixture = Fixture::new();
+        assert_eq!(shown(&fixture), 0.0);
+        fixture.update(HudState { experience: 0.25, ..state() });
+        assert_eq!(shown(&fixture), 0.25);
+        fixture.update(HudState { experience: 7.0, ..state() });
+        assert_eq!(shown(&fixture), 1.0, "and no further");
+    }
+
+    #[test]
+    fn the_level_shows_on_the_bar_once_there_is_one() {
+        let mut fixture = Fixture::new();
+        assert!(!fixture.shown(fixture.hud.level), "level 0 says nothing");
+        fixture.update(HudState { level: 7, ..state() });
+        assert!(fixture.shown(fixture.hud.level));
+        assert_eq!(text(&fixture, fixture.hud.level), "7");
+        let (label, bar) = (fixture.rect(fixture.hud.level), fixture.rect(fixture.hud.experience_full));
+        assert_eq!(label.y + label.height, bar.y, "on top of it");
+        assert_eq!(label.x + label.width / 2.0, bar.x + bar.width / 2.0, "in the middle");
+        fixture.update(state());
+        assert!(!fixture.shown(fixture.hud.level));
     }
 
     #[test]
@@ -758,7 +856,7 @@ mod tests {
 
     #[test]
     fn every_sprite_the_hud_uses_is_asked_for() {
-        for path in HOTBAR_SLOTS.iter().chain(&[HOTBAR_START, HOTBAR_END, SELECTED]) {
+        for path in HOTBAR_SLOTS.iter().chain(&[HOTBAR_START, HOTBAR_END, SELECTED, XP_EMPTY, XP_FULL, XP_TICK]) {
             assert!(SPRITES.contains(path), "{path}");
         }
         for icons in [HEART, HUNGER, ARMOUR, AIR] {

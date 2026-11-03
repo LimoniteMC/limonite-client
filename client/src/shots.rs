@@ -28,7 +28,8 @@
 //! seconds, to select it just before the picture, so that the item's name shows.
 //!
 //! `LIMONITE_SHOTS_HOTBAR` fills the hotbar first, through the server: item names
-//! separated by commas, each with `*` and a count if it isn't 1.
+//! separated by commas, each with `*` and a count if it isn't 1. `LIMONITE_SHOTS_XP`
+//! gives a level and how far the bar is filled, also through the server: `7,0.4`.
 //!
 //! **The pictures go in `run/screenshots`, which is gitignored:** they show Mojang's
 //! textures. The owner picks any that go in the README (CLAUDE.md, Rules).
@@ -200,6 +201,20 @@ impl Studio {
         self.server.fill_hotbar(&parse_hotbar(list).expect("a list of items"));
     }
 
+    /// Gives the player a level and a bar through the server: `7,0.4`.
+    ///
+    /// The level first, and then the bar, which works out the points that go with it.
+    /// The server keeps points and the bar both, and works the bar out from the points
+    /// again whenever it adds any, even none, as an advancement's reward can.
+    fn set_experience(&self, text: &str) {
+        let (level, progress) = text.split_once(',').expect("a level and how far the bar is filled");
+        let _runtime = self.server.runtime.enter();
+        if let Some(player) = self.server.server.get_all_players().first() {
+            player.set_experience_level(level.parse().expect("a level"), false);
+            player.set_experience_progress(progress.parse().expect("a fraction"));
+        }
+    }
+
     /// Sets what the server knows of the player.
     fn set_player(&self, shot: &Shot) {
         let _runtime = self.server.runtime.enter();
@@ -261,12 +276,14 @@ impl Studio {
 
         let player = self.session.game().player().expect("the player");
         println!(
-            "{}: {:?}, health {}, hunger {}, air {}; {} meshes, {} in view; aimed at {:?}",
+            "{}: {:?}, health {}, hunger {}, air {}, level {} and {}; {} meshes, {} in view; aimed at {:?}",
             shot.name,
             player.gamemode,
             player.attributes.health,
             player.attributes.hunger,
             player.attributes.air,
+            player.attributes.level,
+            player.attributes.experience,
             self.meshes.len(),
             self.terrain.visible,
             aimed.as_ref().map(|hit| hit.block),
@@ -364,6 +381,9 @@ fn screenshots() {
         pose,
         browser,
     };
+    if let Ok(experience) = std::env::var("LIMONITE_SHOTS_XP") {
+        studio.set_experience(&experience);
+    }
     if let Ok(list) = std::env::var("LIMONITE_SHOTS_HOTBAR") {
         studio.fill_hotbar(&list);
     }

@@ -211,6 +211,8 @@ fn hud_sheets() {
         hunger: 20.0,
         armour: 0,
         air: 300.0,
+        experience: 0.0,
+        level: 0,
         selected: 0,
         hotbar: hotbar_of(&["dirt", "oak_log", "poppy", "torch", "oak_stairs", "diamond_sword", "apple", "oak_fence", "grass_block"]),
         tick: 0,
@@ -224,6 +226,8 @@ fn hud_sheets() {
                 hunger: 7.0,
                 armour: 15,
                 air: 151.0,
+                experience: 0.4,
+                level: 7,
                 selected: 4,
                 ..base
             },

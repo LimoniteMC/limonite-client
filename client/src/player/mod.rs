@@ -164,6 +164,10 @@ pub struct Attributes {
     pub saturation: f32,
     /// Breath, in ticks: `AIR_SUPPLY` in `SetActorData`, not an attribute.
     pub air: f32,
+    /// `minecraft:player.experience`, how far through this level, 0 to 1, and
+    /// `minecraft:player.level`.
+    pub experience: f32,
+    pub level: f32,
 }
 
 impl Default for Attributes {
@@ -177,6 +181,8 @@ impl Default for Attributes {
             hunger: 20.0,
             saturation: 5.0,
             air: 300.0,
+            experience: 0.0,
+            level: 0.0,
         }
     }
 }
@@ -196,6 +202,8 @@ impl Attributes {
                 }
                 "minecraft:player.hunger" => self.hunger = value,
                 "minecraft:player.saturation" => self.saturation = value,
+                "minecraft:player.experience" => self.experience = value,
+                "minecraft:player.level" => self.level = value,
                 other => debug!("Attribute {other} = {value}: not kept"),
             }
         }
@@ -505,8 +513,11 @@ mod tests {
             attribute("minecraft:movement", 0.13, 3.4e38),
             attribute("minecraft:health", 7.0, 24.0),
             attribute("minecraft:player.hunger", 15.0, 20.0),
+            attribute("minecraft:player.experience", 0.25, 1.0),
+            attribute("minecraft:player.level", 7.0, 24_791.0),
             attribute("minecraft:luck", 1.0, 1024.0),
         ]);
+        assert_eq!((attributes.experience, attributes.level), (0.25, 7.0));
         assert!((attributes.movement - 0.13).abs() < f32::EPSILON);
         assert_eq!((attributes.health, attributes.max_health), (7.0, 24.0));
         assert_eq!(attributes.hunger, 15.0);

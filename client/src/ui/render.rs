@@ -34,10 +34,8 @@ use crate::{
     },
 };
 
-/// Text, and whatever else draws as it is.
+/// Whatever draws as it is.
 const WHITE: [u8; 4] = [255; 4];
-/// Text's shadow: a quarter of its brightness.
-const SHADOW_COLOR: [u8; 4] = [63, 63, 63, 255];
 const QUADS_AT_FIRST: u32 = 256;
 
 /// One corner of a quad.
@@ -79,18 +77,31 @@ impl Drawing {
     /// Adds a quad: `dest` in UI units, and `source` in atlas texels, each left, top,
     /// right and bottom.
     fn quad(&mut self, atlas: &Atlas, scale: f32, blend: Blend, dest: [f32; 4], source: [u32; 4], color: [u8; 4]) {
+        self.quad_from(atlas, scale, blend, dest, source.map(|edge| edge as f32), color);
+    }
+
+    /// Adds a quad of a picture that stops at `limit`, in UI units: what's right of
+    /// there doesn't show, and its texels go with it, so that the rest isn't squeezed.
+    fn quad_up_to(&mut self, atlas: &Atlas, scale: f32, blend: Blend, dest: [f32; 4], source: [u32; 4], limit: f32) {
+        let [left, top, right, bottom] = dest;
+        if limit >= right {
+            self.quad(atlas, scale, blend, dest, source, WHITE);
+        } else if limit > left {
+            let [u0, v0, u1, v1] = source.map(|edge| edge as f32);
+            let kept = u0 + (u1 - u0) * (limit - left) / (right - left);
+            self.quad_from(atlas, scale, blend, [left, top, limit, bottom], [u0, v0, kept, v1], WHITE);
+        }
+    }
+
+    /// As [`Self::quad`], for a `source` that needn't start and end on whole texels.
+    fn quad_from(&mut self, atlas: &Atlas, scale: f32, blend: Blend, dest: [f32; 4], source: [f32; 4], color: [u8; 4]) {
         let [left, top, right, bottom] = dest.map(|edge| (edge * scale).round());
         // Rounded to nothing, or an empty piece of a nine-slice.
         if right <= left || bottom <= top {
             return;
         }
         let [width, height] = atlas.size().map(|side| side as f32);
-        let [u0, v0, u1, v1] = [
-            source[0] as f32 / width,
-            source[1] as f32 / height,
-            source[2] as f32 / width,
-            source[3] as f32 / height,
-        ];
+        let [u0, v0, u1, v1] = [source[0] / width, source[1] / height, source[2] / width, source[3] / height];
         let quad = self.quads();
         self.vertices.extend_from_slice(&[
             Vertex { position: [left, top], uv: [u0, v0], color, layer: 0 },
@@ -169,12 +180,13 @@ fn add_node(tree: &Tree, id: NodeId, looks: Looks<'_>, drawing: &mut Drawing) {
             if let Some(sprite) = image.sprite {
                 let sprite = looks.atlas.get(sprite);
                 let dest = node.rect.edges();
+                let limit = dest[0] + (dest[2] - dest[0]) * image.shown;
                 if let Some(nine) = &sprite.nine_slice {
                     for piece in nine_pieces(dest, sprite.source, nine) {
-                        drawing.quad(looks.atlas, looks.scale, image.blend, piece.dest, piece.source, WHITE);
+                        drawing.quad_up_to(looks.atlas, looks.scale, image.blend, piece.dest, piece.source, limit);
                     }
                 } else {
-                    drawing.quad(looks.atlas, looks.scale, image.blend, dest, sprite.source, WHITE);
+                    drawing.quad_up_to(looks.atlas, looks.scale, image.blend, dest, sprite.source, limit);
                 }
             }
         }
@@ -189,8 +201,11 @@ fn add_node(tree: &Tree, id: NodeId, looks: Looks<'_>, drawing: &mut Drawing) {
             }
         }
         Kind::Label(label) => {
-            add_text(&label.text, [node.rect.x + SHADOW, node.rect.y + SHADOW], SHADOW_COLOR, looks, drawing);
-            add_text(&label.text, [node.rect.x, node.rect.y], WHITE, looks, drawing);
+            // Its shadow is a quarter as bright.
+            let [r, g, b, a] = label.color;
+            let shadow = [r / 4, g / 4, b / 4, a];
+            add_text(&label.text, [node.rect.x + SHADOW, node.rect.y + SHADOW], shadow, looks, drawing);
+            add_text(&label.text, [node.rect.x, node.rect.y], label.color, looks, drawing);
         }
     }
     for &child in node.children() {
@@ -580,6 +595,52 @@ mod tests {
     }
 
     #[test]
+    fn a_picture_shown_in_part_is_cut_on_the_right_and_keeps_its_texels() {
+        let (atlas, font) = assets();
+        let sprite = atlas.sprite("flat").unwrap();
+        let mut tree = Tree::new();
+        let node = tree.add(Tree::ROOT, Node::image(Layout::px(40.0, 20.0).at(Anchor::TopLeft), Some(sprite)));
+        tree.set_shown(node, 0.25);
+        let drawing = drawn(&mut tree, &atlas, &font, 1.0);
+        assert_eq!(drawing.quads(), 1);
+        assert_eq!(drawing.vertices[2].position, [10.0, 20.0], "a quarter of 40 across, and all of 20 down");
+        let source = atlas.get(sprite).source;
+        let [width, height] = atlas.size().map(|side| side as f32);
+        let expected = [(source[0] as f32 + 1.0) / width, source[3] as f32 / height];
+        assert_eq!(drawing.vertices[2].uv, expected, "a quarter of its 4 texels across");
+
+        tree.set_shown(node, 0.0);
+        assert_eq!(drawn(&mut tree, &atlas, &font, 1.0).quads(), 0, "none of it");
+        tree.set_shown(node, 1.0);
+        assert_eq!(drawn(&mut tree, &atlas, &font, 1.0).vertices[2].position, [40.0, 20.0], "all of it");
+    }
+
+    #[test]
+    fn a_nine_slice_shown_in_part_loses_the_pieces_past_the_cut() {
+        let (atlas, font) = assets();
+        let sprite = atlas.sprite("nine").unwrap();
+        let mut tree = Tree::new();
+        let node = tree.add(Tree::ROOT, Node::image(Layout::px(40.0, 20.0).at(Anchor::TopLeft), Some(sprite)));
+        tree.set_shown(node, 0.5);
+        let drawing = drawn(&mut tree, &atlas, &font, 1.0);
+        assert_eq!(drawing.quads(), 6, "three rows of the left and middle columns, and no right one");
+        let right = drawing.vertices.iter().map(|vertex| vertex.position[0]).fold(0.0, f32::max);
+        assert_eq!(right, 20.0);
+    }
+
+    #[test]
+    fn a_coloured_label_has_a_shadow_a_quarter_as_bright() {
+        let (atlas, font) = assets();
+        let mut tree = Tree::new();
+        let label = Node::label(Layout::content().at(Anchor::TopLeft), "A").colored([128, 255, 0, 255]);
+        tree.add(Tree::ROOT, label);
+        let drawing = drawn(&mut tree, &atlas, &font, 1.0);
+        assert_eq!(drawing.quads(), 2);
+        assert_eq!(drawing.vertices[0].color, [32, 63, 0, 255]);
+        assert_eq!(drawing.vertices[4].color, [128, 255, 0, 255]);
+    }
+
+    #[test]
     fn text_is_a_shadow_then_the_text() {
         let (atlas, font) = assets();
         let mut tree = Tree::new();
@@ -590,7 +651,7 @@ mod tests {
         // The label's at the top left, and its cells start 3 above the line. It's the
         // next one down that keeps the rounding out of it.
         assert_eq!(corner(0).position, [SHADOW, SHADOW - 3.0]);
-        assert_eq!(corner(0).color, SHADOW_COLOR);
+        assert_eq!(corner(0).color, [63, 63, 63, 255], "a quarter as bright");
         assert_eq!(corner(1).position[0], SHADOW + 6.0, "'A' is 5 wide, and a gap");
         assert_eq!(corner(2).position, [0.0, -3.0]);
         assert_eq!(corner(2).color, WHITE);

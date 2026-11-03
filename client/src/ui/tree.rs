@@ -38,20 +38,23 @@ pub enum Blend {
 }
 
 /// A picture, or nothing yet.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Image {
     pub sprite: Option<SpriteId>,
     pub blend: Blend,
+    /// How much of it shows, from the left: 1 is all of it, and 0 none.
+    pub shown: f32,
 }
 
-/// A line of white text with a shadow.
+/// A line of text with a shadow.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Label {
     pub text: String,
+    pub color: [u8; 4],
 }
 
 /// What a node draws, before its children.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Kind {
     /// Nothing: it only places its children.
     Panel,
@@ -95,13 +98,13 @@ impl Node {
     #[must_use]
     pub fn image(layout: Layout, sprite: Option<SpriteId>) -> Self {
         let blend = Blend::Alpha;
-        Self::new(layout, Kind::Image(Image { sprite, blend }))
+        Self::new(layout, Kind::Image(Image { sprite, blend, shown: 1.0 }))
     }
 
     #[must_use]
     pub fn label(layout: Layout, text: &str) -> Self {
         let text = text.to_string();
-        Self::new(layout, Kind::Label(Label { text }))
+        Self::new(layout, Kind::Label(Label { text, color: [255; 4] }))
     }
 
     #[must_use]
@@ -121,6 +124,15 @@ impl Node {
     pub const fn inverting(mut self) -> Self {
         if let Kind::Image(image) = &mut self.kind {
             image.blend = Blend::Invert;
+        }
+        self
+    }
+
+    /// In this colour, if it's a label. It's white otherwise.
+    #[must_use]
+    pub const fn colored(mut self, color: [u8; 4]) -> Self {
+        if let Kind::Label(label) = &mut self.kind {
+            label.color = color;
         }
         self
     }
@@ -199,6 +211,17 @@ impl Tree {
             && image.sprite != sprite
         {
             image.sprite = sprite;
+            self.changed = true;
+        }
+    }
+
+    /// Changes how much of a picture shows, from the left: 1 is all of it, and 0 none.
+    pub fn set_shown(&mut self, id: NodeId, shown: f32) {
+        let node = self.node_mut(id);
+        if let Kind::Image(image) = &mut node.kind
+            && image.shown != shown
+        {
+            image.shown = shown;
             self.changed = true;
         }
     }
