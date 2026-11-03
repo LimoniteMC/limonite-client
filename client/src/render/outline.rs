@@ -1,5 +1,5 @@
-//! The outline around the block aimed at (m5-plan Decision 8): thin dark lines
-//! along its shape's edges.
+//! The outline around the block aimed at (m5-plan Decision 8): dark lines along
+//! its shape's edges.
 //!
 //! **Edges, not boxes** (worth teaching). A block's outline can be several
 //! boxes: a stair is two. Drawing every box's twelve edges would put lines
@@ -10,6 +10,11 @@
 //! buffer, so that a block in front of them hides them, and it isn't kept once
 //! the pass ends. They go after the opaque faces and before the blended ones,
 //! so water in front of them tints them as it does the block.
+//!
+//! **Wide lines are rectangles** (worth teaching). A GPU only promises lines one
+//! pixel wide, which is thin on a big screen. So each line is one instance of two
+//! triangles, and the vertex shader moves their corners apart on the screen: the
+//! same number of pixels however far off the line is, on any GPU.
 
 use glam::DVec3;
 
@@ -17,15 +22,29 @@ use super::Gpu;
 use crate::blocks::shapes::Aabb;
 
 /// How far the lines stand off the block, so that they don't fight its faces
-/// for the same pixels. Line lists can't use a depth bias.
+/// for the same pixels.
 const STAND_OFF: f64 = 0.002;
+/// A line's two triangles.
+const CORNERS: u32 = 6;
+/// A line's two ends, relative to the camera.
+type Line = [[f32; 3]; 2];
+
+/// How wide the lines are, in pixels: 2 up to 1080p, and then in step with the window, so
+/// that they look the same on any screen. A whole number of pixels keeps them crisp.
+fn line_width(window_height: u32) -> f32 {
+    (window_height as f32 / 540.0).round().max(2.0)
+}
 
 /// The lines' GPU state.
 pub struct Outline {
     pipeline: wgpu::RenderPipeline,
     bind_group: wgpu::BindGroup,
-    vertices: wgpu::Buffer,
-    /// How many vertices the buffer holds, and how many to draw.
+    /// The window's width and height and the lines' width, in pixels, and a last
+    /// number that's only there because a uniform comes in 16 bytes.
+    sizes: wgpu::Buffer,
+    written: [f32; 4],
+    lines: wgpu::Buffer,
+    /// How many lines the buffer holds, and how many to draw.
     capacity: usize,
     count: u32,
 }
@@ -38,26 +57,39 @@ impl Outline {
         depth: wgpu::TextureFormat,
         frame: &wgpu::Buffer,
     ) -> Self {
+        let sizes = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("outline sizes"),
+            size: size_of::<[f32; 4]>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let uniform = |binding, size| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::VERTEX,
+            ty: wgpu::BindingType::Buffer {
+                ty: wgpu::BufferBindingType::Uniform,
+                has_dynamic_offset: false,
+                min_binding_size: wgpu::BufferSize::new(size),
+            },
+            count: None,
+        };
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("outline"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: wgpu::BufferSize::new(frame.size()),
-                },
-                count: None,
-            }],
+            entries: &[uniform(0, frame.size()), uniform(1, sizes.size())],
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("outline"),
             layout: &layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: frame.as_entire_binding(),
-            }],
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: frame.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: sizes.as_entire_binding(),
+                },
+            ],
         });
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("outline"),
@@ -65,7 +97,7 @@ impl Outline {
             immediate_size: 0,
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("outline.wgsl"));
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3];
+        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("outline"),
             layout: Some(&pipeline_layout),
@@ -74,15 +106,12 @@ impl Outline {
                 entry_point: Some("vertex_main"),
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
                 buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: size_of::<[f32; 3]>() as u64,
-                    step_mode: wgpu::VertexStepMode::Vertex,
+                    array_stride: size_of::<Line>() as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
                     attributes: &attributes,
                 })],
             },
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::LineList,
-                ..Default::default()
-            },
+            primitive: wgpu::PrimitiveState::default(),
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: depth,
                 depth_write_enabled: Some(false),
@@ -105,11 +134,13 @@ impl Outline {
             cache: None,
         });
         // A full cube's worth, which is most of what it ever draws.
-        let capacity = 24;
+        let capacity = 12;
         Self {
             pipeline,
             bind_group,
-            vertices: vertex_buffer(device, capacity),
+            sizes,
+            written: [0.0; 4],
+            lines: line_buffer(device, capacity),
             capacity,
             count: 0,
         }
@@ -120,18 +151,23 @@ impl Outline {
     /// positions are camera-relative (`camera.rs`), and it's a few hundred bytes.
     pub fn show(&mut self, gpu: &Gpu, eye: DVec3, boxes: &[Aabb]) {
         let apart: Vec<Aabb> = boxes.iter().map(|area| area.shrunk(DVec3::splat(-STAND_OFF))).collect();
-        let vertices: Vec<[f32; 3]> = edges(&apart)
+        let lines: Vec<Line> = edges(&apart)
             .into_iter()
-            .flatten()
-            .map(|end| (end - eye).as_vec3().to_array())
+            .map(|ends| ends.map(|end| (end - eye).as_vec3().to_array()))
             .collect();
-        self.count = vertices.len() as u32;
-        if vertices.len() > self.capacity {
-            self.capacity = vertices.len().next_power_of_two();
-            self.vertices = vertex_buffer(&gpu.device, self.capacity);
+        self.count = lines.len() as u32;
+        if lines.len() > self.capacity {
+            self.capacity = lines.len().next_power_of_two();
+            self.lines = line_buffer(&gpu.device, self.capacity);
         }
-        if !vertices.is_empty() {
-            gpu.queue.write_buffer(&self.vertices, 0, bytemuck::cast_slice(&vertices));
+        if !lines.is_empty() {
+            gpu.queue.write_buffer(&self.lines, 0, bytemuck::cast_slice(&lines));
+        }
+        let (width, height) = (gpu.config.width, gpu.config.height);
+        let sizes = [width as f32, height as f32, line_width(height), 0.0];
+        if sizes != self.written {
+            self.written = sizes;
+            gpu.queue.write_buffer(&self.sizes, 0, bytemuck::cast_slice(&sizes));
         }
     }
 
@@ -141,16 +177,16 @@ impl Outline {
         if self.count > 0 {
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.bind_group, &[]);
-            pass.set_vertex_buffer(0, self.vertices.slice(..));
-            pass.draw(0..self.count, 0..1);
+            pass.set_vertex_buffer(0, self.lines.slice(..));
+            pass.draw(0..CORNERS, 0..self.count);
         }
     }
 }
 
-fn vertex_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
+fn line_buffer(device: &wgpu::Device, capacity: usize) -> wgpu::Buffer {
     device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("outline"),
-        size: (capacity * size_of::<[f32; 3]>()) as u64,
+        size: (capacity * size_of::<Line>()) as u64,
         usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
         mapped_at_creation: false,
     })
@@ -237,6 +273,14 @@ mod tests {
 
     fn area(min: [f64; 3], max: [f64; 3]) -> Aabb {
         Aabb::new(DVec3::from_array(min), DVec3::from_array(max))
+    }
+
+    #[test]
+    fn lines_are_two_pixels_wide_up_to_1080p_and_grow_with_the_window() {
+        assert_eq!(line_width(620), 2.0);
+        assert_eq!(line_width(1080), 2.0);
+        assert_eq!(line_width(1440), 3.0);
+        assert_eq!(line_width(2160), 4.0);
     }
 
     #[test]
