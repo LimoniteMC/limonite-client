@@ -1751,6 +1751,7 @@ by Pumpkin's own reader with no bytes left over.
     candidates).
   - **Checks:** 357 client tests, clippy with the same 2 warnings, and the HUD's sheets and real frames from the
     screenshot tool, with experience sent by the real server.
+  - **The owner said go** (2026-11-03), from pictures of both changes.
 
 ### Step 10: Aim at blocks (2026-11-01)
 

@@ -63,10 +63,10 @@ _Last updated: 2026-11-01._
   - **Step 11 is built (2026-11-02):** blocks break and place, with the official client's packets, and show at once
     where the result is certain (`client/src/edit/`). A table takes back what the server refuses, and `--headless
     --edits <n>` checks it all against the real server.
-  - **The owner's checkpoint (2026-11-02):** the crack looks great. The client now draws the experience bar, so the
-    HUD sits together, and a wider outline (m5-plan Deviations 49 and 50). Not pushed yet.
-  - **Next:** the owner's look at those, then the 1.26.60 bump, when the owner says, since Step 12's capture needs it
-    (m5-plan, Deviation 47). Then Step 12.
+  - **The owner's checkpoint (2026-11-02): go, on 2026-11-03.** The crack looks great. The client now draws the
+    experience bar, so the HUD sits together, and a wider outline (m5-plan Deviations 49 and 50).
+  - **Next:** the 1.26.60 bump, when the owner says, since Step 12's capture needs it (m5-plan, Deviation 47). Then
+    Step 12.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -99,7 +99,7 @@ _Last updated: 2026-11-01._
   upstream candidate.
 - **Pushed, all public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
   2026-10-24, the README and the wiki on 2026-10-25, the first upstream sync and M5 through Step 10
-  on 2026-11-01, and the second sync and Step 11 on 2026-11-02):
+  on 2026-11-01, the second sync and Step 11 on 2026-11-02, and Step 11's checkpoint on 2026-11-03):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
   - the fork's `limonite` branch, at `2c52f24`, with the M1 to M4 fork commits, the upstream syncs
