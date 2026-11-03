@@ -1357,6 +1357,15 @@ The questions as they were asked:
     says to build in creative and in survival, but the inventory screen is Step 12, chat is Step 16, and Pumpkin ignores
     a pick (Step 10), so a new creative player has nothing to place. `--hotbar <items>` fills the hotbar on joining,
     through the server, as the screenshot tool already could. It stays after Step 12, for tests.
+49. **The HUD has the experience bar after all** (the owner's checkpoint, 2026-11-03). Decision 15 left it out, and
+    Step 8 left its gap empty, so the hearts and hunger looked adrift over the hotbar: "too spaced out", the owner said.
+    The official client puts the bar there, so the client draws it as that does: the empty bar, the full one shown as
+    far as the experience goes, a tick every 11 units, and the level in green over it once there is one. Pumpkin sends
+    both as attributes. The rows stay where they were, since it's the bar that closes the gap.
+50. **The outline is 2 pixels wide, or more on a big screen** (the owner's checkpoint). One pixel looked too thin. A
+    GPU only promises lines one pixel wide, so each edge is now a rectangle facing the screen, 2 pixels wide up to 1080p
+    and then one more for each 540 rows. It's drawn 1% nearer the camera, which only changes its depth, so the side of
+    a line at a block's foot lies over the floor and not under it.
 
 ## Results (filled in during execution)
 
@@ -1719,6 +1728,29 @@ by Pumpkin's own reader with no bytes left over.
     screen;
   - a survival placement costs two items, as reported (Pumpkin-MC/Pumpkin#4130);
   - the crack only shows the local player's.
+- **The owner's checkpoint (2026-11-02, the fixes on 2026-11-03):** a house in creative and a build in survival, with
+  `--hotbar` for the blocks (Deviation 48).
+  - **What the owner found:** the crack looks great, and the crosshair's fine. The outline was a bit thin (Deviation
+    50), and the hotbar, hearts and hunger too spaced out (Deviation 49).
+  - **What the sessions logged:**
+
+    | | Shown | Confirmed | Refused | Click to drawn, median and p95 | Click to confirmed, median and p95 |
+    | --- | --- | --- | --- | --- | --- |
+    | Creative | 229 | 223 | 6 | 6.1 and 42.4 ms | 30.4 and 48.4 ms |
+    | Survival | 135 | 135 | 0 | 6.1 and 48.6 ms | 36.6 and 45.2 ms |
+
+    A predicted edit shows in the next frame, 6 ms on. The 95th percentile is the edits that wait for the server, such
+    as logs and stairs.
+  - **The 6 refused** were all in creative, and the log didn't say what they were. Now each one logs a line, with the
+    block and what the server says is there. A mob where a block went is the likely cause, since the client can't see
+    mobs until Step 15, or the player moving between the click and the server's tick.
+  - **Found while checking the bar:** the server keeps experience as points and as a bar, and works the bar out from
+    the points whenever it adds any, even none, as an advancement's reward can. So a bar set with no points empties on
+    the next tick. The screenshot tool sets the level and then the bar, as the game does. And Pumpkin's `read_nbt` gives
+    `progress_in_level` the level and the points the wrong way round, for a save with no level (STATUS.md, Upstream PR
+    candidates).
+  - **Checks:** 357 client tests, clippy with the same 2 warnings, and the HUD's sheets and real frames from the
+    screenshot tool, with experience sent by the real server.
 
 ### Step 10: Aim at blocks (2026-11-01)
 

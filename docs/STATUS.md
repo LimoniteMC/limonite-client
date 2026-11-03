@@ -63,10 +63,10 @@ _Last updated: 2026-11-01._
   - **Step 11 is built (2026-11-02):** blocks break and place, with the official client's packets, and show at once
     where the result is certain (`client/src/edit/`). A table takes back what the server refuses, and `--headless
     --edits <n>` checks it all against the real server.
-  - **Next:** the owner's checkpoint: build something in creative and in survival, about 10 minutes, with `--hotbar` for
-    the blocks, which takes in the walk beside the official client: the HUD, the hotbar, the outline and the crack. Then
-    the 1.26.60 bump, when
-    the owner says, since Step 12's capture needs it (m5-plan, Deviation 47). Then Step 12.
+  - **The owner's checkpoint (2026-11-02):** the crack looks great. The client now draws the experience bar, so the
+    HUD sits together, and a wider outline (m5-plan Deviations 49 and 50). Not pushed yet.
+  - **Next:** the owner's look at those, then the 1.26.60 bump, when the owner says, since Step 12's capture needs it
+    (m5-plan, Deviation 47). Then Step 12.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -788,5 +788,11 @@ upstream fixes it and a weekly sync brings the fix in:
 - **A survival placement costs two items:** Pumpkin-MC/Pumpkin#4130, already open. The official
   client's use-item transaction carries its predicted slot change, which `inventory_action.rs`
   applies (`:87-135`) before its own `stack.decrement(1)` (`:289`).
+
+**Found since, not reported** (ask the owner before reporting any):
+
+- **Experience from a save with no level:** `Player::read_nbt` calls `progress_in_level(level, points)`, which takes
+  the points first (`pumpkin-util/src/math/experience.rs:86`). Only a save with `XpTotal` and no `XpLevel` goes that
+  way (found 2026-11-03).
 
 Notes for M2 (found while planning M1) were all handled; see `docs/milestones/m2-plan.md`.
