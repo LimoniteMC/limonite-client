@@ -65,8 +65,10 @@ _Last updated: 2026-11-01._
     --edits <n>` checks it all against the real server.
   - **The owner's checkpoint (2026-11-02): go, on 2026-11-03.** The crack looks great. The client now draws the
     experience bar, so the HUD sits together, and a wider outline (m5-plan Deviations 49 and 50).
-  - **Next:** the 1.26.60 bump, when the owner says, since Step 12's capture needs it (m5-plan, Deviation 47). Then
-    Step 12.
+  - **The fork is on Bedrock 1.26.60 (2026-11-04),** protocol 2225, which the official client here speaks (m5-plan,
+    Deviation 51). Not pushed yet.
+  - **Next:** the owner's join from the official client on the stock server, since NetherNet and the login changed. Then
+    Step 12, with its capture of the creative take on 1.26.60.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -75,12 +77,9 @@ _Last updated: 2026-11-01._
 - **Upstream syncs are weekly** (owner, 2026-10-26): merge upstream Pumpkin's `master` into the
   fork once a calendar week. `docs/upstream.md` has the procedure, and a log of what each sync
   brought in.
-  - **Last sync:** 2026-11-02, upstream `eba538f` (25 commits, those before 1.26.60, the owner's choice). The fork's
-    `limonite` is at `2c52f24`, and `main` bumped it in `1b226d9`.
-  - **Next sync due:** 2026-11-09.
-  - **The 1.26.60 bump is the owner's to decide, and Step 12 needs it.** Upstream's next commit, `f2cff8e`, moves to
-    protocol 2225. The official client here updated itself to 1.26.60.5 on 2026-10-28, so it can't join the fork
-    until the bump lands (m5-plan, Deviation 47).
+  - **Last sync:** 2026-11-04, upstream `a83abee` (64 commits, with the move to Bedrock 1.26.60). The fork's `limonite`
+    is at `8acb34b`, and `main` bumped it in `010e373`.
+  - **Next sync due:** 2026-11-11.
 - **Milestone 4 is done (2026-10-24).** Plan, results and deviations: `docs/milestones/m4-plan.md`.
   - **What it built:** a window (winit) with a wgpu device and a fly camera that flies the host;
     CPU meshes for every loaded sub-chunk, drawn with vanilla textures read at runtime from the
@@ -137,7 +136,8 @@ _Last updated: 2026-11-01._
 
 Key facts from M0 (details in the recon note, which is required reading before touching the fork):
 - **Transport:** upstream Bedrock is **NetherNet** (WebRTC), not RakNet.
-- **Protocol:** **exactly 2193** is accepted. That's Bedrock 1.26.51, and 1.26.52 also speaks 2193.
+- **Protocol:** **exactly 2225** is accepted: Bedrock 1.26.60, since the sync of 2026-11-04. Before that it was 2193,
+  Bedrock 1.26.51, which 1.26.52 also spoke.
 - **The seam:** `BedrockClient::session: Arc<NetherNetSession>`, which uses six methods.
 - **LocalChannel:** carries uncompressed bytes. Compression only turns on via
   `RequestNetworkSettings`, so the host never sends it.
@@ -547,9 +547,9 @@ the gitignored folder.
 - **Captures are private:** `run/captures/slogin.bin` contains the owner's Xbox token and
   identity. Never commit it, paste it, or print its contents.
 - **Exact protocol:** Pumpkin accepts one Bedrock protocol only. Don't update the Bedrock client
-  mid-milestone; if it updates past 2193, the official client can no longer join.
-  - **The Store updates it unasked:** it took it to 1.26.60.5 on 2026-10-28, so that's where it stands until the fork
-    takes the bump (`docs/upstream.md`). In a world of its own, it still works for comparing looks.
+  mid-milestone; if it updates past 2225, the official client can no longer join.
+  - **The Store updates it unasked:** it took it to 1.26.60.5 on 2026-10-28, and the fork followed on 2026-11-04
+    (`docs/upstream.md`). Check its version at each sync: `(Get-AppxPackage Microsoft.MinecraftUWP).Version`.
 - **Stopping the server:** stopping a background shell doesn't always kill `pumpkin.exe` on
   Windows. Check with `Get-Process pumpkin`.
 - **A commit message can close an issue, in any repo.** GitHub reads close, fix or resolve, in any form, followed by

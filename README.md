@@ -11,7 +11,7 @@
 **A Minecraft: Bedrock Edition client, written in Rust from scratch,<br>with a forked [Pumpkin](https://github.com/Pumpkin-MC/Pumpkin) server built in for singleplayer.**
 
 [![Rust 2024 edition](https://img.shields.io/badge/Rust-2024_edition-818600?style=for-the-badge&logo=rust&logoColor=white&labelColor=1A1A1A)](https://www.rust-lang.org/)
-[![Bedrock 1.26.51](https://img.shields.io/badge/Bedrock-1.26.51-818600?style=for-the-badge&labelColor=1A1A1A)](#the-pumpkin-fork)
+[![Bedrock 1.26.60](https://img.shields.io/badge/Bedrock-1.26.60-818600?style=for-the-badge&labelColor=1A1A1A)](#the-pumpkin-fork)
 [![Platform: Windows](https://img.shields.io/badge/platform-Windows-818600?style=for-the-badge&labelColor=1A1A1A)](#what-youll-need)
 [![Licence: GPL-3.0](https://img.shields.io/badge/licence-GPL--3.0-818600?style=for-the-badge&labelColor=1A1A1A)](LICENSE)
 <br>
@@ -379,8 +379,7 @@ flowchart LR
 
 Limonite embeds [LimoniteMC/Pumpkin](https://github.com/LimoniteMC/Pumpkin/tree/limonite),
 branch `limonite`, as a git submodule. Pumpkin's Bedrock support speaks NetherNet and accepts
-exactly one protocol, and the fork is on **Bedrock 1.26.51, protocol 2193**. Upstream has moved to
-1.26.60, and the fork follows once that's been checked against the official client.
+exactly one protocol, and the fork is on **Bedrock 1.26.60, protocol 2225**, as upstream is.
 
 The fork stays small on purpose. Changes to existing Pumpkin files only go through small, named
 seams, each with a doc comment saying why it exists, so merging upstream stays cheap. The fork

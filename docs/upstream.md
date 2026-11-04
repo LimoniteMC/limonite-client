@@ -78,6 +78,147 @@ newest first: what came in, what it changed for Limonite, and how the conflicts 
 
 ## Log
 
+### 2026-11-04: `eba538f` to `a83abee`, 64 commits, and Bedrock 1.26.60
+
+- **Commits:** fork `4caebaf` (the merge), `22ebc6f` (what the merge needed to build) and `8acb34b` (the swing's
+  golden test); superproject `010e373` (the bump, with the lockfile and the client's changes). Upstream's commits are
+  dated 2026-10-29 to 2026-11-04.
+- **The owner's go:** 2026-11-03, after the official client had updated itself to 1.26.60.5 (the last entry).
+- **Bedrock protocol:** 2193 to **2225**, and Bedrock 1.26.51 to **1.26.60** (`f2cff8e`, Pumpkin-MC/Pumpkin#4407).
+- **Block data:** changed. The Bedrock palette comes from CloudburstMC's 26.60 dump, 3.9 MB to 4.3 MB, with GeyserMC's
+  mappings for Java 26.3 and Bedrock 26.60. The generated block table gained each block's sound type (`98e44e1`, for
+  the sounds of movement).
+  - **Saved worlds load the same:** a copy of `run/m4-template`, mapped with the client of 2026-11-01 and with this
+    one, gives the same map, all 92,416 pixels of it.
+
+**What it changes for Limonite**
+
+1. **The official client can join again.** The fork takes protocol 2225, which the official client here has spoken
+   since the Store updated it (m5-plan, Deviation 47). So Step 12's capture can go ahead, and the README's badge says
+   1.26.60.
+2. **Packets the client handles:**
+   - **`Animate` ends with the hand now.** The client sends 0, the main hand (`session.rs`).
+   - **`LevelChunk` ends with `client_biome_update`,** which Pumpkin always sends false. The client's decoder reads it
+     and goes on (`world/level_chunk.rs`). Without that, every chunk had a byte too many, and 12 tests said so.
+   - **`StartGame` gains `editor_level_migration_version`,** and `AddActor` and `AddPlayer` the block a passenger rides.
+     The client codecs read them through the derives, with a client-side read for `PassengerOfBlockData` (`22ebc6f`).
+   - **The use-item-on-entity and release-item transactions gain the hand.** The client sends neither yet.
+   - **The golden fixtures are 1.26.52's.** `Animate`'s test adds the hand to its two (`8acb34b`), and the others still
+     match. A capture of 1.26.60, Step 12's, replaces them.
+3. **The vanilla packs:** the base game version is 1.26.60 now, so the client applies `vanilla_1.26.60` too, which it
+   left out before. The install tests pass with it.
+4. **NetherNet:** Bedrock's ping and LAN discovery go over NetherNet, and RakNet is gone (`87531ab`). The embedded server
+   keeps NetherNet off, so the host doesn't notice. For M7's LAN, it's the one path now.
+5. **The fork's NBT reader** decodes strings with pumpkin-nbt's own CESU-8 decoder, which upstream wrote in place of the
+   `cesu8` crate (`22ebc6f`).
+6. **Containers and items:** cursor drags and item stack request fixes (`338317a`), and container properties, mob
+   equipment, links and block actors synced to Bedrock clients (`f023edb`). For Step 12 and M5b. A chunk brings more
+   block actors now: 25 where the same world had 15.
+7. **Serverbound lengths are bounded** before the server allocates (`a83abee`). The client's packets are well inside
+   them: every headless check passes.
+8. **Dependencies:** the MSRV is 1.97, and the root's `rust-version` follows. The root's lockfile is the fork's again,
+   with `glam`, `ordered-float` and `toml_edit` pinned back to the client's versions. `cesu8`, `async-compression`,
+   `itertools` and 8 more left the lockfile.
+9. **The Pumpkin bugs the M5 capture found** are still open, and their code hasn't changed: no fall damage
+   (Pumpkin-MC/Pumpkin#3396), two items per placement (Pumpkin-MC/Pumpkin#4130) and block pick (Pumpkin-MC/Pumpkin#4321).
+
+**Conflicts, and how they were resolved**
+
+- **`pumpkin-core/src/lib.rs`:** the `net::bedrock` imports keep the fork's `local::LocalListener` and
+  `transport::Transport`, and take `IceSocket` from `nethernet`, where upstream moved it when it removed the RakNet
+  status module.
+- **`pumpkin-core/src/net/bedrock/mod.rs`:** the fork's `transport` module stays, and `status` goes, as upstream removed
+  it.
+- **Not textual:** the `cesu8` crate (item 5), and the client codecs' new fields (item 2).
+
+**Checks**
+
+- **Fork:** clippy is clean in all five configurations. The tests pass: 45 in `net::bedrock`, 217 in `pumpkin-protocol
+  --features client`, and 13 palette tests. The 3 that read private captures pass when given them.
+- **Client:** 357 client and 28 `packs` tests pass, the install's 2 as well, and clippy shows only its 2 older warnings.
+  - `--headless --edits 4` passes in creative and in survival, 8 PASS lines each, in new worlds, and `--headless --map`
+    with `--hotbar` gives 8. The edits check's refused click logs its new line.
+  - A survival run's log has the same one warning as before.
+- **The stock server** was rebuilt from the merge (6 min 55 s in release).
+- **Not done yet:** an official-client join over NetherNet on the merged server, which the procedure asks for, since
+  NetherNet and the login changed. It's the owner's, together with Step 12's capture.
+
+**Every upstream commit, by area**
+
+- **Bedrock:**
+  - `f2cff8e` feat(bedrock): port protocol to 1.26.60 (#4407)
+  - `87531ab` feat(bedrock): use nethernet for ping and remove raknet (#4427)
+  - `338317a` fix(bedrock): handle cursor item drag packet and fix item stack request actions (#4428)
+  - `2709e8b` feat(bedrock): added some 26.60 bedrock packets
+  - `f023edb` feat(bedrock): sync container properties, entity equipment, links, and block actors
+- **Protocol:**
+  - `0f826e2` fix(protocol): use CSwingArm for offhand swings on 26.3+ (#4338)
+  - `678891b` fix(protocol): encode armor trims as registry references (#4101)
+  - `5db8510` fix(protocol): send the out of stock flag in merchant offers
+  - `a83abee` fix(protocol): bound serverbound collection lengths before allocating (#3911)
+- **Server and tools:**
+  - `919cac1` fix(console): stop the piped console reader when the server stops (#4325)
+  - `55cb804` chore: update MSRV to 1.97.0 (#4425)
+  - `e17b85a` fix(gametest): Update GameTest structure version handling (#3919)
+- **Plugins:**
+  - `5152bb5` fix(plugin-wit): map protocol i8 fields to WIT s8 in v0.2 (#4413)
+  - `6458950` fix(plugin-wit): revert Bedrock 26.60 packet changes in v0.1
+- **Commands:**
+  - `c6bb20e` fix(command): send the 26.3 argument parser ids and parse registry ids like vanilla (#4311)
+  - `9427b25` fix(command): skip structures that cannot generate in the dimension in /locate (#4446)
+  - `019f118` fix(command): resolve local coordinates from the source position like vanilla (#4324)
+- **World:**
+  - `83efbd3` perf(world): optimize noise router, structure placement, and chunk generation
+  - `ca480ba` fix(world): check redstone conductors above in-water spawn positions
+  - `62aac84` feat(world): spawn wandering traders with their trader llamas
+  - `ade678e` fix(world): check spawner spawn rules and strike thunder lightning
+  - `d9a7863` fix(fluid): bring lava closer to match vanilla (#4464)
+- **Blocks and items:**
+  - `98e44e1` feat: movement emission (#4408)
+  - `2064797` feat(block): bone meal on moss and pale moss places a vegetation patch (#4442)
+  - `3cc5932` fix(dispenser): match vanilla 26.3 projectile spawn position and direction (#4399)
+  - `1a5e631` fix(item): match vanilla bucket placement replacement (#4289)
+- **Players:**
+  - `b6eca28` feat(player): port recovery compass LastDeathLocation (#4424)
+- **Entities:**
+  - `62fdda6` perf(entity): stop preallocating every mob's pathfinding heap (#4053)
+  - `5a24650` fix(entity): play vanilla fall damage sounds (#4409)
+  - `06bcb26` fix(mobai): Temperament enum, data-driven hunt/flee tables, vanilla target search (#4107)
+  - `90ac8d8` fix(entity): add the water splash effect and fix pufferfish stings
+  - `d67df7e` feat(entity): port vanilla dolphin goals, air supply and treasure search
+  - `7596c80` fix(entity): let any living first passenger control a boat
+  - `423e6c1` feat(entity): pick up loot through a shared mob ai step
+  - `743b602` fix(entity): roll CanPickUpLoot on finalize spawn instead of every spawn
+  - `829302f` feat(entity): store saddles in the saddle equipment slot (#4322)
+  - `efaa388` fix(entity): remove the duplicate nautilus controlling passenger
+  - `e91d51d` feat(entity): port llama and trader llama parity
+  - `f68f819` fix(entity): let thrown projectiles hit players
+  - `13b00d2` fix(entity): step mobs up onto blocks within their step height
+  - `a834407` fix(entity): make leashed mobs walk after their leash holder
+  - `d6238bc` fix(entity): roll animal experience on every death
+  - `9c78298` fix(entity): stop ridden horses from being pushed
+  - `37010ae` fix(entity): port mob fall damage overrides and passenger propagation
+  - `1c4b56a` fix(entity): limit dispenser equipping to mobs that accept it
+  - `3b2809a` fix(entity): check fall damage on player-driven vehicle moves
+  - `04d4403` fix(entity): add the equipment bonus to mob experience
+  - `16fa5de` fix(entity): port the bat, parrot, creaking and warden push rules
+  - `197b620` fix(entity): port the elastic leash spring and angular momentum
+  - `1fd8857` feat(entity): pass the spawn reason to finalize_spawn
+  - `ff3be51` fix(entity): give slimes and baby zombies their vanilla experience
+  - `0bf0401` fix(entity): port the horse followMommy for llamas
+  - `c730387` style(entity): format the zombie experience reward
+  - `76c09c9` fix(entity): make polar bears defend nearby cubs (#4448)
+  - `3e812f8` refactor(entity): move the horse family onto AbstractHorse
+  - `296860b` feat(entity): port the horse family
+  - `45d7a89` feat(entity): seat riders on their vehicle
+  - `ffa0fd2` feat(entity): port the camel and close the horse family gaps
+  - `c178719` fix(entity): wear armor and helmets when hurt
+  - `46a21c0` fix(entity): seat and size entities from extracted data
+  - `06f24b7` fix(entity): stop turning a camel's body while it sits
+  - `a3d7cd4` fix(entity): close the cow gaps and fix animal feeding
+  - `8407592` fix(entity): close the chicken gaps
+  - `2d6a9a4` fix(entity): close the wandering trader gaps
+
 ### 2026-11-02: `5e9101f` to `eba538f`, 25 commits
 
 - **Commits:** fork `2c52f24` (the merge); superproject `1b226d9` (the bump). Upstream's commits are dated 2026-10-26 to

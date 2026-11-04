@@ -1352,7 +1352,8 @@ The questions as they were asked:
     - **What still works:** comparing looks, with the official client in a world of its own. Step 1's capture stays good
       for what it recorded.
     - **What it needs:** upstream's port (protocol 2225) is the first commit that sync left out, by the owner's choice.
-      The owner decides when it comes, and `docs/upstream.md` has what waits with it.
+      The owner decides when it comes, and `docs/upstream.md` has what waits with it. It came on 2026-11-04
+      (Deviation 51).
 48. **Step 11's checkpoint needed a way to get blocks** (found when the owner asked what to do at it, 2026-11-02). It
     says to build in creative and in survival, but the inventory screen is Step 12, chat is Step 16, and Pumpkin ignores
     a pick (Step 10), so a new creative player has nothing to place. `--hotbar <items>` fills the hotbar on joining,
@@ -1366,6 +1367,13 @@ The questions as they were asked:
     GPU only promises lines one pixel wide, so each edge is now a rectangle facing the screen, 2 pixels wide up to 1080p
     and then one more for each 540 rows. It's drawn 1% nearer the camera, which only changes its depth, so the side of
     a line at a block's foot lies over the floor and not under it.
+51. **The fork moved to Bedrock 1.26.60 mid-milestone** (the owner's go, 2026-11-03; the sync of 2026-11-04). Upstream's
+    port, with its 63 commits since, and protocol 2225, which the official client here speaks again.
+    - **The client's part:** `Animate` ends with the hand, and `LevelChunk` with a biome flag the decoder reads. The
+      client sends and reads both now (`docs/upstream.md`, the entry of 2026-11-04).
+    - **The capture is 1.26.52's.** Its golden tests still pass, `Animate`'s with the hand added, until Step 12's
+      capture of 1.26.60 replaces them. That capture now also checks the client's packets against 1.26.60's.
+    - **What it doesn't change:** saved worlds load the same, and every headless check passes.
 
 ## Results (filled in during execution)
 

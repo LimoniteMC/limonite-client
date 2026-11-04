@@ -46,7 +46,8 @@ The backend is a source-level fork of [Pumpkin](https://github.com/Pumpkin-MC/Pu
 **Upstream speaks NetherNet, not RakNet** (found in M0; details in `docs/recon/m0-pumpkin-bedrock.md`).
 - NetherNet is Mojang's WebRTC transport: HTTP signalling on TCP 19132, then ICE and server-list status sharing UDP 19132, then DTLS-encrypted data channels. LAN discovery runs on UDP 7551.
 - Legacy RakNet clients are rejected.
-- Pumpkin accepts exactly one Bedrock protocol: 1.26.51 / 2193 at fork commit `aac0a82`.
+- Pumpkin accepts exactly one Bedrock protocol: 1.26.51 / 2193 at fork commit `aac0a82`, and 1.26.60 / 2225 since the
+  sync of 2026-11-04 (fork `8acb34b`).
 
 **What the fork changes**
 
@@ -398,8 +399,8 @@ The biggest risk is upstream Pumpkin's Bedrock support being incomplete; the big
 | wgpu RT is experimental | RT path churns between wgpu versions | Keep RT behind the escape hatch and the capability gate |
 | Bedrock protocol changes each game update | External LAN guests on newer clients can't join | Pin the guest client version; follow upstream Pumpkin's protocol bumps |
 | Pumpkin compiles Mojang's vanilla Java datapack into the binary | A distributed Limonite binary would contain Mojang data (worldgen, loot tables, recipes, tags), breaking the "never bundle Mojang assets" rule. `pumpkin-data`'s build script downloads the Java server jar, and generated code `include_str!`s its JSON | Local dev builds only until solved. Decide before any release; one option is to fetch the server jar from Mojang on the user's machine at first run and load the datapack at runtime |
-| The client binary embeds the Bedrock block palette (M4) | 3.9 MB of BDS-mined block names and states, from the fork's `assets/bedrock/block_states.nbt` (CloudburstMC's dump, vendored with Geyser's notice), ship inside the client. It's interoperability data, not assets, but it's Mojang-derived | Dev builds only until decided, together with the datapack row above. `blocks/palette_source.rs` is the one module that knows the source, so a runtime read or a generated table can replace it without touching the renderer |
-| Bedrock auto-updates past Pumpkin's exact protocol | The official client, our control, can't join at all: Pumpkin accepts one exact protocol | Record the client version in each milestone's test; take upstream's protocol bumps at a weekly sync, with the owner, ideally between milestones; avoid updating the test client mid-milestone. **It happened on 2026-10-28,** when the Store took the test client to 1.26.60.5 in the middle of M5 (m5-plan, Deviation 47) |
+| The client binary embeds the Bedrock block palette (M4) | 4.3 MB of BDS-mined block names and states since 1.26.60 (3.9 MB before), from the fork's `assets/bedrock/block_states.nbt` (CloudburstMC's dump, vendored with Geyser's notice), ship inside the client. It's interoperability data, not assets, but it's Mojang-derived | Dev builds only until decided, together with the datapack row above. `blocks/palette_source.rs` is the one module that knows the source, so a runtime read or a generated table can replace it without touching the renderer |
+| Bedrock auto-updates past Pumpkin's exact protocol | The official client, our control, can't join at all: Pumpkin accepts one exact protocol | Record the client version in each milestone's test; take upstream's protocol bumps at a weekly sync, with the owner, ideally between milestones; avoid updating the test client mid-milestone. **It happened on 2026-10-28,** when the Store took the test client to 1.26.60.5 in the middle of M5 (m5-plan, Deviation 47). The fork followed on 2026-11-04, with the owner's go |
 | Pumpkin trusts what a Bedrock client reports (found while planning M5) | Pumpkin takes a Bedrock player's position as sent, with no speed or collision check, and places whatever item the client says it holds. That's harmless for the host, who owns the world. But a LAN guest's client (M7) could fly, pass through walls, or place blocks it doesn't have | M7 decides how to treat guests before LAN opens: accept it on a trusted LAN, add checks through a seam, or upstream checks to Pumpkin. Details: `docs/milestones/m5-plan.md`, Findings 1 and 3 |
 | Asset and licence issues | Can't distribute | Load vanilla assets from the user's install, and block models from their Java jar, never anything derived from them in the repo ("Resource packs"); client is GPL-3.0; never bundle packs |
 | Public servers and Realms | Custom clients can trip anti-cheat or break terms | Out of scope; test only on the embedded server and own LAN |
@@ -413,7 +414,7 @@ The biggest risk is upstream Pumpkin's Bedrock support being incomplete; the big
 - [x] How does the host's identity work when there's no Xbox login on `LocalChannel`? **The host sends an unsigned token: a fixed dev identity now, a per-install one saved with the settings in M5** (M2; recon §6).
 - [ ] What permission level does the host get? Pumpkin's Bedrock `StartGame` hard-codes 2 with a TODO. Decide in M5.
 - [ ] How does the embedded server get Mojang's vanilla datapack without the binary bundling it? (Found in M0; see the Risks table. Must be settled before any release. The client jar holds `data/` too, so the route block models took in m5-plan Step 7c may answer this as well.)
-- [x] Which Bedrock protocol version is upstream Pumpkin targeting right now? **1.26.51, protocol 2193, exact match only** (fork commit `aac0a82`, M0).
+- [x] Which Bedrock protocol version is upstream Pumpkin targeting right now? **1.26.51, protocol 2193, exact match only** (fork commit `aac0a82`, M0). Since 2026-11-04 the fork is on 1.26.60, protocol 2225 (`docs/upstream.md`).
 
 **References**
 
