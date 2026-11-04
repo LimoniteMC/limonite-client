@@ -1374,6 +1374,8 @@ The questions as they were asked:
     - **The capture is 1.26.52's.** Its golden tests still pass, `Animate`'s with the hand added, until Step 12's
       capture of 1.26.60 replaces them. That capture now also checks the client's packets against 1.26.60's.
     - **What it doesn't change:** saved worlds load the same, and every headless check passes.
+    - **The join on the merged fork** (Deviation 7): the official client joined the stock server over NetherNet on
+      2026-11-05. Step 12's capture is what's left of Deviation 4.
 
 ## Results (filled in during execution)
 

@@ -140,8 +140,9 @@ newest first: what came in, what it changed for Limonite, and how the conflicts 
     with `--hotbar` gives 8. The edits check's refused click logs its new line.
   - A survival run's log has the same one warning as before.
 - **The stock server** was rebuilt from the merge (6 min 55 s in release).
-- **Not done yet:** an official-client join over NetherNet on the merged server, which the procedure asks for, since
-  NetherNet and the login changed. It's the owner's, together with Step 12's capture.
+- **The official client joined** the stock server from the merge, over NetherNet, on 2026-11-05: Bedrock 1.26.60.5,
+  found under LAN games through NetherNet's discovery on port 7551. That's the join the procedure asks for, since
+  NetherNet and the login changed.
 
 **Every upstream commit, by area**
 

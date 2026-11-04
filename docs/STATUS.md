@@ -67,8 +67,8 @@ _Last updated: 2026-11-01._
     experience bar, so the HUD sits together, and a wider outline (m5-plan Deviations 49 and 50).
   - **The fork is on Bedrock 1.26.60 (2026-11-04),** protocol 2225, which the official client here speaks (m5-plan,
     Deviation 51).
-  - **Next:** the owner's join from the official client on the stock server, since NetherNet and the login changed. Then
-    Step 12, with its capture of the creative take on 1.26.60.
+  - **The official client joined** the stock server over NetherNet on 2026-11-05, on 1.26.60.5.
+  - **Next:** Step 12, with its capture of the creative take on 1.26.60.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
