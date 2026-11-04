@@ -9,7 +9,7 @@ exclude = ["pumpkin"]
 edition = "2024"
 license = "GPL-3.0"
 # Matches pumpkin/Cargo.toml, so the client never needs a newer compiler than the fork.
-rust-version = "1.96"
+rust-version = "1.97"
 
 [workspace.dependencies]
 # Same versions as pumpkin/Cargo.toml, so the build has one copy of each.

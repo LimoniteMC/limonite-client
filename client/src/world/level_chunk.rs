@@ -182,6 +182,9 @@ pub fn decode(body: &[u8]) -> Result<Chunk, DecodeError> {
     }
     let payload_len = reader.var_u32()? as usize;
     let payload = reader.take(payload_len)?;
+    // Since 1.26.60: whether to redraw the chunk's biomes. A whole chunk brings its
+    // biomes anyway, and Pumpkin always says no, so nothing here depends on it.
+    let _client_biome_update = reader.bool()?;
     if reader.remaining() != 0 {
         return Err(DecodeError::TrailingData {
             len: reader.remaining(),

@@ -878,13 +878,15 @@ fn player_action(runtime_id: u64, action: PlayerActionType, block: IVec3, result
     }
 }
 
-/// An `Animate` packet: the player's arm swings.
+/// An `Animate` packet: the player's arm swings, the main hand's, which is the one
+/// that breaks and places. Bedrock 1.26.60 added the hand at the end.
 fn swing(runtime_id: u64, source: ActorSwingSource) -> SAnimate {
     SAnimate {
         action: AnimateAction::SwingArm,
         target_actor_runtime_id: VarULong(runtime_id),
         data: 0.0,
         swing_source: Some(source.into()),
+        hand: 0,
     }
 }
 
