@@ -66,7 +66,7 @@ _Last updated: 2026-11-01._
   - **The owner's checkpoint (2026-11-02): go, on 2026-11-03.** The crack looks great. The client now draws the
     experience bar, so the HUD sits together, and a wider outline (m5-plan Deviations 49 and 50).
   - **The fork is on Bedrock 1.26.60 (2026-11-04),** protocol 2225, which the official client here speaks (m5-plan,
-    Deviation 51). Not pushed yet.
+    Deviation 51).
   - **Next:** the owner's join from the official client on the stock server, since NetherNet and the login changed. Then
     Step 12, with its capture of the creative take on 1.26.60.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
@@ -98,10 +98,11 @@ _Last updated: 2026-11-01._
   upstream candidate.
 - **Pushed, all public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
   2026-10-24, the README and the wiki on 2026-10-25, the first upstream sync and M5 through Step 10
-  on 2026-11-01, the second sync and Step 11 on 2026-11-02, and Step 11's checkpoint on 2026-11-03):
+  on 2026-11-01, the second sync and Step 11 on 2026-11-02, Step 11's checkpoint on 2026-11-03, and the move to
+  Bedrock 1.26.60 on 2026-11-05):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
-  - the fork's `limonite` branch, at `2c52f24`, with the M1 to M4 fork commits, the upstream syncs
+  - the fork's `limonite` branch, at `8acb34b`, with the M1 to M4 fork commits, the upstream syncs
     and M5's play codecs. It tracks `origin/limonite`. The fork goes first, since `main`'s submodule
     pointer names its commit;
   - the wiki, `https://github.com/LimoniteMC/limonite-client.wiki.git` (`master`), from its
@@ -224,9 +225,10 @@ Windows 11, with Git Bash and PowerShell both used.
 
 **Pumpkin fork: `pumpkin/`**
 - A git submodule of `https://github.com/LimoniteMC/Pumpkin`, branch **`limonite`**, at
-  `2c52f24`: the M1 to M4 commits on upstream `aac0a82`, with upstream `master` `5e9101f`
-  (2026-10-26) merged in (`845450b`), then the NBT reader fix and M5's play codecs, and last upstream
-  `eba538f` merged in (2026-11-02). Its git directory is `.git/modules/pumpkin`.
+  `8acb34b`: the M1 to M4 commits on upstream `aac0a82`, with upstream `master` `5e9101f`
+  (2026-10-26) merged in (`845450b`), then the NBT reader fix and M5's play codecs, upstream
+  `eba538f` merged in (2026-11-02), and last upstream `a83abee`, with Bedrock 1.26.60 (`4caebaf`,
+  2026-11-04). Its git directory is `.git/modules/pumpkin`.
 - `upstream` points at `https://github.com/Pumpkin-MC/Pumpkin.git`, whose default branch is
   `master`. The fork merges it weekly (`docs/upstream.md`).
 - **The fork's whole diff:** `git -C pumpkin diff upstream/master` (after a fetch) shows exactly
