@@ -103,11 +103,11 @@ _Last updated: 2026-11-06._
   upstream candidate.
 - **Pushed, all public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
   2026-10-24, the README and the wiki on 2026-10-25, the first upstream sync and M5 through Step 10
-  on 2026-11-01, the second sync and Step 11 on 2026-11-02, Step 11's checkpoint on 2026-11-03, and the move to
-  Bedrock 1.26.60 on 2026-11-05):
+  on 2026-11-01, the second sync and Step 11 on 2026-11-02, Step 11's checkpoint on 2026-11-03, the move to
+  Bedrock 1.26.60 on 2026-11-05, and Step 12 on 2026-11-06):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
-  - the fork's `limonite` branch, at `8acb34b`, with the M1 to M4 fork commits, the upstream syncs
+  - the fork's `limonite` branch, at `13bda25`, with the M1 to M4 fork commits, the upstream syncs
     and M5's play codecs. It tracks `origin/limonite`. The fork goes first, since `main`'s submodule
     pointer names its commit;
   - the wiki, `https://github.com/LimoniteMC/limonite-client.wiki.git` (`master`), from its
