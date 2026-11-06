@@ -12,12 +12,13 @@
 //! the borrow checker fighting every edit, since a parent would borrow its children
 //! while something else changes one. With ids, there's one owner, the `Tree`.
 //!
-//! Widgets arrive with the first screen that uses them: this step's HUD needs
-//! panels, images and labels.
+//! Widgets arrive with the first screen that uses them: the HUD needed panels, images
+//! and labels, and Step 12's inventory needed them to be clickable, faded, and without a
+//! shadow.
 
 use super::{
     atlas::SpriteId,
-    layout::{Layout, Offset, Rect},
+    layout::{Layout, Offset, Rect, Size},
 };
 use crate::render::icons::Icon;
 
@@ -44,13 +45,16 @@ pub struct Image {
     pub blend: Blend,
     /// How much of it shows, from the left: 1 is all of it, and 0 none.
     pub shown: f32,
+    /// What it's multiplied by: white and opaque leaves it as it is.
+    pub color: [u8; 4],
 }
 
-/// A line of text with a shadow.
+/// A line of text, with a shadow unless it's on a panel.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Label {
     pub text: String,
     pub color: [u8; 4],
+    pub shadow: bool,
 }
 
 /// What a node draws, before its children.
@@ -98,13 +102,13 @@ impl Node {
     #[must_use]
     pub fn image(layout: Layout, sprite: Option<SpriteId>) -> Self {
         let blend = Blend::Alpha;
-        Self::new(layout, Kind::Image(Image { sprite, blend, shown: 1.0 }))
+        Self::new(layout, Kind::Image(Image { sprite, blend, shown: 1.0, color: [255; 4] }))
     }
 
     #[must_use]
     pub fn label(layout: Layout, text: &str) -> Self {
         let text = text.to_string();
-        Self::new(layout, Kind::Label(Label { text, color: [255; 4] }))
+        Self::new(layout, Kind::Label(Label { text, color: [255; 4], shadow: true }))
     }
 
     #[must_use]
@@ -137,9 +141,25 @@ impl Node {
         self
     }
 
-    /// Lets the pointer land on it. Nothing on the HUD needs it, so it comes alive
-    /// with Step 12's inventory.
-    #[cfg(test)]
+    /// Without its shadow, if it's a label: text on a panel has none.
+    #[must_use]
+    pub const fn unshadowed(mut self) -> Self {
+        if let Kind::Label(label) = &mut self.kind {
+            label.shadow = false;
+        }
+        self
+    }
+
+    /// Only this opaque, from 0 to 255, if it's a picture.
+    #[must_use]
+    pub const fn faded(mut self, alpha: u8) -> Self {
+        if let Kind::Image(image) = &mut self.kind {
+            image.color[3] = alpha;
+        }
+        self
+    }
+
+    /// Lets the pointer land on it.
     #[must_use]
     pub const fn clickable(mut self) -> Self {
         self.clickable = true;
@@ -254,6 +274,16 @@ impl Tree {
         let offset = [Offset::Px(x), Offset::Px(y)];
         if node.layout.offset != offset {
             node.layout.offset = offset;
+            self.changed = true;
+        }
+    }
+
+    /// Changes a node's size, in UI units.
+    pub fn set_size(&mut self, id: NodeId, width: f32, height: f32) {
+        let node = self.node_mut(id);
+        let size = [Size::Px(width), Size::Px(height)];
+        if node.layout.size != size {
+            node.layout.size = size;
             self.changed = true;
         }
     }

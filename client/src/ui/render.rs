@@ -82,14 +82,24 @@ impl Drawing {
 
     /// Adds a quad of a picture that stops at `limit`, in UI units: what's right of
     /// there doesn't show, and its texels go with it, so that the rest isn't squeezed.
-    fn quad_up_to(&mut self, atlas: &Atlas, scale: f32, blend: Blend, dest: [f32; 4], source: [u32; 4], limit: f32) {
+    #[expect(clippy::too_many_arguments, reason = "a quad's whole description")]
+    fn quad_up_to(
+        &mut self,
+        atlas: &Atlas,
+        scale: f32,
+        blend: Blend,
+        dest: [f32; 4],
+        source: [u32; 4],
+        limit: f32,
+        color: [u8; 4],
+    ) {
         let [left, top, right, bottom] = dest;
         if limit >= right {
-            self.quad(atlas, scale, blend, dest, source, WHITE);
+            self.quad(atlas, scale, blend, dest, source, color);
         } else if limit > left {
             let [u0, v0, u1, v1] = source.map(|edge| edge as f32);
             let kept = u0 + (u1 - u0) * (limit - left) / (right - left);
-            self.quad_from(atlas, scale, blend, [left, top, limit, bottom], [u0, v0, kept, v1], WHITE);
+            self.quad_from(atlas, scale, blend, [left, top, limit, bottom], [u0, v0, kept, v1], color);
         }
     }
 
@@ -181,12 +191,13 @@ fn add_node(tree: &Tree, id: NodeId, looks: Looks<'_>, drawing: &mut Drawing) {
                 let sprite = looks.atlas.get(sprite);
                 let dest = node.rect.edges();
                 let limit = dest[0] + (dest[2] - dest[0]) * image.shown;
+                let (blend, color) = (image.blend, image.color);
                 if let Some(nine) = &sprite.nine_slice {
                     for piece in nine_pieces(dest, sprite.source, nine) {
-                        drawing.quad_up_to(looks.atlas, looks.scale, image.blend, piece.dest, piece.source, limit);
+                        drawing.quad_up_to(looks.atlas, looks.scale, blend, piece.dest, piece.source, limit, color);
                     }
                 } else {
-                    drawing.quad_up_to(looks.atlas, looks.scale, image.blend, dest, sprite.source, limit);
+                    drawing.quad_up_to(looks.atlas, looks.scale, blend, dest, sprite.source, limit, color);
                 }
             }
         }
@@ -202,9 +213,11 @@ fn add_node(tree: &Tree, id: NodeId, looks: Looks<'_>, drawing: &mut Drawing) {
         }
         Kind::Label(label) => {
             // Its shadow is a quarter as bright.
-            let [r, g, b, a] = label.color;
-            let shadow = [r / 4, g / 4, b / 4, a];
-            add_text(&label.text, [node.rect.x + SHADOW, node.rect.y + SHADOW], shadow, looks, drawing);
+            if label.shadow {
+                let [r, g, b, a] = label.color;
+                let shadow = [r / 4, g / 4, b / 4, a];
+                add_text(&label.text, [node.rect.x + SHADOW, node.rect.y + SHADOW], shadow, looks, drawing);
+            }
             add_text(&label.text, [node.rect.x, node.rect.y], label.color, looks, drawing);
         }
     }

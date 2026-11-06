@@ -16,15 +16,22 @@ use glam::{DVec3, IVec3};
 use pumpkin_core::net::bedrock::level_chunk::CLevelChunk;
 use pumpkin_protocol::{
     RawPacket,
-    bedrock::client::{
-        CCorrectPlayerMovePrediction, CMovePlayer, CSetActorMotion, CSetHealth, CSetPlayerGameType,
-        CSetTime, CStartGame, CUpdateAbilities, CUpdateAttributes, GameType,
-        inventory_content::CInventoryContent,
-        inventory_slot::CInventorySlot,
-        network_chunk_publisher_update::CNetworkChunkPublisherUpdate,
-        player_hotbar::CPlayerHotbar,
-        set_actor_data::{CSetActorData, MetadataValue, entity_data_key},
-        update_block::CUpdateBlock,
+    bedrock::{
+        client::{
+            CCorrectPlayerMovePrediction, CMovePlayer, CSetActorMotion, CSetHealth, CSetPlayerGameType,
+            CSetTime, CStartGame, CUpdateAbilities, CUpdateAttributes, GameType,
+            container_open::CContainerOpen,
+            creative_content::CCreativeContent,
+            inventory_content::CInventoryContent,
+            inventory_slot::CInventorySlot,
+            item_stack_response::CItemStackResponse,
+            network_chunk_publisher_update::CNetworkChunkPublisherUpdate,
+            player_hotbar::CPlayerHotbar,
+            set_actor_data::{CSetActorData, MetadataValue, entity_data_key},
+            update_block::CUpdateBlock,
+        },
+        client_codecs::CreativeContent,
+        server::container_close::SContainerClose,
     },
     packet::Packet,
     serial::PacketRead,
@@ -35,7 +42,7 @@ use tracing::{info, warn};
 use crate::{
     clock::TimeOfDay,
     edit::predict::Predictions,
-    inventory::{CONTAINER_MAIN, Inventory},
+    inventory::{CONTAINER_MAIN, Inventory, creative::CreativeList},
     packets::PacketName,
     player::{self, Abilities, Motion, Player, Pose, terrain::WorldTerrain},
     world::{AIR, Applied, ApplyError, World},
@@ -78,6 +85,8 @@ pub struct Game {
     /// From `StartGame` on.
     player: Option<Player>,
     inventory: Inventory,
+    /// The creative list, from the join's `CreativeContent`.
+    creative: CreativeList,
     /// What the world shows that the server hasn't agreed to yet.
     predictions: Predictions,
     time: TimeOfDay,
@@ -93,6 +102,7 @@ impl Default for Game {
             world: World::new(),
             player: None,
             inventory: Inventory::default(),
+            creative: CreativeList::default(),
             predictions: Predictions::default(),
             time: TimeOfDay::default(),
             ticks: 0,
@@ -129,6 +139,10 @@ impl Game {
 
     pub const fn inventory_mut(&mut self) -> &mut Inventory {
         &mut self.inventory
+    }
+
+    pub const fn creative(&self) -> &CreativeList {
+        &self.creative
     }
 
     /// Ticks stepped since `StartGame`.
@@ -270,18 +284,40 @@ impl Game {
             }
             CInventoryContent::PACKET_ID => {
                 let content: CInventoryContent = read(packet)?;
-                if content.container_id.0 != CONTAINER_MAIN {
-                    return Ok(Effect::Ignored);
-                }
-                self.inventory.set_main(content.slots);
-                Ok(Effect::Inventory)
+                let ours = self.inventory.set_content(content.container_id.0, &content.full_container_name, content.slots);
+                Ok(if ours { Effect::Inventory } else { Effect::Ignored })
             }
             CInventorySlot::PACKET_ID => {
                 let slot: CInventorySlot = read(packet)?;
-                if slot.container_id.0 != CONTAINER_MAIN {
+                let ours = self.inventory.set_container_slot(slot.container_id.0, slot.slot.0 as usize, slot.item);
+                Ok(if ours { Effect::Inventory } else { Effect::Ignored })
+            }
+            CCreativeContent::PACKET_ID => {
+                let content: CreativeContent = read(packet)?;
+                self.creative = CreativeList::new(&content);
+                Ok(Effect::Inventory)
+            }
+            CItemStackResponse::PACKET_ID => {
+                let response: CItemStackResponse = read(packet)?;
+                self.inventory.answer(&response);
+                Ok(Effect::Inventory)
+            }
+            // The player's own inventory is container 0. The others are containers', which
+            // wait for milestone 5b.
+            CContainerOpen::PACKET_ID => {
+                let open: CContainerOpen = read(packet)?;
+                if u32::from(open.container_id) != CONTAINER_MAIN {
                     return Ok(Effect::Ignored);
                 }
-                self.inventory.set_slot(slot.slot.0 as usize, slot.item);
+                self.inventory.set_open(true);
+                Ok(Effect::Inventory)
+            }
+            SContainerClose::PACKET_ID => {
+                let close: SContainerClose = read(packet)?;
+                if u32::from(close.container_id) != CONTAINER_MAIN {
+                    return Ok(Effect::Ignored);
+                }
+                self.inventory.set_open(false);
                 Ok(Effect::Inventory)
             }
             CPlayerHotbar::PACKET_ID => {

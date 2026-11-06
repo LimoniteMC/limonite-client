@@ -16,7 +16,10 @@
 //! Anything else draws the missing texture, and the census at startup lists it, so a new
 //! version's renames get noticed.
 
-use std::collections::{BTreeMap, HashMap};
+use std::{
+    collections::{BTreeMap, HashMap},
+    sync::OnceLock,
+};
 
 use image::RgbaImage;
 use limonite_packs::{PackStack, json};
@@ -58,6 +61,14 @@ pub fn block_of(id: i16, aux: u32) -> Option<u32> {
 pub fn placed_block(id: i16, aux: u32) -> Option<&'static Block> {
     let mapping = JavaToBedrockItemMapping::from_bedrock(id, aux)?;
     Block::from_item_id(mapping.java_item.id)
+}
+
+/// The item's name with its namespace, as the game knows it, such as `minecraft:stone`.
+#[must_use]
+pub fn registry_key(id: i16) -> Option<&'static str> {
+    static KEYS: OnceLock<HashMap<i16, &'static str>> = OnceLock::new();
+    let keys = KEYS.get_or_init(|| BedrockItem::ALL_BEDROCK_ITEMS.iter().map(|item| (item.id, item.registry_key)).collect());
+    keys.get(&id).copied()
 }
 
 /// The Java stack for the item with Bedrock id `id`: what knows how fast it digs. An

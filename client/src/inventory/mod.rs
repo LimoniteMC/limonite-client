@@ -1,35 +1,55 @@
-//! What the player carries, as the server says (m5-plan Decision 10).
+//! What the player carries, as the server says (m5-plan Decision 10 and Step 12).
 //!
 //! **A mirror.** The server owns the inventory, and tells the client with
 //! `InventoryContent` and `InventorySlot`, and which slot is selected with
 //! `PlayerHotbar`. The client keeps a copy, the stacks exactly as they came, because it
-//! has to hand them back: `MobEquipment` and a drop both name the item they're about.
+//! has to hand them back: `MobEquipment`, a drop and every item stack request name the
+//! stacks they're about.
 //!
-//! The first nine of the player's 36 slots are the hotbar. Pumpkin doesn't send a Bedrock
-//! player's armour or off hand, so those wait for Step 12's own moves.
+//! The first nine of the player's 36 slots are the hotbar. Since the fork's move to
+//! 1.26.60, Pumpkin sends the armour and the off hand as well, in containers of their own
+//! (`slots.rs`).
+//!
+//! **Two copies.** What the server last said, and what the player sees: the server's,
+//! with the inventory screen's requests that are still waiting on an answer applied on
+//! top (`requests.rs`). The hotbar's own changes, Q and placing, go by transactions the
+//! server answers with the slot itself, so they change the server's copy straight away,
+//! as they always did.
 
+pub mod creative;
 pub mod items;
+pub mod requests;
+pub mod slots;
 
 use glam::IVec3;
 use pumpkin_protocol::{
     bedrock::{
-        network_item::{NetworkItemDescriptor, NetworkItemStackDescriptor},
-        server::inventory_transaction::{
-            HandSlot, InventoryAction, LegacySetItemSlot, NormalTransactionData, SInventoryTransaction,
-            TransactionData, UseItemTransactionData, WINDOW_ID_INVENTORY,
+        client::item_stack_response::CItemStackResponse,
+        network_item::{ContainerName, FullContainerName, NetworkItemDescriptor, NetworkItemStackDescriptor},
+        server::{
+            inventory_transaction::{
+                HandSlot, InventoryAction, LegacySetItemSlot, NormalTransactionData, SInventoryTransaction,
+                TransactionData, UseItemTransactionData, WINDOW_ID_INVENTORY,
+            },
+            item_stack_request::SItemStackRequest,
         },
     },
     codec::{var_int::VarInt, var_uint::VarUInt},
     serial::{PacketRead, PacketWrite},
 };
 use pumpkin_util::math::{position::BlockPos, vector3::Vector3};
+use tracing::info;
+
+pub use self::slots::CONTAINER_MAIN;
+use self::{
+    requests::{Change, Requests},
+    slots::{ARMOUR, CONTAINER_ARMOUR, CONTAINER_CURSOR, CONTAINER_OFFHAND, Slots, Stack},
+};
 
 /// The slots of the player's inventory.
 pub const MAIN: usize = 36;
 /// The first of them, which the hotbar shows.
 pub const HOTBAR: usize = 9;
-/// The container the player's inventory goes by.
-pub const CONTAINER_MAIN: u32 = 0;
 /// The container a transaction's prediction names for a slot of the player's inventory.
 const CONTAINER_PREDICTED: u8 = 29;
 /// A transaction's source that's a container.
@@ -66,7 +86,7 @@ pub struct Item {
 }
 
 /// A slot's stack as an [`Item`], unless it's empty.
-fn item_of(stack: &NetworkItemStackDescriptor) -> Option<Item> {
+pub(crate) fn item_of(stack: &NetworkItemStackDescriptor) -> Option<Item> {
     (stack.id != 0 && stack.stack_size > 0).then_some(Item {
         id: stack.id,
         aux: stack.aux_value.0,
@@ -74,37 +94,150 @@ fn item_of(stack: &NetworkItemStackDescriptor) -> Option<Item> {
     })
 }
 
+/// An item as a slot holds it. The two forms are the same on the wire, except that a
+/// slot's keeps the item's NBT as bytes.
+pub(crate) fn stack_of(item: &NetworkItemDescriptor) -> Option<Stack> {
+    let mut bytes = Vec::new();
+    item.write(&mut bytes).ok()?;
+    Stack::read(&mut bytes.as_slice()).ok()
+}
+
 /// The player's inventory.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct Inventory {
-    main: Vec<NetworkItemStackDescriptor>,
+    /// What the server last said.
+    server: Slots,
+    /// What the player sees: the server's, with the requests still waiting on top.
+    shown: Slots,
+    requests: Requests,
     selected: u8,
     /// The id of the last transaction that predicted a change: they fall by 2.
     last_transaction: i32,
-}
-
-impl Default for Inventory {
-    fn default() -> Self {
-        Self {
-            main: vec![NetworkItemStackDescriptor::default(); MAIN],
-            selected: 0,
-            last_transaction: 0,
-        }
-    }
+    /// Whether the server has opened the inventory screen.
+    open: bool,
+    /// Requests sent, and how many of them the server refused.
+    sent: usize,
+    refused: usize,
 }
 
 impl Inventory {
-    /// Takes the whole of it. A short list leaves the rest empty.
+    /// Takes the whole of the 36. A short list leaves the rest empty.
     pub fn set_main(&mut self, slots: Vec<NetworkItemStackDescriptor>) {
-        self.main = slots;
-        self.main.resize(MAIN, NetworkItemStackDescriptor::default());
+        self.server.main = slots;
+        self.server.main.resize(MAIN, Stack::default());
+        self.refresh();
     }
 
-    /// Takes one slot. A slot past the end is ignored.
+    /// Takes one of the 36. A slot past the end is ignored.
     pub fn set_slot(&mut self, slot: usize, stack: NetworkItemStackDescriptor) {
-        if let Some(place) = self.main.get_mut(slot) {
+        if let Some(place) = self.server.main.get_mut(slot) {
             *place = stack;
+            self.refresh();
         }
+    }
+
+    /// Takes a container's contents. Says whether it's one of the player's.
+    pub fn set_content(&mut self, container: u32, name: &FullContainerName, slots: Vec<Stack>) -> bool {
+        let mut slots = slots.into_iter();
+        match container {
+            CONTAINER_MAIN => {
+                self.set_main(slots.collect());
+                return true;
+            }
+            CONTAINER_ARMOUR => {
+                for place in &mut self.server.armour {
+                    *place = slots.next().unwrap_or_default();
+                }
+            }
+            CONTAINER_OFFHAND => self.server.offhand = slots.next().unwrap_or_default(),
+            _ if container == CONTAINER_CURSOR || name.container_name == ContainerName::Cursor => {
+                self.server.cursor = slots.next().unwrap_or_default();
+            }
+            _ => return false,
+        }
+        self.refresh();
+        true
+    }
+
+    /// Takes one slot of a container. Says whether it's one of the player's.
+    pub fn set_container_slot(&mut self, container: u32, slot: usize, stack: Stack) -> bool {
+        match container {
+            CONTAINER_MAIN => {
+                self.set_slot(slot, stack);
+                return true;
+            }
+            CONTAINER_ARMOUR if slot < ARMOUR => self.server.armour[slot] = stack,
+            CONTAINER_OFFHAND if slot == 0 => self.server.offhand = stack,
+            _ => return false,
+        }
+        self.refresh();
+        true
+    }
+
+    /// Works out what's shown again, after a change to the server's copy or the requests.
+    fn refresh(&mut self) {
+        self.shown = self.requests.shown(&self.server);
+    }
+
+    /// Everything the player sees.
+    #[must_use]
+    pub const fn slots(&self) -> &Slots {
+        &self.shown
+    }
+
+    /// Whether the inventory screen is open.
+    #[must_use]
+    pub const fn is_open(&self) -> bool {
+        self.open
+    }
+
+    /// The server opened the inventory screen, or the screen closed.
+    pub const fn set_open(&mut self, open: bool) {
+        self.open = open;
+    }
+
+    /// Sends `moves` as one item stack request, and shows them at once. Nothing to move
+    /// sends nothing.
+    pub fn request(&mut self, moves: Vec<Change>) -> Option<SItemStackRequest> {
+        if moves.is_empty() {
+            return None;
+        }
+        let packet = self.requests.send(moves, &self.shown);
+        self.sent += 1;
+        self.refresh();
+        Some(packet)
+    }
+
+    /// Takes the server's answers to requests. Says how many it refused.
+    pub fn answer(&mut self, response: &CItemStackResponse) -> usize {
+        let mut refused = 0;
+        for info in &response.responses {
+            if self.requests.answer(info, &mut self.server) == Some(false) {
+                info!("The server refused item stack request {}, so it's undone", info.client_request_id.0);
+                refused += 1;
+            }
+        }
+        self.refused += refused;
+        self.refresh();
+        refused
+    }
+
+    /// How many requests are waiting on an answer.
+    #[must_use]
+    pub fn waiting(&self) -> usize {
+        self.requests.waiting()
+    }
+
+    /// How many requests have been sent.
+    #[must_use]
+    pub const fn sent(&self) -> usize {
+        self.sent
+    }
+
+    /// How many requests the server has refused.
+    #[must_use]
+    pub const fn refused(&self) -> usize {
+        self.refused
     }
 
     /// The selected hotbar slot, 0 to 8.
@@ -137,26 +270,27 @@ impl Inventory {
     /// The stack in the selected slot.
     #[must_use]
     pub fn held(&self) -> &NetworkItemStackDescriptor {
-        &self.main[usize::from(self.selected)]
+        &self.shown.main[usize::from(self.selected)]
     }
 
     /// What the hotbar shows.
     #[must_use]
     pub fn hotbar(&self) -> [Option<Item>; HOTBAR] {
-        std::array::from_fn(|slot| item_of(&self.main[slot]))
+        std::array::from_fn(|slot| item_of(&self.shown.main[slot]))
     }
 
     /// Takes one of the held item out of the hand, and returns the transaction that
     /// tells the server it was dropped. `None` if the hand is empty.
     pub fn drop_one(&mut self) -> Option<SInventoryTransaction> {
         let slot = usize::from(self.selected);
-        item_of(&self.main[slot])?;
-        let old = action_item(&self.main[slot])?;
-        let stack = &mut self.main[slot];
+        item_of(&self.server.main[slot])?;
+        let old = action_item(&self.server.main[slot])?;
+        let stack = &mut self.server.main[slot];
         stack.stack_size -= 1;
         if stack.stack_size == 0 {
             *stack = NetworkItemStackDescriptor::default();
         }
+        self.refresh();
         self.last_transaction -= 2;
         Some(drop_transaction(self.last_transaction, slot as u32, old))
     }
@@ -165,11 +299,11 @@ impl Inventory {
     /// transaction says so. `predicted` says the client expects it to place something.
     pub fn click_block(&mut self, click: &Click, predicted: bool, takes_one: bool) -> SInventoryTransaction {
         let slot = usize::from(self.selected);
-        let held = action_item(&self.main[slot]).unwrap_or_default();
-        let change = (takes_one && item_of(&self.main[slot]).is_some()).then(|| {
+        let held = action_item(&self.server.main[slot]).unwrap_or_default();
+        let change = (takes_one && item_of(&self.server.main[slot]).is_some()).then(|| {
             // Each click takes two ids in the capture, whichever transaction the second is for.
             self.last_transaction -= 4;
-            let stack = &mut self.main[slot];
+            let stack = &mut self.server.main[slot];
             stack.stack_size -= 1;
             if stack.stack_size == 0 {
                 *stack = NetworkItemStackDescriptor::default();
@@ -181,6 +315,7 @@ impl Inventory {
                 (self.last_transaction, left)
             }
         });
+        self.refresh();
         click_transaction(slot as u32, held, change, click, predicted)
     }
 
@@ -189,7 +324,7 @@ impl Inventory {
     #[must_use]
     pub fn click_air(&self, eyes: Vector3<f32>) -> SInventoryTransaction {
         let slot = usize::from(self.selected);
-        click_air_transaction(slot as u32, action_item(&self.main[slot]).unwrap_or_default(), eyes)
+        click_air_transaction(slot as u32, action_item(&self.shown.main[slot]).unwrap_or_default(), eyes)
     }
 }
 
@@ -359,7 +494,7 @@ mod tests {
         assert_eq!(hotbar[0].map(|item| item.id), Some(5));
         assert_eq!(hotbar[5], None);
         inventory.set_slot(40, stack(9, 1));
-        assert_eq!(inventory.main.len(), MAIN, "a slot past the end is ignored");
+        assert_eq!(inventory.server.main.len(), MAIN, "a slot past the end is ignored");
     }
 
     #[test]

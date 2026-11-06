@@ -24,6 +24,12 @@ impl Pointer {
         self.at = Some(at);
     }
 
+    /// Where the pointer is, in UI units, once it has been over the window.
+    #[must_use]
+    pub const fn at(&self) -> Option<[f32; 2]> {
+        self.at
+    }
+
     /// The button went down. Says whether it landed on something: if not, the click
     /// isn't the UI's, and the game can have it.
     pub fn press(&mut self, tree: &Tree) -> bool {

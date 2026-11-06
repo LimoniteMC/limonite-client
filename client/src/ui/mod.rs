@@ -7,7 +7,7 @@
 //! - [`tree`] and [`layout`] are the widgets and where they go. They know nothing of
 //!   the GPU, so they're tested without one.
 //! - [`render`] turns the tree into quads and draws them. [`input`] is the pointer.
-//! - [`screens`] are what's built from all that. The HUD is the first.
+//! - [`screens`] are what's built from all that: the HUD, and the inventory.
 //!
 //! **The UI reads the game; it never reads packets** (PLAN.md, UI). [`Ui::update`]
 //! is handed the [`Game`], and that's its only way in.
@@ -35,7 +35,10 @@ use self::{
     input::Pointer,
     lang::Lang,
     render::{Drawing, Looks},
-    screens::hud::{self, Hud, HudState},
+    screens::{
+        hud::{self, Hud, HudState},
+        inventory::{self, InventoryScreen, Pressed, View},
+    },
     tree::Tree,
 };
 use crate::{
@@ -94,7 +97,7 @@ fn load_with(stack: &PackStack, table: &AppearanceTable, tints: &Tints, extra: &
         Ok(input) => inputs.push(input),
         Err(reason) => missing.push(format!("{path} ({reason})")),
     };
-    for path in hud::SPRITES.iter().chain(extra) {
+    for path in hud::SPRITES.iter().chain(&inventory::SPRITES).chain(extra) {
         take(path, atlas::read_sprite(stack, path));
     }
     for part in hud::PARTS {
@@ -157,6 +160,7 @@ pub fn scale_for(setting: UiScale, width: u32, height: u32) -> u32 {
 pub struct Ui {
     tree: Tree,
     hud: Hud,
+    inventory: InventoryScreen,
     atlas: Atlas,
     font: Font,
     lang: Lang,
@@ -175,9 +179,12 @@ impl Ui {
     pub fn new(atlas: Atlas, font: Font, lang: Lang, icons: ItemIcons, setting: UiScale) -> Self {
         let mut tree = Tree::new();
         let hud = Hud::build(&mut tree, &atlas);
+        // After the HUD, so it draws over it.
+        let inventory = InventoryScreen::build(&mut tree, &atlas);
         Self {
             tree,
             hud,
+            inventory,
             atlas,
             font,
             lang,
@@ -200,9 +207,13 @@ impl Ui {
         self.tree.invalidate();
     }
 
-    /// Brings the screens up to date with the game.
+    /// Brings the screens up to date with the game. The HUD hides while the inventory is
+    /// open, which has a hotbar of its own.
     pub fn update(&mut self, game: &Game) {
-        self.hud.update(&mut self.tree, &self.icons, &self.lang, HudState::of(game).as_ref());
+        let view = View::of(game);
+        let hud = HudState::of(game).filter(|_| view.is_none());
+        self.hud.update(&mut self.tree, &self.icons, &self.lang, hud.as_ref());
+        self.inventory.update(&mut self.tree, &self.icons, &self.lang, view.as_ref());
     }
 
     /// Shows a line above the hotbar, or nothing.
@@ -235,7 +246,19 @@ impl Ui {
     /// The pointer moved, to here in window pixels.
     pub fn pointer_moved(&mut self, x: f64, y: f64) {
         let scale = f64::from(self.scale);
-        self.pointer.moved([(x / scale) as f32, (y / scale) as f32]);
+        let at = [(x / scale) as f32, (y / scale) as f32];
+        self.pointer.moved(at);
+        self.inventory.pointer_moved(&mut self.tree, at);
+    }
+
+    /// A button went down while the inventory is open: what it pressed on.
+    pub fn inventory_pressed(&mut self) -> Pressed {
+        self.pointer.at().map_or(Pressed::Nothing, |at| self.inventory.press(&self.tree, at))
+    }
+
+    /// The wheel turned while the inventory is open, by `notches`, + away from the player.
+    pub fn scroll(&mut self, notches: f64) {
+        self.inventory.scroll(notches);
     }
 
     /// The pointer's button went down. Says whether the UI took it: if not, the game

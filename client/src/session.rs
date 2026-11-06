@@ -24,12 +24,16 @@ use pumpkin_protocol::{
         server::{
             animate::{ActorSwingSource, AnimateAction, SAnimate},
             block_pick_request::SBlockPickRequest,
+            container_close::SContainerClose,
+            cursor_item_drag::{CURSOR_ITEM_DRAG_START, CURSOR_ITEM_DRAG_STOP, SCursorItemDrag},
+            interact::{Action as InteractAction, SInteract},
             mob_equipment::SMobEquipment,
             player_action::{PlayerActionType, SPlayerAction},
             player_auth_input::{InputData, PlayerBlockAction, SPlayerAuthInput},
             request_chunk_radius::SRequestChunkRadius,
             resource_pack_client_response::SResourcePackClientResponse,
             set_local_player_as_initialized::SSetLocalPlayerAsInitialized,
+            set_player_inventory_options::SSetPlayerInventoryOptions,
         },
     },
     codec::{var_int::VarInt, var_uint::VarUInt, var_ulong::VarULong},
@@ -45,7 +49,13 @@ use tracing::{debug, info, warn};
 
 use crate::{
     edit::{self, Aimed, Command, Editor, UseTick, View, aim::Hit},
-    inventory::{CONTAINER_MAIN, Click, HOTBAR, items},
+    inventory::{
+        CONTAINER_MAIN, Click, HOTBAR,
+        creative::Tab,
+        items,
+        requests::{self, Button},
+        slots::{SlotRef, is_empty},
+    },
     clock::TICK,
     game::{Effect, Game},
     login,
@@ -70,6 +80,13 @@ pub const FLY_STEP: f32 = 0.55;
 /// The yaw that faces +X (east). Yaw 0 faces +Z, and yaw grows clockwise
 /// seen from above.
 const YAW_EAST: f32 = -90.0;
+/// The container type the official client names when it closes the inventory.
+const CLOSE_INVENTORY_TYPE: u8 = 0xf7;
+/// What the official client says about its creative screen when it changes tab, besides
+/// the tab: the crafting tab beside it, no filter, and the creative layout.
+const RIGHT_TAB_CRAFTING: i32 = 2;
+const LAYOUT_CREATIVE: i32 = 3;
+const LAYOUT_NONE: i32 = 0;
 
 /// How far the session has got. Each stage names what it's waiting for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -166,6 +183,9 @@ pub struct Session {
     stats: Stats,
     /// The decoded `StartGame`, kept as an encode-speed yardstick.
     start_game: Option<CStartGame>,
+    /// Whether a click put the cursor's stack down and the button is still held: the
+    /// official client calls that a drag.
+    dragging: bool,
 }
 
 impl Session {
@@ -200,6 +220,7 @@ impl Session {
             ids_hashed: None,
             stats: Stats::default(),
             start_game: None,
+            dragging: false,
         };
         // No `RequestNetworkSettings` first: compression then never turns on,
         // and every batch stays plain bytes (recon §5).
@@ -838,6 +859,92 @@ impl Session {
         if let Some(transaction) = self.game.inventory_mut().drop_one() {
             self.send(&transaction);
         }
+    }
+
+    /// Asks the server to open the inventory screen, as E does on the official client.
+    /// The screen shows once the server says it's open, with `ContainerOpen`.
+    pub fn open_inventory(&self) {
+        let Some(player) = self.game.player() else {
+            return;
+        };
+        if self.game.inventory().is_open() {
+            return;
+        }
+        self.send(&SInteract {
+            action: InteractAction::OpenInventory,
+            target_runtime_id: VarULong(player.runtime_id),
+            position: None,
+        });
+    }
+
+    /// Closes the inventory screen, and tells the server, which puts what's on the
+    /// cursor back and sends the inventory again.
+    pub fn close_inventory(&mut self) {
+        if !self.game.inventory().is_open() {
+            return;
+        }
+        self.game.inventory_mut().set_open(false);
+        self.pointer_released();
+        self.send(&SContainerClose {
+            container_id: CONTAINER_MAIN as u8,
+            container_type: CLOSE_INVENTORY_TYPE,
+            server_initiated_close: false,
+        });
+    }
+
+    /// A click on a slot of the inventory screen. A shift-click moves the stack across,
+    /// or in creative, where only the hotbar shows, throws it away.
+    pub fn click_slot(&mut self, slot: SlotRef, button: Button, shift: bool) {
+        let creative = self.game.player().is_some_and(|player| player.gamemode == GameMode::Creative);
+        let slots = self.game.inventory().slots();
+        let moves = match (shift, creative) {
+            (true, true) => requests::creative_quick_move(slots, slot),
+            (true, false) => requests::quick_move(slots, slot),
+            (false, _) => requests::click(slots, slot, button),
+        };
+        // Putting the cursor's stack down starts what the official client calls a drag,
+        // which ends when the button comes up.
+        let drags = !shift && !moves.is_empty() && !is_empty(&slots.cursor);
+        let Some(request) = self.game.inventory_mut().request(moves) else {
+            return;
+        };
+        if drags {
+            self.send(&SCursorItemDrag {
+                state: CURSOR_ITEM_DRAG_START,
+            });
+            self.dragging = true;
+        }
+        self.send(&request);
+    }
+
+    /// A click on the creative list, on `entry` or between them: a stack of the item
+    /// comes to the cursor, or what's on the cursor is thrown away.
+    pub fn click_creative(&mut self, entry: Option<usize>) {
+        let item = entry.and_then(|entry| self.game.creative().take(entry));
+        let moves = requests::creative(self.game.inventory().slots(), item);
+        if let Some(request) = self.game.inventory_mut().request(moves) {
+            self.send(&request);
+        }
+    }
+
+    /// The pointer's button came up, which ends a drag.
+    pub fn pointer_released(&mut self) {
+        if std::mem::take(&mut self.dragging) {
+            self.send(&SCursorItemDrag {
+                state: CURSOR_ITEM_DRAG_STOP,
+            });
+        }
+    }
+
+    /// The creative screen changed tab, which the official client tells the server.
+    pub fn creative_tab(&self, tab: Tab) {
+        self.send(&SSetPlayerInventoryOptions {
+            left_inventory_tab: VarInt(tab.options_index()),
+            right_inventory_tab: VarInt(RIGHT_TAB_CRAFTING),
+            filtering: false,
+            layout_inv: VarInt(LAYOUT_CREATIVE),
+            layout_craft: VarInt(LAYOUT_NONE),
+        });
     }
 
     fn send<P: BClientPacket>(&self, packet: &P) {

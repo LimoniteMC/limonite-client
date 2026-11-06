@@ -1,13 +1,15 @@
-//! The HUD on a sheet (m5-plan Step 8): drawn through the real atlas, tree and shader,
-//! with no window, over made-up stripes, into PNGs.
+//! The HUD and the inventory on sheets (m5-plan Steps 8 and 12): drawn through the real
+//! atlas, tree and shader, with no window, over made-up stripes, into PNGs.
 //!
 //! The owner's window can't be seen from here, so this is how the HUD gets looked at
 //! while it's being made.
 //!
 //! ```text
 //! LIMONITE_BEDROCK="C:/XboxGames/Minecraft for Windows/Content" \
-//!     cargo test -p limonite-client --bin limonite-client hud_sheets -- --ignored --nocapture
+//!     cargo test -p limonite-client --bin limonite-client _sheets -- --ignored --nocapture
 //! ```
+//!
+//! `hud_sheets` draws the HUD, and `inventory_sheets` the inventory screen.
 //!
 //! **The sheets go in `run/sheets`, which is gitignored:** they show Mojang's sprites,
 //! so they're never committed.
@@ -270,4 +272,167 @@ fn hud_sheets() {
 
     zoomed(&pictures).save(out.join("hud-zoom.png")).unwrap();
     println!("Wrote the HUD's sheets to {}", out.display());
+}
+
+/// The creative list Pumpkin sends, built the way it builds it.
+fn pumpkins_creative_list() -> crate::inventory::creative::CreativeList {
+    use pumpkin_data::bedrock_creative::{CREATIVE_ENTRIES, CREATIVE_GROUPS};
+    use pumpkin_protocol::{
+        bedrock::{
+            client::creative_content::{CreativeCategory, CreativeGroupInfoPayload, CreativeItemEntryPayload},
+            client_codecs::CreativeContent,
+            network_item::NetworkItemDescriptor,
+        },
+        codec::{var_int::VarInt, var_uint::VarUInt},
+    };
+    let item = |id: i16, aux: u32| NetworkItemDescriptor {
+        id: VarInt(i32::from(id)),
+        stack_size: 1,
+        aux_value: VarUInt(aux),
+        ..NetworkItemDescriptor::default()
+    };
+    let groups = CREATIVE_GROUPS
+        .iter()
+        .map(|group| CreativeGroupInfoPayload {
+            creative_category: match group.category {
+                1 => CreativeCategory::Construction,
+                2 => CreativeCategory::Nature,
+                3 => CreativeCategory::Equipment,
+                4 => CreativeCategory::Items,
+                _ => CreativeCategory::ItemCommandOnly,
+            },
+            name: group.name.to_string(),
+            group_icon_item: if group.icon_item_id == 0 {
+                NetworkItemDescriptor::default()
+            } else {
+                item(group.icon_item_id, group.icon_item_aux_value)
+            },
+        })
+        .collect();
+    let entries = CREATIVE_ENTRIES
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| CreativeItemEntryPayload {
+            id: VarUInt(index as u32 + 1),
+            item: item(entry.item_id, entry.item_aux_value),
+            group_index: VarUInt(entry.group_index),
+        })
+        .collect();
+    crate::inventory::creative::CreativeList::new(&CreativeContent { groups, entries })
+}
+
+/// A stack of the item called `name`.
+fn stack_of(name: &str, count: u16) -> crate::inventory::slots::Stack {
+    let wanted = format!("minecraft:{name}");
+    let items = pumpkin_data::item::BedrockItem::ALL_BEDROCK_ITEMS;
+    let item = items.iter().find(|item| item.registry_key == wanted).expect("a Bedrock item");
+    crate::inventory::slots::Stack {
+        id: item.id,
+        stack_size: count,
+        ..crate::inventory::slots::Stack::default()
+    }
+}
+
+#[test]
+#[ignore = "needs a GPU and a Bedrock install; set LIMONITE_BEDROCK"]
+fn inventory_sheets() {
+    use crate::{
+        inventory::slots::Slots,
+        ui::screens::inventory::{Pressed, SPRITES, View},
+    };
+
+    let _ = tracing_subscriber::fmt().try_init();
+    let dir = std::env::var_os("LIMONITE_BEDROCK").expect("LIMONITE_BEDROCK is set");
+    let install = install::find(Some(std::path::Path::new(&dir))).unwrap();
+    let vanilla = install::load_vanilla(&install).unwrap();
+    let palette = blocks::load_palette().unwrap();
+    let mut jar = blocks::find_jar(None).unwrap();
+    let looks = blocks::build_appearance(&palette, &vanilla, jar.as_mut());
+    let tints = render::load_tints(&vanilla.stack);
+    let assets = load_with(&vanilla.stack, &looks.table, &tints, &[]);
+    let missing: Vec<&str> = SPRITES.iter().copied().filter(|path| assets.atlas.sprite(path).is_none()).collect();
+    assert!(missing.is_empty(), "the install lacks {missing:?}");
+    let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../run/sheets");
+    std::fs::create_dir_all(&out).unwrap();
+
+    let needs = Needs {
+        texture_layers: looks.textures.layers,
+        uncapped: false,
+    };
+    let gpu = Gpu::offscreen(WIDTH, HEIGHT, &needs).expect("a GPU");
+    let terrain = Terrain::new(&gpu, &looks.textures);
+    let mut renderer = UiRenderer::new(&gpu, &assets.picture, &terrain.texture_view);
+    let format = gpu.ui_format;
+    let sheet = Sheet::new(gpu);
+    let mut ui = Ui::new(assets.atlas, assets.font, assets.lang, assets.icons, UiScale::Auto);
+    ui.resize(WIDTH, HEIGHT);
+    let scale = f64::from(ui.scale);
+    let [width, height] = ui.screen();
+
+    let list = pumpkins_creative_list();
+    let mut slots = Slots::default();
+    for (slot, (name, count)) in [
+        ("dirt", 64),
+        ("oak_log", 12),
+        ("torch", 64),
+        ("diamond_sword", 1),
+        ("apple", 5),
+        ("oak_stairs", 16),
+        ("poppy", 1),
+        ("oak_fence", 3),
+        ("grass_block", 64),
+    ]
+    .iter()
+    .enumerate()
+    {
+        slots.main[slot] = stack_of(name, *count);
+    }
+    slots.main[9] = stack_of("cobblestone", 40);
+    slots.main[20] = stack_of("bread", 7);
+    slots.main[35] = stack_of("iron_pickaxe", 1);
+    slots.armour[0] = stack_of("iron_helmet", 1);
+    slots.armour[2] = stack_of("iron_leggings", 1);
+
+    // The survival panel's top left, and a point on a slot of it.
+    let survival = [(width - 176.0) / 2.0, (height - 166.0) / 2.0];
+    let at = |corner: [f32; 2], x: f32, y: f32| ((f64::from(corner[0] + x)) * scale, (f64::from(corner[1] + y)) * scale);
+    let mut draw = |ui: &mut Ui, name: &str, view: View<'_>, pointer: (f64, f64)| {
+        ui.hud.update(&mut ui.tree, &ui.icons, &ui.lang, None);
+        ui.inventory.update(&mut ui.tree, &ui.icons, &ui.lang, Some(&view));
+        // Laid out once, so that the pointer has something to land on, as in a window.
+        sheet.draw(ui, &mut renderer, format);
+        ui.pointer_moved(pointer.0, pointer.1);
+        let picture = sheet.draw(ui, &mut renderer, format);
+        picture.save(out.join(format!("inventory-{name}.png"))).unwrap();
+    };
+
+    // Survival, the pointer over the third of the 27, and then carrying a stack.
+    let pointer = at(survival, 7.0 + 2.5 * 18.0, 86.0 + 9.0);
+    draw(&mut ui, "survival", View { creative: false, slots: &slots, list: &list }, pointer);
+    let mut carrying = slots.clone();
+    carrying.cursor = stack_of("cobblestone", 40);
+    carrying.main[9] = crate::inventory::slots::Stack::default();
+    let pointer = at(survival, 7.0 + 4.3 * 18.0, 86.0 + 1.6 * 18.0);
+    draw(&mut ui, "survival-carrying", View { creative: false, slots: &carrying, list: &list }, pointer);
+
+    // Creative: the construction tab, then its first group opened, then scrolled, then
+    // the nature tab.
+    let creative = [(width - 326.0) / 2.0, (height - 166.0) / 2.0];
+    let first_cell = at(creative, 7.0 + 9.0, 26.0 + 9.0);
+    let view = || View { creative: true, slots: &slots, list: &list };
+    draw(&mut ui, "creative", view(), first_cell);
+    ui.pointer_moved(first_cell.0, first_cell.1);
+    assert_eq!(ui.inventory_pressed(), Pressed::Nothing, "the first cell is a group, which opens");
+    draw(&mut ui, "creative-group-open", view(), first_cell);
+    ui.scroll(-4.0);
+    draw(&mut ui, "creative-scrolled", view(), at(creative, 7.0 + 5.5 * 18.0, 26.0 + 3.5 * 18.0));
+    let nature_tab = at(creative, 3.0 * 25.0 + 12.0, -11.0);
+    ui.pointer_moved(nature_tab.0, nature_tab.1);
+    assert_eq!(ui.inventory_pressed(), Pressed::Tab(crate::inventory::creative::Tab::Nature));
+    draw(&mut ui, "creative-nature", view(), at(creative, 7.0 + 2.5 * 18.0, 26.0 + 1.5 * 18.0));
+    // A stack on the cursor in creative, over the hotbar.
+    let mut held = slots.clone();
+    held.cursor = stack_of("stone", 64);
+    draw(&mut ui, "creative-carrying", View { creative: true, slots: &held, list: &list }, at(creative, 163.0, 175.0));
+    println!("Wrote the inventory's sheets to {}", out.display());
 }

@@ -16,6 +16,10 @@
 //! Each tick moves the player once; each frame draws it between its last
 //! two ticks' poses, and turns the camera by the mouse (m5-plan Decision 3,
 //! `clock.rs`).
+//!
+//! **While the inventory is open** (m5-plan Step 12), the cursor is free and the mouse
+//! is the screen's: the player stands still, nothing is broken or placed, and the keys
+//! only close it again. Ticks and their input go on as ever.
 
 use std::{
     collections::HashMap,
@@ -44,7 +48,8 @@ use crate::{
     edit::aim::{self, Hit},
     embedded::EmbeddedServer,
     input::{Action, Button, Input, PIXELS_PER_NOTCH},
-    player::{EYE_HEIGHT, Motion, Pose},
+    inventory::requests::Button as ClickButton,
+    player::{EYE_HEIGHT, Motion, Pose, movement::Keys},
     render::{
         Frame, Gpu, Needs,
         animation::Animator,
@@ -57,7 +62,7 @@ use crate::{
     },
     session::{Session, Stage},
     settings::Settings,
-    ui::{self, Ui, render::UiRenderer},
+    ui::{self, Ui, render::UiRenderer, screens::inventory::Pressed},
 };
 
 /// What the window draws with, prepared before it opens.
@@ -165,6 +170,11 @@ pub struct App<'a> {
     aimed: Option<Hit>,
     input: Input,
     cursor_grabbed: bool,
+    /// Whether shift is held, for a shift-click.
+    shift: bool,
+    /// Whether the inventory was open at the last look, to free the cursor when it opens
+    /// and capture it again when it shuts.
+    inventory_open: bool,
     /// Whether frames can be seen: not minimised or covered.
     visible: bool,
     ticks: Ticks,
@@ -219,6 +229,8 @@ impl<'a> App<'a> {
             aimed: None,
             input,
             cursor_grabbed: false,
+            shift: false,
+            inventory_open: false,
             visible: true,
             ticks: Ticks::new(now),
             last_frame: now,
@@ -240,7 +252,9 @@ impl<'a> App<'a> {
             let motion = self.motion();
             if self.bench.is_none() {
                 let hit = self.camera.as_ref().and_then(|camera| aim::from_camera(self.session.game(), camera));
-                let (attack, use_item) = (self.input.is_held(Action::Attack), self.input.is_held(Action::Use));
+                let playing = !self.inventory_open;
+                let attack = playing && self.input.is_held(Action::Attack);
+                let use_item = playing && self.input.is_held(Action::Use);
                 self.session.edit_tick(attack, use_item, hit.as_ref());
             }
             self.session.step(motion);
@@ -258,8 +272,10 @@ impl<'a> App<'a> {
         if self.bench.is_some() {
             Motion::To(Pose::from_eyes(camera.position, camera.pitch, camera.yaw))
         } else {
+            // The player stands still while the inventory is open.
+            let keys = if self.inventory_open { Keys::default() } else { self.input.keys() };
             Motion::Keys {
-                keys: self.input.keys(),
+                keys,
                 pitch: camera.pitch,
                 yaw: camera.yaw,
             }
@@ -390,6 +406,50 @@ impl<'a> App<'a> {
         self.cursor_grabbed = false;
     }
 
+    /// Frees the cursor when the server opens the inventory, and captures it again when
+    /// the screen shuts, as long as the window has the focus.
+    fn follow_inventory(&mut self) {
+        let open = self.session.game().inventory().is_open();
+        if open == self.inventory_open {
+            return;
+        }
+        self.inventory_open = open;
+        if open {
+            self.release_cursor();
+        } else if self.window.as_ref().is_some_and(|window| window.has_focus()) {
+            self.grab_cursor();
+        }
+    }
+
+    /// E: the inventory opens, once the server says so, or shuts.
+    fn toggle_inventory(&mut self) {
+        if self.session.game().inventory().is_open() {
+            self.session.close_inventory();
+        } else {
+            self.session.open_inventory();
+        }
+    }
+
+    /// A mouse button while the inventory is open: a press on what's under the pointer,
+    /// which acts at once, and a release, which ends a drag.
+    fn inventory_click(&mut self, state: ElementState, button: MouseButton) {
+        if state == ElementState::Released {
+            self.session.pointer_released();
+            return;
+        }
+        let button = match button {
+            MouseButton::Left => ClickButton::Left,
+            MouseButton::Right => ClickButton::Right,
+            _ => return,
+        };
+        match self.ui.inventory_pressed() {
+            Pressed::Slot(slot) => self.session.click_slot(slot, button, self.shift),
+            Pressed::Creative(entry) => self.session.click_creative(entry),
+            Pressed::Tab(tab) => self.session.creative_tab(tab),
+            Pressed::Nothing => {}
+        }
+    }
+
     /// Logs the camera's pose as a command to type into the official client,
     /// to look from the same place.
     fn log_pose(&self) {
@@ -424,10 +484,16 @@ impl<'a> App<'a> {
 
         let (mut attack_pressed, mut use_pressed) = (false, false);
         for action in self.input.take_pressed() {
+            // With the inventory open, the keys only shut it.
+            if self.inventory_open && !matches!(action, Action::Inventory | Action::Pause | Action::LogPose) {
+                continue;
+            }
             match action {
                 Action::Attack => attack_pressed = true,
                 Action::Use => use_pressed = true,
-                // Until the pause menu (Step 16).
+                Action::Inventory => self.toggle_inventory(),
+                // Until the pause menu (Step 16), Esc lets go of the cursor.
+                Action::Pause if self.inventory_open => self.session.close_inventory(),
                 Action::Pause => self.release_cursor(),
                 Action::LogPose => self.log_pose(),
                 Action::Hotbar(slot) => self.session.select_slot(slot),
@@ -670,6 +736,8 @@ impl ApplicationHandler for App<'_> {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => self.ui.pointer_moved(position.x, position.y),
+            WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
+            WindowEvent::MouseInput { state, button, .. } if self.inventory_open => self.inventory_click(state, button),
             // While the cursor is free, a left click goes to the UI, and if the UI
             // doesn't want it, it captures the cursor. A release always counts, so a
             // button held when the cursor was let go isn't left held.
@@ -683,12 +751,16 @@ impl ApplicationHandler for App<'_> {
                     self.grab_cursor();
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } if self.cursor_grabbed => {
+            WindowEvent::MouseWheel { delta, .. } if self.cursor_grabbed || self.inventory_open => {
                 let notches = match delta {
                     MouseScrollDelta::LineDelta(_, y) => f64::from(y),
                     MouseScrollDelta::PixelDelta(position) => position.y / PIXELS_PER_NOTCH,
                 };
-                self.input.wheel(notches);
+                if self.inventory_open {
+                    self.ui.scroll(notches);
+                } else {
+                    self.input.wheel(notches);
+                }
             }
             WindowEvent::RedrawRequested => self.redraw(),
             _ => {}
@@ -718,6 +790,7 @@ impl ApplicationHandler for App<'_> {
         }
         self.place_camera();
         self.follow_turns();
+        self.follow_inventory();
         self.run_ticks();
 
         // Meshing, within its budget: what changed in the world, nearest
