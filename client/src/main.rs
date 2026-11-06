@@ -102,6 +102,9 @@ const CHUNKS_QUIET: Duration = Duration::from_secs(2);
 const CHUNKS_MAX_WAIT: Duration = Duration::from_secs(180);
 /// How long the world comparison keeps retrying while block updates land.
 const WORLD_SETTLE: Duration = Duration::from_secs(2);
+/// How long the headless run lights chunks between ticks: well inside the 10 s after which the
+/// server drops a client it hasn't heard from.
+const LIGHT_SLICE: Duration = Duration::from_millis(500);
 /// How many ticks a still-differing chunk gets for a fresh encode to decode
 /// equal to the server.
 const FRESH_DECODE_ATTEMPTS: u32 = 5;
@@ -548,13 +551,12 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
     checks.push(checks::chunks_decoded(&session));
     if spawned {
         checks.push(check_world(&mut session, server));
+        checks.push(check_light(&mut session, server));
         linger(&mut session, args.linger);
     } else {
-        checks.push(Check::new(
-            "world matches server",
-            false,
-            "not checked: never spawned".to_string(),
-        ));
+        for name in ["world matches server", "light matches server"] {
+            checks.push(Check::new(name, false, "not checked: never spawned".to_string()));
+        }
     }
     session.log_edits();
     session.log_light();
@@ -1144,6 +1146,112 @@ fn check_world(session: &mut Session, server: &EmbeddedServer) -> Check {
              {took:.2} s",
             differing.len(),
             WORLD_SETTLE.as_secs_f64(),
+        ),
+    )
+}
+
+/// Lights every chunk that has arrived, in slices with a tick between, so the server keeps
+/// hearing from the host.
+fn light_everything(session: &mut Session, around: (i32, i32)) {
+    session.world_mut().update_light(Duration::ZERO, around);
+    while session.world().light().waiting() > 0 {
+        session.world_mut().update_light(LIGHT_SLICE, around);
+        session.tick();
+    }
+    session.world_mut().update_light(Duration::ZERO, around);
+}
+
+/// Compares the client's light with the server's own light engine, level for level, on every chunk
+/// whose 5 × 5 chunks are lit on our side, so its 3 × 3 has all its light (m5-plan Step 13).
+///
+/// Where they differ, each group of differences has to be explained: by a block where the server's
+/// light breaks its own rules, or by a block that reads differently on the two sides
+/// ([`checks::compare_light`]). The server keeps ticking, so a chunk with a group nothing explains
+/// is compared again each tick for up to [`WORLD_SETTLE`], as the world check does.
+fn check_light(session: &mut Session, server: &EmbeddedServer) -> Check {
+    const NAME: &str = "light matches server";
+    let Some(level) = server.server.worlds.load().first().map(|world| world.level.clone()) else {
+        return Check::new(NAME, false, "the server has no world".to_string());
+    };
+    let eyes = session.position();
+    let around = ((eyes.x.floor() as i32) >> 4, (eyes.z.floor() as i32) >> 4);
+    let start = Instant::now();
+    light_everything(session, around);
+    let lit_in = start.elapsed().as_secs_f64();
+    let lit = session.world().light().stats.lit;
+
+    let world = session.world();
+    let compared: Vec<(i32, i32)> = world
+        .chunks()
+        .map(|chunk| (chunk.x, chunk.z))
+        .filter(|&(x, z)| (-2..=2).all(|dx| (-2..=2).all(|dz| world.is_lit(x + dx, z + dz))))
+        .collect();
+    let around_each = |chunks: &[(i32, i32)]| -> Vec<(i32, i32)> {
+        chunks
+            .iter()
+            .flat_map(|&(x, z)| (-2..=2).flat_map(move |dx| (-2..=2).map(move |dz| (x + dx, z + dz))))
+            .collect()
+    };
+    let compare_start = Instant::now();
+    let server_light = checks::ServerLight::gather(&level, around_each(&compared));
+    let mut report = checks::LightReport::default();
+    for &chunk in &compared {
+        checks::compare_light(world, &server_light, chunk, &mut report);
+    }
+    let full_pass = compare_start.elapsed().as_secs_f64();
+    for example in &report.explained {
+        debug!("Explained by the server's rules: {example}");
+    }
+
+    // The chunks that failed, again each tick: the server may have changed a block since.
+    let mut failing = report.failing.clone();
+    let first_failing = failing.len();
+    let mut last = checks::LightReport::default();
+    let deadline = Instant::now() + WORLD_SETTLE;
+    while !failing.is_empty() && Instant::now() < deadline {
+        session.tick();
+        session.world_mut().update_light(Duration::ZERO, around);
+        let server_light = checks::ServerLight::gather(&level, around_each(&failing));
+        last = checks::LightReport::default();
+        for &chunk in &failing {
+            checks::compare_light(session.world(), &server_light, chunk, &mut last);
+        }
+        failing.clone_from(&last.failing);
+        thread::sleep(TICK);
+    }
+
+    let groups = report.server_rule + report.blocks + report.ours_wrong + report.unexplained;
+    let detail = format!(
+        "{} chunks compared, {} levels; {} equal level for level; in the rest {} sky and {} block levels \
+         differ, in {groups} groups: {} where the server's light breaks its own rules, {} where a block \
+         reads differently; lit {lit} chunks in {lit_in:.1} s, compared in {full_pass:.1} s",
+        report.chunks,
+        report.levels,
+        report.equal_chunks,
+        report.differ[0],
+        report.differ[1],
+        report.server_rule,
+        report.blocks,
+    );
+    if report.chunks > 0 && failing.is_empty() {
+        let rechecked = if first_failing > 0 {
+            format!("; {first_failing} chunks matched on a re-check")
+        } else {
+            String::new()
+        };
+        return Check::new(NAME, true, detail + &rechecked);
+    }
+    for failure in last.failures.iter().chain(&report.failures).take(10) {
+        warn!("Light difference: {failure}");
+    }
+    Check::new(
+        NAME,
+        false,
+        format!(
+            "{detail}; {} chunks still hold a group nothing explains, or where our light breaks the \
+             rules, after {:.1} s of re-checks (logged above)",
+            failing.len(),
+            WORLD_SETTLE.as_secs_f64()
         ),
     )
 }

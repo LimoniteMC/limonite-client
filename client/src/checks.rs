@@ -3,18 +3,37 @@
 //! M2's "no socket is opened" can't be made from inside the process; it's
 //! done from outside while the session lingers.
 
-use std::time::Duration;
+use std::{
+    collections::{HashMap, HashSet, VecDeque},
+    sync::{Arc, PoisonError},
+    time::Duration,
+};
 
 use pumpkin_core::{net::bedrock::level_chunk::CLevelChunk, server::Server};
 use pumpkin_data::{Block, BlockState, BlockStateId, biome::Biome};
-use pumpkin_util::{PermissionLvl, math::vector3::Vector3};
-use pumpkin_world::chunk::{ChunkData, palette::bedrock_water_state};
+use pumpkin_util::{
+    PermissionLvl,
+    math::{vector2::Vector2, vector3::Vector3},
+};
+use pumpkin_world::{
+    chunk::{ChunkData, format::LightContainer, palette::bedrock_water_state},
+    level::Level,
+};
 use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
     session::{Session, Spawn, TeleportReport},
-    world::{BlockTable, chunk::Chunk, level_chunk},
+    world::{
+        AIR, BlockTable, World,
+        chunk::Chunk,
+        level_chunk,
+        light::{
+            Kind,
+            area::spread,
+            table::{Props, table},
+        },
+    },
 };
 
 /// How far east the host must have moved, as the server sees it.
@@ -285,6 +304,312 @@ pub fn fresh_decode_matches(server: &ChunkData, names: &BlockTable, out: &mut Ve
 
 fn block_name(state: BlockStateId) -> &'static str {
     Block::from_state_id(state).name
+}
+
+/// The six neighbours, `(dx, dy, dz)`, with up first.
+const NEIGHBOURS: [(i32, i32, i32); 6] = [(0, 1, 0), (0, -1, 0), (1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1)];
+
+/// How many blocks of one group of differences have our own light checked against the rules: the
+/// rest of a big group is only walked.
+const OURS_CHECKED: usize = 4096;
+
+/// One side's light and blocks, ours or the server's, for comparing the two (m5-plan Step 13).
+trait LightSide {
+    fn level(&self, kind: Kind, x: i32, y: i32, z: i32) -> Option<u8>;
+    fn props(&self, x: i32, y: i32, z: i32) -> Option<Props>;
+    /// The world's lowest y, and one above its highest.
+    fn height(&self) -> (i32, i32);
+
+    /// The sky's own light at a block: 15, less what it and every block above it dim.
+    fn sky_source(&self, x: i32, y: i32, z: i32) -> Option<u8> {
+        let mut run = 15i32;
+        for cy in y..self.height().1 {
+            run -= i32::from(self.props(x, cy, z)?.dims());
+            if run <= 0 {
+                return Some(0);
+            }
+        }
+        Some(run as u8)
+    }
+
+    fn source(&self, kind: Kind, x: i32, y: i32, z: i32) -> Option<u8> {
+        match kind {
+            Kind::Block => Some(self.props(x, y, z)?.emits()),
+            Kind::Sky => self.sky_source(x, y, z),
+        }
+    }
+
+    /// Whether a block's level is what the rules make it from its own light and its neighbours':
+    /// `None` if a neighbour is out of reach.
+    fn follows_rules(&self, kind: Kind, x: i32, y: i32, z: i32) -> Option<bool> {
+        let (bottom, top) = self.height();
+        let level = self.level(kind, x, y, z)?;
+        let dims = self.props(x, y, z)?.dims();
+        let mut best = self.source(kind, x, y, z)?;
+        for (dx, dy, dz) in NEIGHBOURS {
+            if !(bottom..top).contains(&(y + dy)) {
+                continue;
+            }
+            let there = self.level(kind, x + dx, y + dy, z + dz)?;
+            // From above, the light comes down.
+            best = best.max(spread(kind, there, dims, dy == 1));
+        }
+        Some(level == best)
+    }
+}
+
+/// Our light, and our blocks as the light table reads them.
+struct Ours<'a> {
+    world: &'a World,
+    height: (i32, i32),
+}
+
+impl LightSide for Ours<'_> {
+    fn level(&self, kind: Kind, x: i32, y: i32, z: i32) -> Option<u8> {
+        self.world.light().level(kind, x, y, z)
+    }
+
+    fn props(&self, x: i32, y: i32, z: i32) -> Option<Props> {
+        let block = self.world.block(x, y, z, 0)?;
+        Some(table().get(block, self.world.block(x, y, z, 1)? != AIR))
+    }
+
+    fn height(&self) -> (i32, i32) {
+        self.height
+    }
+}
+
+/// The server's light and blocks for the chunks a comparison looks at, copied out once so its locks
+/// are taken once a chunk.
+pub struct ServerLight {
+    chunks: HashMap<(i32, i32), ServerChunk>,
+    height: (i32, i32),
+}
+
+struct ServerChunk {
+    data: Arc<ChunkData>,
+    sky: Box<[LightContainer]>,
+    block: Box<[LightContainer]>,
+}
+
+impl ServerLight {
+    /// Copies the light of whichever of these chunks the server has loaded.
+    pub fn gather(level: &Level, positions: impl IntoIterator<Item = (i32, i32)>) -> Self {
+        let mut chunks = HashMap::new();
+        let mut height = (0, 0);
+        for (x, z) in positions {
+            if chunks.contains_key(&(x, z)) {
+                continue;
+            }
+            let Some(data) = level.loaded_chunks.get(&Vector2::new(x, z)).map(|entry| entry.value().clone()) else {
+                continue;
+            };
+            let (sky, block) = {
+                let light = data.light_engine.lock().unwrap_or_else(PoisonError::into_inner);
+                (light.sky_light.clone(), light.block_light.clone())
+            };
+            height = (data.section.min_y, data.section.min_y + 16 * data.section.count as i32);
+            chunks.insert((x, z), ServerChunk { data, sky, block });
+        }
+        Self { chunks, height }
+    }
+
+    /// A chunk's level at x and z inside it, and y absolute.
+    fn chunk_level(&self, chunk: &ServerChunk, kind: Kind, x: usize, y: i32, z: usize) -> Option<u8> {
+        let section = usize::try_from((y - self.height.0) >> 4).ok()?;
+        let containers = match kind {
+            Kind::Sky => &chunk.sky,
+            Kind::Block => &chunk.block,
+        };
+        Some(containers.get(section)?.get(x, (y & 15) as usize, z))
+    }
+}
+
+impl LightSide for ServerLight {
+    fn level(&self, kind: Kind, x: i32, y: i32, z: i32) -> Option<u8> {
+        let chunk = self.chunks.get(&(x >> 4, z >> 4))?;
+        self.chunk_level(chunk, kind, (x & 15) as usize, y, (z & 15) as usize)
+    }
+
+    fn props(&self, x: i32, y: i32, z: i32) -> Option<Props> {
+        let chunk = self.chunks.get(&(x >> 4, z >> 4))?;
+        let state = chunk.data.section.get_block_absolute_y((x & 15) as usize, y, (z & 15) as usize)?;
+        Some(Props::of_state(state))
+    }
+
+    fn height(&self) -> (i32, i32) {
+        self.height
+    }
+}
+
+/// What explains one group of differing levels.
+enum Explained {
+    /// The server's light breaks the rules it lights with, somewhere in the group.
+    ServerRule,
+    /// A block reads differently on the two sides: the Bedrock id doesn't carry it, or the server
+    /// changed it and hasn't said yet.
+    Blocks,
+    /// Our light breaks the rules: a bug.
+    OursWrong((i32, i32, i32)),
+    Nothing,
+}
+
+/// What a light comparison found.
+#[derive(Debug, Default)]
+pub struct LightReport {
+    pub chunks: usize,
+    pub equal_chunks: usize,
+    /// Levels compared, and those that differ: sky, then block.
+    pub levels: u64,
+    pub differ: [u64; 2],
+    /// Groups of differing levels, by what explains them.
+    pub server_rule: u64,
+    pub blocks: u64,
+    pub ours_wrong: u64,
+    pub unexplained: u64,
+    /// The first few groups that fail, and the first few the server's rules explain.
+    pub failures: Vec<String>,
+    pub explained: Vec<String>,
+    /// Chunks with a group that fails.
+    pub failing: Vec<(i32, i32)>,
+}
+
+/// Compares our light with the server's in chunk (`kx`, `kz`), sky and block, at every block.
+///
+/// **Where they differ, why** (worth teaching). Both sides light by the same rules: a block's level
+/// is the best of its own light and what each neighbour gives it. Levels that follow the rules
+/// everywhere are unique, so if both sides followed them on the same blocks, they'd be equal. Each
+/// group of neighbouring levels that differ the same way (the server's brighter, or ours) must then
+/// hold a block where the server breaks its rules, or where the blocks differ. A group with neither
+/// fails, and so does one where our own light breaks the rules.
+///
+/// Pumpkin's breaks them, as it lights a new chunk with only a block of its neighbours around it,
+/// keeps the first light that reaches a block in a flood fill, and lights changes after generation
+/// another way (m5-plan Deviation 57). Groups are followed within the 3 × 3 chunks around this one.
+pub fn compare_light(world: &World, server: &ServerLight, (kx, kz): (i32, i32), report: &mut LightReport) {
+    let (Some(ours_chunk), Some(theirs)) = (world.light().chunk(kx, kz), server.chunks.get(&(kx, kz))) else {
+        return;
+    };
+    let ours = Ours {
+        world,
+        height: server.height,
+    };
+    let (bottom, top) = server.height;
+    report.chunks += 1;
+    let (mut equal, mut failing) = (true, false);
+    for (k, kind) in [Kind::Sky, Kind::Block].into_iter().enumerate() {
+        let mut differing = Vec::new();
+        for x in 0..16 {
+            for z in 0..16 {
+                for y in bottom..top {
+                    if ours_chunk.get(kind, x, y, z) != server.chunk_level(theirs, kind, x, y, z) {
+                        differing.push((kx * 16 + x as i32, y, kz * 16 + z as i32));
+                    }
+                }
+            }
+        }
+        report.levels += 256 * (top - bottom) as u64;
+        report.differ[k] += differing.len() as u64;
+        if differing.is_empty() {
+            continue;
+        }
+        equal = false;
+        let mut seen = HashSet::new();
+        for start in differing {
+            if !seen.insert(start) {
+                continue;
+            }
+            let (explained, size) = explain_group(&ours, server, kind, start, (kx, kz), &mut seen);
+            let (sx, sy, sz) = start;
+            let (o, s) = (ours.level(kind, sx, sy, sz), server.level(kind, sx, sy, sz));
+            let at = format!(
+                "{kind:?} light at ({sx}, {sy}, {sz}): ours {o:?}, the server's {s:?}, in a group of {size}"
+            );
+            match explained {
+                Explained::ServerRule => {
+                    report.server_rule += 1;
+                    if report.explained.len() < 5 {
+                        report.explained.push(at);
+                    }
+                }
+                Explained::Blocks => report.blocks += 1,
+                Explained::OursWrong((x, y, z)) => {
+                    report.ours_wrong += 1;
+                    failing = true;
+                    if report.failures.len() < 10 {
+                        report.failures.push(format!("{at}: ours breaks the rules at ({x}, {y}, {z})"));
+                    }
+                }
+                Explained::Nothing => {
+                    report.unexplained += 1;
+                    failing = true;
+                    if report.failures.len() < 10 {
+                        report.failures.push(format!("{at}: both follow the rules there, on the same blocks"));
+                    }
+                }
+            }
+        }
+    }
+    if equal {
+        report.equal_chunks += 1;
+    }
+    if failing {
+        report.failing.push((kx, kz));
+    }
+}
+
+/// Walks the group of neighbouring levels that differ the way `start` does, within the 3 × 3 chunks
+/// around `middle`, and says what explains it, and how many levels it holds.
+fn explain_group(
+    ours: &Ours<'_>,
+    server: &ServerLight,
+    kind: Kind,
+    start: (i32, i32, i32),
+    middle: (i32, i32),
+    seen: &mut HashSet<(i32, i32, i32)>,
+) -> (Explained, usize) {
+    let (bottom, top) = server.height;
+    let xs = (middle.0 - 1) * 16..(middle.0 + 2) * 16;
+    let zs = (middle.1 - 1) * 16..(middle.1 + 2) * 16;
+    let brighter = |(x, y, z): (i32, i32, i32)| -> Option<bool> {
+        let (o, s) = (ours.level(kind, x, y, z)?, server.level(kind, x, y, z)?);
+        (o != s).then_some(s > o)
+    };
+    let way = brighter(start);
+    let mut queue = VecDeque::from([start]);
+    let (mut size, mut explained, mut ours_wrong) = (0, None, None);
+    while let Some((x, y, z)) = queue.pop_front() {
+        size += 1;
+        if size <= OURS_CHECKED && ours_wrong.is_none() && ours.follows_rules(kind, x, y, z) == Some(false) {
+            ours_wrong = Some((x, y, z));
+        }
+        if explained.is_none() {
+            let blocks_differ = ours.props(x, y, z) != server.props(x, y, z)
+                || (kind == Kind::Sky && ours.sky_source(x, y, z) != server.sky_source(x, y, z));
+            if blocks_differ {
+                explained = Some(Explained::Blocks);
+            } else if server.follows_rules(kind, x, y, z) == Some(false) {
+                explained = Some(Explained::ServerRule);
+            }
+        }
+        for (dx, dy, dz) in NEIGHBOURS {
+            let next = (x + dx, y + dy, z + dz);
+            if xs.contains(&next.0) && zs.contains(&next.2) && (bottom..top).contains(&next.1)
+                && !seen.contains(&next)
+                && brighter(next).is_some()
+                && brighter(next) == way
+            {
+                seen.insert(next);
+                queue.push_back(next);
+            }
+        }
+    }
+    let explained = match (ours_wrong, explained) {
+        (Some(at), _) => Explained::OursWrong(at),
+        (None, Some(explained)) => explained,
+        (None, None) => Explained::Nothing,
+    };
+    (explained, size)
 }
 
 /// Logs one line per check and returns whether they all passed.
