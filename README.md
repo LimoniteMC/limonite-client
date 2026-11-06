@@ -167,6 +167,8 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
   your install, and creative breaks with a click.
 - **An outline on what you aim at.** Thin dark lines along the shape of the block you're looking at, within
   reach: 4.5 blocks, or 5 in creative.
+- **Light, worked out on the client.** Sky and block light spread through the world by the server's own rules, and
+  the headless run checks them against the server's light at every block. Drawing it comes next.
 - **A debug world.** `--debug-world` holds every block state in a grid, and you can jump to any of them.
 - **Bedrock-native world state.** Chunks decode straight into Bedrock's own palette format, and
   the client's world equals the server's, block for block and biome for biome. That's checked on
@@ -297,8 +299,8 @@ your position. Every key can be changed in the settings file (below).
 
 `--headless` runs the older scripted session instead, with no window, no GPU and no Bedrock install
 needed. The client joins as the host, walks 8 blocks east, checks that the world it decoded equals
-the server's own, block for block, and exits. Each check prints one `PASS` or `FAIL` line, and the
-exit code is non-zero if any of them fails.
+the server's own, block for block, and its light the server's light, and exits. Each check prints
+one `PASS` or `FAIL` line, and the exit code is non-zero if any of them fails.
 
 ```bash
 cargo run -p limonite-client -- --headless --map run/m3/map.png

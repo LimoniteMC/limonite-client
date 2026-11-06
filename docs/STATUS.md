@@ -4,7 +4,7 @@ A living page: where the project is, how to build and run it, and what bites. Up
 milestone step lands. Architecture decisions live in `docs/PLAN.md`; this page is about progress
 and environment.
 
-_Last updated: 2026-11-06._
+_Last updated: 2026-11-07._
 
 ## Where we are
 
@@ -73,7 +73,11 @@ _Last updated: 2026-11-06._
     undone by the server (`client/src/inventory/requests.rs`). Each request is the official client's on 1.26.60, byte
     for byte, from the capture of 2026-11-06, and `--headless --inventory` checks the moves against the real server.
     The armour and the off hand show, now that Pumpkin sends them, and the HUD counts what's worn.
-  - **Next:** Step 13, light.
+  - **Step 13 is done (2026-11-07):** the client works out sky and block light itself, by Pumpkin's own rules
+    (`client/src/world/light/`), and meshing waits for it. `--headless` checks it against the server's light at every
+    block, and explains each difference as a place where the server's light breaks its own rules (m5-plan Deviation
+    57). Nothing draws it yet.
+  - **Next:** Step 14, drawing the light.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -343,7 +347,7 @@ make the capture's moves (m5-plan Step 12). A new world's spawn is random, so a 
   2. Walks 8 blocks east, has the server teleport it 5 blocks up, then waits for the join's
      chunks.
   3. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, teleport, chunks, chunks
-     decoded, and world matches server.
+     decoded, world matches server, and light matches server.
   4. Writes the map, if asked.
 
   The exit code is non-zero on any failure.

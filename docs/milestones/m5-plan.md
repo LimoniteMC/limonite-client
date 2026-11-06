@@ -1400,6 +1400,30 @@ The questions as they were asked:
 55. **The creative list scrolls by rows, and shows 7** (Step 12). The UI can't clip a picture yet, so it can't show part
     of a row. The official client shows part of an eighth and scrolls smoothly; ours moves a row a notch. Clipping can
     come with the next screen that needs it.
+56. **Light follows Pumpkin's rules where the plan's words differ** (Step 13). The client's light is checked against
+    the server's, so it lights by the rules of Pumpkin's generation engine (`pumpkin-world/src/lighting/engine.rs`):
+    - **straight down from the sky, a block takes only what it dims.** Decision 11 has the sky fall at 15 through clear
+      blocks and then spread, which would lose 1 more a block under leaves. Pumpkin's goes 14 through the leaves and
+      stays 14 down to the ground;
+    - **a waterlogged block** doesn't always dim "as much as the stronger of the two": a waterlogged copper grate dims
+      nothing. So the table is keyed by the Bedrock id and whether layer 1 holds water, from Pumpkin's own states, and
+      gets every one right. Of its 30,154 keys, only 13 mean more than one light: whether a piston is pushed out, which
+      Bedrock keeps in the piston's block actor, and a test block. They take the state nearest the default, as shapes do;
+    - **a block that can occlude dims at least 1,** as Pumpkin counts: slabs, stairs, fences, carpets and snow layers;
+    - **a torch gives out 14** in Pumpkin's data, not 15, so Step 13's closed-room test checks 14 at the torch.
+57. **"Equal, or each difference explained" is proved, not listed** (Step 13). Pumpkin's light differs from a clean
+    flood fill's in places, because it:
+    - lights a new chunk's sky with only a block of its neighbours around it, and stops seeding a column at its first
+      dark block, so sky light coming in underground from a neighbour stops a block in;
+    - keeps the first light to reach a block in its flood fill, and drops a brighter path found later;
+    - lights changes after generation with a second engine (`lighting/runtime.rs`), with other rules. The sky loses 1
+      more than the block dims, for one.
+
+    So the check works out why for each difference. Levels that follow the rules everywhere are unique, so wherever
+    the two sides differ, each group of neighbouring levels that differ the same way must hold a block where the server
+    breaks its own rules, or where the blocks differ. The check finds each group and that block. A group with neither
+    fails, and so does one where our own light breaks the rules. It compares the chunks whose 5 × 5 neighbourhood is
+    lit on our side, so their 3 × 3 has all its light.
 
 ## Results (filled in during execution)
 
@@ -1716,6 +1740,54 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 13: Light (2026-11-07)
+
+- **Commits:** `7f5a564` (the light), and `0354871` (the check against the server).
+- **The light** (`client/src/world/light/`), by Pumpkin's generation rules (Deviation 56):
+  - **`table.rs`:** what each block gives out and dims, keyed by its Bedrock id and water on layer 1;
+  - **`area.rs`:** the flood fills over the 3 × 3 chunks around one: raising, and lowering, then filling back in from
+    the edges. They light a chunk that arrives, take a dropped or replaced chunk's light out of its neighbours, and
+    light changed blocks again, with the sky's column below each;
+  - **`mod.rs`:** the storage, one value for a sub-chunk whose levels are all the same; and the scheduling. Each frame,
+    the changed blocks come first, whatever the budget, then arrived chunks nearest the camera, within 3 ms. The
+    player's own edits are lit before they're meshed;
+  - **meshing waits for light:** a sub-chunk waits for its chunk's light and its side neighbours'. A chunk's first
+    light marks it and its neighbours dirty, and a light change marks every sub-chunk with a block beside it.
+- **Pumpkin's light** (Finding 12's open point): its light sections line up one for one with its block sections, 24
+  from y -64, each 4,096 levels in YZX order, or one value.
+- **Tests** (13), each checked against a brute-force reference that sweeps the world until nothing changes:
+  - a torch in a closed room; the sky under a roof, through a hole in it, and covered again; a torch taken away
+    beside a lantern; water and leaves dimming the sky; light across a chunk border;
+  - a chunk lit before its neighbour arrives, and four lit in different orders, end the same; a dropped chunk takes
+    its light with it, and brings it back;
+  - open sky and solid rock keep one value a sub-chunk; every Java state's light is in the table but the pistons';
+  - 240 random edits across four chunks, compared after every 40 with the same blocks lit from scratch, level for level.
+- **Against the server** (`--headless`, "light matches server"; fresh worlds, radius 8, a dev build):
+  - **plain:** 193 chunks, 37.9 million levels. 107 chunks are equal level for level. In the rest 1,617 sky and 1,381
+    block levels differ, 0.008%, in 219 groups, each holding a block where the server's light breaks its own rules
+    (Deviation 57). None is unexplained, and ours follows the rules wherever the groups were checked;
+  - **with `--edits 4 --inventory`:** 195 groups, 16,194 sky and 6,084 block levels, all the server's again. Its second
+    engine lit the floor and the edits;
+  - the headless run now lights chunks as it plays, 3 ms a tick, so the check also covers the light the server's block
+    updates changed during the join.
+- **The stop rule** (Decision 11), at radius 8 on a fresh copy of `run/m4-dev`, with the window's `--bench`:
+  - **dev build:** light caught up 0.1 s after the join's last chunk, 1.8 s after the first, at 1.8 ms a chunk. Meshing
+    caught up at 3.6 s. Relighting one block, as a click does, took 0.22 ms at most, and the longest batch 0.44 ms;
+  - **release:** light kept pace with the chunks, and caught up as the last one came, 1.8 s after the first, at
+    0.37 ms a chunk. Meshing caught up at 3.8 s. One block relit in 0.06 ms at most, and the longest batch in 0.12 ms;
+  - so light stays on the main thread.
+- **What it costs meshing:** the joins meshed 2,473 sub-chunks (dev) and 3,077 (release) for 2,011 meshes. M4 meshed
+  2,240 for 1,937 in the dev world (m4-plan, Step 10). The extra come from light reaching chunks already meshed, and
+  more in release, where light keeps pace with the chunks as they come. Nothing draws light until Step 14, which will
+  need those meshes, and whose rule of meshing a chunk only once all eight neighbours have arrived should save most.
+  - **"Meshing caught up" at 3.8 s is as soon as the log can say it,** since it waits for 2 s with no chunk. The
+    server kept changing blocks after the join, and each change was lit again and meshed again with what's beside it:
+    614 blocks over the release session. Light itself was done with the last chunk.
+- **Checks:** 390 client tests, clippy with the same 2 warnings, and the headless run's 8 PASS lines, 10 with
+  `--edits` and `--inventory`.
+- **Not verified:** nothing draws the light yet, so nobody has seen it, or held it up against the official client's.
+- **Left:** Step 14 draws it: smooth lighting, ambient occlusion, the time of day, the sky and fog.
 
 ### Step 12: The inventory screens (2026-11-06)
 
