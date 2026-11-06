@@ -20,9 +20,9 @@
 //! only its left part showing, and over both a tick every 11 units, from 5 in. Without it
 //! the hearts look adrift, since the gap above the hotbar is its.
 //!
-//! **Armour** isn't sent by the server: Bedrock works it out from what the player wears, and
-//! Pumpkin doesn't send a Bedrock player's armour slots either. So its row waits for Step
-//! 12's inventory screen, where the client sees its own moves.
+//! **Armour** isn't sent by the server as a number: Bedrock works it out from what the
+//! player wears. Since the fork's move to 1.26.60 Pumpkin sends the armour slots, so the
+//! client works it out the same way (`inventory/slots.rs`).
 //!
 //! **A slot** is 20 × 22, with its icon 16 × 16 in the middle of it, as the JSON has them,
 //! and the count at its bottom right.
@@ -34,6 +34,7 @@ use crate::{
     inventory::{
         HOTBAR, Item,
         items::{ItemIcons, display_name},
+        slots,
     },
     ui::{
         atlas::{Atlas, SpriteId},
@@ -164,7 +165,7 @@ pub struct HudState {
     pub health: f32,
     pub max_health: f32,
     pub hunger: f32,
-    /// Armour points, 0 to 20. Nothing fills it in until Step 12's inventory screen.
+    /// Armour points, 0 to 20, from what's worn.
     pub armour: u32,
     /// Breath, in ticks.
     pub air: f32,
@@ -188,7 +189,7 @@ impl HudState {
             health: player.attributes.health,
             max_health: player.attributes.max_health,
             hunger: player.attributes.hunger,
-            armour: 0,
+            armour: slots::armour_points(game.inventory().slots()),
             air: player.attributes.air,
             experience: player.attributes.experience,
             level: player.attributes.level as u32,
