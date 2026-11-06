@@ -10,9 +10,13 @@
 
 pub mod chunk;
 pub mod level_chunk;
+pub mod light;
 pub mod storage;
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::{
+    collections::{HashMap, hash_map::Entry},
+    time::Duration,
+};
 
 use pumpkin_core::net::bedrock::level_chunk::CLevelChunk;
 use pumpkin_data::{Block, BlockState, BlockStateId};
@@ -26,7 +30,7 @@ use pumpkin_protocol::{
 };
 use tracing::{debug, info};
 
-use self::{chunk::Chunk, level_chunk::DecodeError};
+use self::{chunk::Chunk, level_chunk::DecodeError, light::Light};
 
 /// Air's Bedrock network id, which a missing sub-chunk or layer reads as.
 pub const AIR: u32 = BlockState::to_be_network_id(Block::AIR.default_state.id);
@@ -69,6 +73,11 @@ pub enum Change {
     Edit { x: i32, y: i32, z: i32 },
     /// A chunk was dropped, because the server's view left it.
     Dropped { x: i32, z: i32 },
+    /// A chunk was lit for the first time since it arrived, so it can be meshed.
+    Lit { x: i32, z: i32 },
+    /// The light changed in this sub-chunk, or beside a block of it: x and z in chunks, y in
+    /// sixteen-block sections.
+    Light { x: i32, y: i32, z: i32 },
 }
 
 /// The server's view, from a `NetworkChunkPublisherUpdate`.
@@ -114,6 +123,8 @@ impl std::fmt::Display for ApplyError {
 pub struct World {
     chunks: HashMap<(i32, i32), Chunk>,
     blocks: BlockTable,
+    /// Sky and block light, which the client works out itself (m5-plan Decision 11).
+    light: Light,
     /// `UpdateBlock`s that arrived for a chunk we don't have.
     updates_not_loaded: u64,
     /// What changed since [`World::take_changes`], when tracking. `None`
@@ -135,6 +146,7 @@ impl World {
         Self {
             chunks: HashMap::new(),
             blocks,
+            light: Light::new(),
             updates_not_loaded: 0,
             changes: None,
         }
@@ -157,6 +169,32 @@ impl World {
         }
     }
 
+    /// Moves what the light changed into the log.
+    fn record_light(&mut self) {
+        let changes = self.light.take_changes();
+        if let Some(log) = &mut self.changes {
+            log.extend(changes);
+        }
+    }
+
+    /// Lights the blocks that changed, then chunks waiting for light, nearest the chunk `around`
+    /// first, until `budget` is spent ([`Light::update`]).
+    pub fn update_light(&mut self, budget: Duration, around: (i32, i32)) {
+        self.light.update(&self.chunks, budget, around);
+        self.record_light();
+    }
+
+    #[must_use]
+    pub const fn light(&self) -> &Light {
+        &self.light
+    }
+
+    /// Whether the chunk is loaded and lit.
+    #[must_use]
+    pub fn is_lit(&self, x: i32, z: i32) -> bool {
+        self.light.is_lit(x, z)
+    }
+
     /// Applies one packet from the server. Packets the world doesn't use are
     /// [`Applied::Ignored`].
     ///
@@ -168,7 +206,9 @@ impl World {
                 let chunk = level_chunk::decode(&packet.payload).map_err(ApplyError::Chunk)?;
                 let (x, z) = (chunk.x, chunk.z);
                 self.chunks.insert((x, z), chunk);
+                self.light.arrived(&self.chunks, x, z);
                 self.record(Change::Chunk { x, z });
+                self.record_light();
                 Ok(Applied::Chunk { x, z })
             }
             CUpdateBlock::PACKET_ID => {
@@ -221,8 +261,10 @@ impl World {
             keep
         });
         for &(x, z) in &dropped {
+            self.light.dropped(&self.chunks, x, z);
             self.record(Change::Dropped { x, z });
         }
+        self.record_light();
         if !dropped.is_empty() {
             debug!(
                 "View at chunk ({}, {}), radius {}: dropped {} of {} chunks",
@@ -239,9 +281,14 @@ impl World {
     /// Sets a block by world position. Returns false if its chunk (or its
     /// sub-chunk) isn't loaded.
     pub fn set_block(&mut self, x: i32, y: i32, z: i32, layer: usize, id: u32) -> bool {
-        self.chunks
+        let set = self
+            .chunks
             .get_mut(&(x >> 4, z >> 4))
-            .is_some_and(|chunk| chunk.set_block((x & 15) as usize, y, (z & 15) as usize, layer, id))
+            .is_some_and(|chunk| chunk.set_block((x & 15) as usize, y, (z & 15) as usize, layer, id));
+        if set {
+            self.light.block_changed(x, y, z);
+        }
+        set
     }
 
     /// A chunk of air, for tests to put blocks in.
@@ -262,6 +309,18 @@ impl World {
                 block_actors: Vec::new(),
             },
         );
+        self.light.arrived(&self.chunks, x, z);
+        self.record_light();
+    }
+
+    /// Drops a chunk, as the server's view leaving it does.
+    #[cfg(test)]
+    pub fn drop_chunk(&mut self, x: i32, z: i32) {
+        if self.chunks.remove(&(x, z)).is_some() {
+            self.light.dropped(&self.chunks, x, z);
+            self.record(Change::Dropped { x, z });
+            self.record_light();
+        }
     }
 
     /// Sets a block for the player's own edit, ahead of the server. Returns false if
@@ -414,7 +473,7 @@ fn block_name(state: BlockStateId) -> &'static str {
 
 /// Of `states`, the one with the most properties at its block's default
 /// values; the lowest of those.
-fn nearest_default(states: &[BlockStateId]) -> BlockStateId {
+pub(crate) fn nearest_default(states: &[BlockStateId]) -> BlockStateId {
     let matching = |state: BlockStateId| {
         let block = Block::from_state_id(state);
         match (block.properties(state), block.properties(block.default_state.id)) {

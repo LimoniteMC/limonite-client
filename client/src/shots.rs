@@ -150,6 +150,8 @@ impl Studio {
         assert_ne!(self.session.stage(), Stage::Disconnected, "the server ended the connection");
         self.session.step(Motion::To(self.pose));
         self.tick += 1;
+        let around = ((self.pose.feet.x.floor() as i32) >> 4, (self.pose.feet.z.floor() as i32) >> 4);
+        self.session.world_mut().update_light(MESHING, around);
         let changes = self.session.world_mut().take_changes();
         self.meshes.apply(changes, self.session.world());
         self.meshes.build(

@@ -6,7 +6,10 @@
 //! `LocalClientEnd`, whose methods never wait, so the loop needs no async
 //! runtime.
 
-use std::{fmt, thread, time::Instant};
+use std::{
+    fmt, thread,
+    time::{Duration, Instant},
+};
 
 use bytes::Bytes;
 use glam::{DVec3, IVec3};
@@ -63,7 +66,7 @@ use crate::{
     packets,
     player::{EYE_HEIGHT, Motion, movement::Flags, physics::{Fluid, Terrain as _}, terrain::WorldTerrain},
     render::camera::look_direction,
-    world::{AIR, Applied, World},
+    world::{AIR, Applied, World, light},
 };
 
 /// Bedrock's input-mode and play-mode values for mouse and keyboard on a
@@ -384,6 +387,10 @@ impl Session {
         self.drain();
         let (motion, source) = self.scripted();
         self.step_with(motion, source);
+        // Light what's arrived and changed, as the window does each frame.
+        let eyes = self.game.player().map_or(DVec3::ZERO, |player| player.pose().eyes());
+        let around = ((eyes.x.floor() as i32) >> 4, (eyes.z.floor() as i32) >> 4);
+        self.game.world_mut().update_light(light::BUDGET, around);
     }
 
     /// One tick for the window: steps the game with `motion`, and sends the
@@ -801,6 +808,28 @@ impl Session {
         if let Some(summary) = self.game.predictions().summary() {
             info!("{summary}");
         }
+    }
+
+    /// Logs what lighting cost over the session (m5-plan Decision 11, the stop rule).
+    pub fn log_light(&self) {
+        let stats = &self.game.world().light().stats;
+        let ms = |time: Duration| time.as_secs_f64() * 1000.0;
+        let each = |time: Duration, count: u64| if count == 0 { 0.0 } else { ms(time) / count as f64 };
+        info!(
+            "Light: {} chunks lit, {:.0} µs each; {} batches of changed blocks lit again, {} blocks, {:.2} ms a \
+             batch, the longest {:.2} ms; {} of one block, as a click makes, the longest {:.2} ms; {} chunks' \
+             light taken out of their neighbours, {:.2} ms each",
+            stats.lit,
+            stats.micros_each(),
+            stats.relights,
+            stats.relit_blocks,
+            each(stats.relight_time, stats.relights),
+            ms(stats.longest_relight),
+            stats.single_relights,
+            ms(stats.longest_single),
+            stats.forgotten,
+            each(stats.forget_time, stats.forgotten),
+        );
     }
 
     fn carry_out(&mut self, commands: Vec<Command>) {

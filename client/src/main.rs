@@ -557,6 +557,7 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
         ));
     }
     session.log_edits();
+    session.log_light();
     let mut passed = checks::report(&checks);
     if let Some(path) = &args.map {
         passed &= write_map(&session, path);

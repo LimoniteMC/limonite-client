@@ -2,11 +2,15 @@
 //! need meshing, meshing them nearest first within a time budget, and the
 //! vertex buffers the terrain draws.
 //!
-//! **What makes a sub-chunk dirty:** a chunk arriving (all its sub-chunks,
-//! and its neighbours', whose borders it changes); a block changing (its
-//! sub-chunk, and the one across a border it's on). A dropped chunk's meshes
-//! go. A sub-chunk whose chunk lacks a side neighbour waits: the neighbour's
-//! arrival marks it dirty again.
+//! **What makes a sub-chunk dirty:** a chunk lit for the first time once it
+//! arrives (all its sub-chunks, and its neighbours', whose borders it changes);
+//! a block changing (its sub-chunk, and the one across a border it's on); light
+//! changing in it or beside it (`world/light`). A dropped chunk's meshes go.
+//!
+//! **Meshing waits for light** (m5-plan Decision 11): a sub-chunk whose chunk,
+//! or a side neighbour, isn't lit yet waits, and so does one whose chunk lacks a
+//! side neighbour. Each chunk's first light marks it and its neighbours dirty
+//! again.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -182,14 +186,17 @@ impl Meshes {
     pub fn apply(&mut self, changes: Vec<Change>, world: &World) {
         for change in changes {
             match change {
-                Change::Chunk { x, z } => {
+                Change::Chunk { .. } => {
                     let now = Instant::now();
                     self.join_started.get_or_insert(now);
                     self.last_chunk = Some(now);
+                }
+                Change::Lit { x, z } => {
                     for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
                         self.mark_column(world, x + dx, z + dz);
                     }
                 }
+                Change::Light { x, y, z } => self.mark(SubChunkKey { x, y, z }),
                 Change::Block { x, y, z } => {
                     for key in touched(x, y, z) {
                         self.mark(key);
@@ -316,6 +323,14 @@ impl Meshes {
         };
         if sub_chunk.layers.iter().all(|layer| *layer == Storage::Single(AIR)) {
             self.remove(key);
+            return;
+        }
+        // Not lit yet, or a side neighbour isn't: its first light will mark this dirty again.
+        let lit = |(x, z): (i32, i32)| world.is_lit(x, z);
+        if ![(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]
+            .into_iter()
+            .all(|(dx, dz)| lit((key.x + dx, key.z + dz)))
+        {
             return;
         }
         let started = Instant::now();

@@ -63,6 +63,7 @@ use crate::{
     session::{Session, Stage},
     settings::Settings,
     ui::{self, Ui, render::UiRenderer, screens::inventory::Pressed},
+    world::light,
 };
 
 /// What the window draws with, prepared before it opens.
@@ -129,6 +130,7 @@ pub fn run(
         return ExitCode::FAILURE;
     }
     app.session.log_edits();
+    app.session.log_light();
     // Dropping the app drops the session, so the host leaves before the
     // caller stops the server.
     match app.failure {
@@ -466,8 +468,10 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Shows the player's edits in this very frame.
+    /// Shows the player's edits in this very frame, lit.
     fn mesh_edits(&mut self) {
+        // A zero budget: only the changed blocks, before their sub-chunks are meshed.
+        self.session.world_mut().update_light(Duration::ZERO, (0, 0));
         let changes = self.session.world_mut().take_changes();
         self.meshes.apply(changes, self.session.world());
         if let Some(gpu) = &self.gpu {
@@ -605,10 +609,11 @@ impl<'a> App<'a> {
         let (draws, visible) = self.terrain.as_ref().map_or((0, 0), |t| (t.draws, t.visible));
         let debug = self.browser.as_ref().map_or(String::new(), |browser| format!("{}; ", browser.label()));
         window.set_title(&format!(
-            "Limonite: {debug}{fps:.0} fps, {:.1} ms; {} chunks, {} meshes ({} waiting), {visible} visible, \
-             {draws} draws; at {:.1}, {:.1}, {:.1}",
+            "Limonite: {debug}{fps:.0} fps, {:.1} ms; {} chunks ({} unlit), {} meshes ({} waiting), {visible} \
+             visible, {draws} draws; at {:.1}, {:.1}, {:.1}",
             1000.0 / fps.max(0.001),
             self.session.world().chunk_count(),
+            self.session.world().light().waiting(),
             self.meshes.len(),
             self.meshes.waiting(),
             p.x,
@@ -793,8 +798,13 @@ impl ApplicationHandler for App<'_> {
         self.follow_inventory();
         self.run_ticks();
 
-        // Meshing, within its budget: what changed in the world, nearest
-        // the camera first.
+        // Light, then meshing, each within its budget: what changed in the
+        // world, nearest the camera first.
+        let around = self.camera.as_ref().map_or((0, 0), |camera| {
+            let p = camera.position;
+            ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
+        });
+        self.session.world_mut().update_light(light::BUDGET, around);
         let changes = self.session.world_mut().take_changes();
         self.meshes.apply(changes, self.session.world());
         if let (Some(gpu), Some(camera)) = (&self.gpu, &self.camera) {
