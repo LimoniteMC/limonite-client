@@ -1175,7 +1175,8 @@ The questions as they were asked:
     drop, destroy, consume, create and the creative take. The others are refused, and for some of
     them Pumpkin's reader drops data, so no writer could match it.
     - **The legacy action byte** after each action's type repeats the type. The capture shows
-      this for take, place and swap; the creative take is checked at Step 12's capture.
+      this for take, place and swap; the creative take is checked at Step 12's capture. It
+      differs: see Deviation 53.
     - **Chat:** the client writes `Text` with the server's own writer, since Pumpkin sends chat to
       clients too. It matches the official client byte for byte.
 13. **Four more actions than Step 4 lists** (Step 4):
@@ -1376,6 +1377,29 @@ The questions as they were asked:
     - **What it doesn't change:** saved worlds load the same, and every headless check passes.
     - **The join on the merged fork** (Deviation 7): the official client joined the stock server over NetherNet on
       2026-11-05. Step 12's capture is what's left of Deviation 4.
+52. **The armour and the off hand are sent now, so they don't wait any more** (found at Step 12). The fork's move to
+    1.26.60 brought upstream's work on Bedrock inventories: Pumpkin sends the armour as container 120 and the off hand
+    as 119, and its item stack requests reach both. So Deviation 39's wait is over:
+    - the survival screen shows both, and moves things in and out of them, with armour only where it's worn, as the
+      server decides;
+    - the HUD's armour row shows what's worn, worked out as vanilla does from each piece's armour modifier, since
+      Bedrock sends no number for it.
+53. **The creative take is three actions, and the legacy byte isn't the type** (Step 12's capture). Deviation 12 assumed
+    both. The official client sends:
+    - `CraftCreative`, the deprecated results naming the item, and a take of a whole stack from the created output. The
+      results carry the item's name, its block's id and its user data. Pumpkin ignores them, but the client sends
+      them, as the official client does. Pumpkin's creative list says every item's block is 0, so the client works it
+      out, and gets the official client's number for stone;
+    - **the byte after each action's type** in the numbering from before Bedrock dropped two actions: the same below 7,
+      and 2 more from there, so 12 then 14, and 18 then 20.
+    The fork's writer does both now, and its tests check it against the capture.
+54. **Two more packets the plan didn't list** (Step 12's capture): `CursorItemDrag`, start and stop, around each click
+    that puts the cursor's stack down, and `SetPlayerInventoryOptions` each time the creative screen changes tab.
+    Pumpkin ignores both. The client sends them, so the fork's client codecs gain their two writers, as derives
+    (Decision 19).
+55. **The creative list scrolls by rows, and shows 7** (Step 12). The UI can't clip a picture yet, so it can't show part
+    of a row. The official client shows part of an eighth and scrolls smoothly; ours moves a row a notch. Clipping can
+    come with the next screen that needs it.
 
 ## Results (filled in during execution)
 
@@ -1692,6 +1716,65 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 12: The inventory screens (2026-11-06)
+
+- **Commits:** fork `13bda25` (the codecs and the fixtures); `483a043` (its bump), `98d13d2` (the screens), `c4f7626`
+  (the HUD's armour) and `ba1c9e7` (the headless check).
+- **The capture** (2026-11-06): 3,577 packets in about 3 minutes from the official client, 1.26.60.5, on the fork at
+  `8acb34b` with the hook. In order, what it sends:
+  - **E:** `Interact`'s open, at its own runtime id. The screen shows when the server answers with `ContainerOpen`.
+    Closing is `ContainerClose`, container 0 and type 247. Pumpkin then puts the cursor's stack back, and sends the
+    cursor empty and the 36 again. It answers one open at a time, so a client that didn't close gets no screen;
+  - **survival:** a click takes the whole stack to the cursor, and the right button half of it, 8 of 16. Putting it
+    down places it all; on another item, the two swap, the cursor first. A shift-click is one place straight from
+    slot to slot, into the first empty slot above, with no cursor;
+  - **a click acts when the button goes down.** One that puts the cursor's stack down comes with `CursorItemDrag`'s
+    start, and the release brings its stop;
+  - **ids:** the session's first request is -3, and they fall by 2. Each slot names the stack id the server's answer
+    gave it;
+  - **creative:** a take from the list is Deviation 53's three actions, whose created stack goes by the request's own
+    id. The cursor's stack put on the list is destroyed, and so is a stack shift-clicked on the hotbar. Each tab sends
+    `SetPlayerInventoryOptions`;
+  - **unchanged from 1.26.52:** `Interact`, `ContainerClose` and `MobEquipment`, byte for byte. `Animate` ends with the
+    hand, 0;
+  - **not in it:** a shift-click on the creative list. The owner was asked for one, and no request came, so the client
+    sends none.
+- **Byte for byte:** each survival move, the creative take, the stack destroyed from the cursor and the creative
+  shift-click match the official client's. The test replays the capture's session, with the server's answers giving
+  the stack ids it gave (`inventory/requests.rs`). The drag and the tab's options match it too (the fork's tests).
+- **What a click does** is decided from the slots alone, as the capture shows, and where it doesn't say, as Java does:
+  half rounds up; a put-down fills what room there is, and the right button puts one; a shift-click tops up stacks of
+  the same first; armour only goes where it's worn, one at a time.
+- **Predicted, then reconciled:** the client keeps the server's slots and what's shown, which is the server's with the
+  requests still waiting on top. An answer that agrees applies the request with the server's counts and ids, and one
+  that refuses just drops it, which is the undo. The 36 the server resends after each answer leave a later request
+  shown. Tests cover a refusal, a request sent before the last one's answer, and the resend.
+- **The screens,** from the install's `ui/inventory_screen.json` and `ui/ui_common.json` (module docs in
+  `ui/screens/inventory.rs`):
+  - **survival:** the 176 × 166 panel: the armour with its empty outlines, the player's frame (empty until Step 15),
+    the off hand, the 27 and the hotbar. The crafting grid is milestone 5b's;
+  - **creative:** the creative layout, 326 × 166: the four tabs, the tab's name, the list in 17 columns with its
+    scroll bar, and the hotbar in its own panel under it. Named groups open and shut. There's no search tab, since
+    that needs Step 16's text field;
+  - **both:** the world dimmed behind, the slot under the pointer lit, under its item as the JSON's layers have it, and
+    the cursor's stack following the pointer. While it's open the player stands still, and the keys only shut it.
+- **Against the real server,** with `--headless --inventory`, which stays: it opens the inventory in survival and in
+  creative, makes the capture's moves in 11 requests, and the server agrees to each. After every answer, the server's
+  36 slots hold what the client shows.
+- **Looking at it:** sheets of both screens drawn through the real atlas and shader (`inventory_sheets`, into
+  `run/sheets`, gitignored): survival with armour worn and a stack on the cursor, creative on two tabs, with a group
+  open, and the list scrolled.
+- **Checks:** 377 client tests, the headless run's 8 PASS lines, clippy with the same 2 warnings, and the fork's
+  224 protocol tests, its Bedrock tests and its five clippy configurations, clean.
+- **Not verified:** nobody has opened the screen in the window, or held it up against the official client's. The sheets
+  are the layout as the JSON gives it.
+- **Left:**
+  - the search tab, a shift-click on the creative list, and item names on hover;
+  - a drag across slots: the capture only has the drag around one put-down, so the client sends its start and stop
+    and puts down on the slot it pressed;
+  - throwing a stack out of the screen, and the number keys over a slot;
+  - the crafting grid (milestone 5b) and the player's picture (Step 15).
 
 ### Step 11: Break and place, predicted (2026-11-02)
 

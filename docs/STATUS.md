@@ -4,7 +4,7 @@ A living page: where the project is, how to build and run it, and what bites. Up
 milestone step lands. Architecture decisions live in `docs/PLAN.md`; this page is about progress
 and environment.
 
-_Last updated: 2026-11-01._
+_Last updated: 2026-11-06._
 
 ## Where we are
 
@@ -68,7 +68,12 @@ _Last updated: 2026-11-01._
   - **The fork is on Bedrock 1.26.60 (2026-11-04),** protocol 2225, which the official client here speaks (m5-plan,
     Deviation 51).
   - **The official client joined** the stock server over NetherNet on 2026-11-05, on 1.26.60.5.
-  - **Next:** Step 12, with its capture of the creative take on 1.26.60.
+  - **Step 12 is done (2026-11-06):** the inventory screen, in survival and creative
+    (`client/src/ui/screens/inventory.rs`), and an item stack request for each move, shown at once and confirmed or
+    undone by the server (`client/src/inventory/requests.rs`). Each request is the official client's on 1.26.60, byte
+    for byte, from the capture of 2026-11-06, and `--headless --inventory` checks the moves against the real server.
+    The armour and the off hand show, now that Pumpkin sends them, and the HUD counts what's worn.
+  - **Next:** Step 13, light.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -77,8 +82,8 @@ _Last updated: 2026-11-01._
 - **Upstream syncs are weekly** (owner, 2026-10-26): merge upstream Pumpkin's `master` into the
   fork once a calendar week. `docs/upstream.md` has the procedure, and a log of what each sync
   brought in.
-  - **Last sync:** 2026-11-04, upstream `a83abee` (64 commits, with the move to Bedrock 1.26.60). The fork's `limonite`
-    is at `8acb34b`, and `main` bumped it in `010e373`.
+  - **Last sync:** 2026-11-04, upstream `a83abee` (64 commits, with the move to Bedrock 1.26.60). It left the fork's
+    `limonite` at `8acb34b`, which `main` bumped in `010e373`. Step 12's codecs are on top, at `13bda25`, bumped in `483a043`.
   - **Next sync due:** 2026-11-11.
 - **Milestone 4 is done (2026-10-24).** Plan, results and deviations: `docs/milestones/m4-plan.md`.
   - **What it built:** a window (winit) with a wgpu device and a fly camera that flies the host;
@@ -109,10 +114,10 @@ _Last updated: 2026-11-01._
     clone in `run/wiki`. It goes after `main`, since its pages name `main`'s commit;
   - the org's page, `https://github.com/LimoniteMC/.github` (`main`), from its clone in
     `run/org-profile`. It goes last, since it claims what `main` has and links to its images.
-- **No upstream PR is open.** The candidates are listed under "Upstream PR candidates". Step 9 adds one: a
-  Bedrock player gets no armour slots or off hand from the server, only container 0's 36 slots. Step 10 adds
-  another: `get_block_outline_shapes_at` moves the boxes of grass, ferns, tall flowers and roots, which Java doesn't
-  move, by as much as half a block (m5-plan Results, Step 10).
+- **No upstream PR is open.** The candidates are listed under "Upstream PR candidates". Step 9 added one, a
+  Bedrock player's armour slots and off hand, which upstream's port to 1.26.60 has since sent (m5-plan Deviation
+  52). Step 10 adds another: `get_block_outline_shapes_at` moves the boxes of grass, ferns, tall flowers and roots,
+  which Java doesn't move, by as much as half a block (m5-plan Results, Step 10).
 
   Ask the owner before pushing anything, and before opening an upstream PR.
 - **Where the repos are:** the owner moved both to the `LimoniteMC` org by 2026-11-01. `.gitmodules`
@@ -271,7 +276,8 @@ copy of the list is in `run/step8`. The world is a copy, because the run changes
 LIMONITE_SHOTS=run/step8/shots-world.txt LIMONITE_SHOTS_ARGS="--data-dir run/step8/shots-world --home run/step8/home --radius 16" LIMONITE_SHOTS_HOTBAR="dirt*64,oak_log*12,poppy,torch*32,oak_stairs*16,diamond_sword,apple*5,oak_fence*8,grass_block*64" CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo test --release -p limonite-client --bin limonite-client screenshots -- --ignored --nocapture
 ```
 
-The HUD alone, every piece of it over stripes, goes to `run/sheets`:
+The HUD alone, every piece of it over stripes, goes to `run/sheets`, and the inventory screen with
+`inventory_sheets` (`_sheets` runs both):
 
 ```bash
 LIMONITE_BEDROCK="C:/XboxGames/Minecraft for Windows/Content" cargo test -p limonite-client --bin limonite-client hud_sheets -- --ignored --nocapture
@@ -329,7 +335,8 @@ RUST_LOG=info,limonite_client=debug cargo run -p limonite-client -- --headless -
 ```
 
 Add `--edits 4` to place and break blocks with the real packets, on a stone floor it builds for itself at y 200, and
-`--gamemode survival` for the server's times. A new world's spawn is random, so a check has to go the same in any.
+`--gamemode survival` for the server's times. Add `--inventory` to open the inventory in survival and in creative and
+make the capture's moves (m5-plan Step 12). A new world's spawn is random, so a check has to go the same in any.
 
 - **What it does:**
   1. Starts the embedded server and joins as the host.

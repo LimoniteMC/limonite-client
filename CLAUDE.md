@@ -17,7 +17,7 @@ starting any task, and treat it as the source of truth for architecture decision
     the owner can tick what's done and split the rest into its own milestone.
   - After M5 comes milestone 5b, containers, then M6.
   - Both repos are public. The superproject is `LimoniteMC/limonite-client` (`main`), and the
-    fork is `LimoniteMC/Pumpkin` (`limonite`, at `8acb34b`). Check STATUS.md for
+    fork is `LimoniteMC/Pumpkin` (`limonite`, at `13bda25`). Check STATUS.md for
     what's pushed. Ask the owner before pushing anything.
   - **Upstream syncs are weekly** (owner, 2026-10-26). STATUS.md's "Where we are" gives the next
     due date. If one is due, do it first, by the procedure in `docs/upstream.md`, and log it there.

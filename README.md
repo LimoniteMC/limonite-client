@@ -34,8 +34,8 @@
 
 > [!WARNING]
 > **Limonite is under heavy construction, so expect little to no functionality.** Today you can
-> walk and fly around a singleplayer world drawn with vanilla textures, with a HUD, and break and place
-> blocks, and that's it: no lighting, sky or mobs yet.
+> walk and fly around a singleplayer world drawn with vanilla textures, with a HUD, break and place
+> blocks, and move things about in your inventory, and that's it: no lighting, sky or mobs yet.
 
 > [!IMPORTANT]
 > **Current phase of development: [Milestone 5, playable singleplayer](docs/milestones/m5-plan.md).**
@@ -154,11 +154,14 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
   dripstone, beds and signs all come out exact. Without a jar, hand-made models stand in for most of
   them. Chests, banners, heads and shulker boxes stay simple boxes until entity models arrive.
 - **Textures and fluids that move.** Flipbooks animate, and water and lava slope and flow.
-- **A HUD in the game's own look.** The crosshair, the hotbar, the experience bar, hearts, hunger and air, in the sprites and
-  the bitmap font from your install, blended the way the game blends them.
+- **A HUD in the game's own look.** The crosshair, the hotbar, the experience bar, hearts, hunger, armour and air, in the
+  sprites and the bitmap font from your install, blended the way the game blends them.
 - **A hotbar with what you carry.** Block icons come from the world's own meshes, so stairs look like stairs,
   and items from your install's pictures, with counts and the held item's name. 1 to 9 and the wheel select,
   and Q drops.
+- **An inventory screen.** <kbd>E</kbd> opens it. Survival has your armour, the off hand, the 27 slots and the
+  hotbar; creative has the creative list's four tabs, with its groups that open, and the hotbar. A move shows at
+  once, sent as the official client's own request, byte for byte, and what the server refuses goes back.
 - **Breaking and placing, at once.** What you do shows in the same frame, where the result is certain, and the
   server has the last word: what it refuses snaps back. Survival takes the server's time, with a crack from
   your install, and creative breaks with a click.
@@ -258,6 +261,8 @@ flies). Closing the window saves the world.
 | <kbd>Space</kbd> twice | In creative: fly, or land. Flying, <kbd>Space</kbd> and <kbd>Left Shift</kbd> rise and sink |
 | <kbd>1</kbd> to <kbd>9</kbd>, the wheel | Select a hotbar slot |
 | <kbd>Q</kbd> | Drops one of the held item |
+| <kbd>E</kbd> | Opens the inventory, or shuts it. <kbd>Esc</kbd> shuts it too |
+| In the inventory | <kbd>Left click</kbd> picks a stack up or puts it down, <kbd>Right click</kbd> half of it or one, and <kbd>Shift</kbd> and a click moves it across (in creative, off the hotbar). The wheel scrolls the creative list |
 | <kbd>Left click</kbd> | Breaks the block you aim at. Hold it to keep going |
 | <kbd>Right click</kbd> | Places the held block, or uses what you click. Hold it to keep placing |
 | <kbd>Middle click</kbd> | Picks the block you aim at, once [Pumpkin stops ignoring it](https://github.com/Pumpkin-MC/Pumpkin/issues/4321) |
@@ -279,7 +284,7 @@ your position. Every key can be changed in the settings file (below).
 | `--name <name>` | The host's display name, for this run |
 | `--gamemode <mode>` | The host's gamemode in a new world, for this run: `survival`, `creative`, `adventure` or `spectator` |
 | `--radius <chunks>` | The view distance to ask for, 2 to 32, for this run |
-| `--hotbar <items>` | Fills the hotbar when you join, since there's no inventory screen yet: item names separated by commas, each with `*` and a count if it isn't 1, like `"dirt*64,oak_log*32,torch"` |
+| `--hotbar <items>` | Fills the hotbar when you join: item names separated by commas, each with `*` and a count if it isn't 1, like `"dirt*64,oak_log*32,torch"` |
 | `--bench <seconds>` | Flies east for that long and logs frame times; use a release build |
 
 `--name`, `--gamemode` and `--radius` override the settings file without changing it.
@@ -305,6 +310,8 @@ cargo run -p limonite-client -- --headless --map run/m3/map.png
 | `--linger <seconds>` | Stays in the world afterwards |
 | `--measure` | Logs what the in-process channel costs, chunk encode and decode split into phases, and how fast a block change reaches the client; only meaningful in a release build |
 | `--stream <blocks>` | After joining, flies that many blocks east at creative flying speed and logs how fast new chunks arrive |
+| `--edits <blocks>` | Places and breaks that many blocks with the real packets, on a stone floor it builds for itself, and checks that the server applied each |
+| `--inventory` | Opens the inventory in survival and in creative, moves things about with the real packets, and checks that the server agreed to each move and holds what the client shows |
 
 `--home`, `--data-dir`, `--name`, `--gamemode`, `--radius` and `--hotbar` work here too.
 
