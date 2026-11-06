@@ -37,8 +37,13 @@ use std::{
 };
 
 use glam::DVec3;
-use pumpkin_core::world::World as ServerWorld;
-use pumpkin_data::{Block, item::Item, item_stack::ItemStack};
+use pumpkin_core::{entity::player::Player as ServerPlayer, world::World as ServerWorld};
+use pumpkin_data::{
+    Block,
+    item::{BedrockItem, Item},
+    item_stack::ItemStack,
+};
+use pumpkin_protocol::bedrock::network_item::NetworkItemStackDescriptor;
 use pumpkin_util::{
     GameMode,
     math::{position::BlockPos, vector2::Vector2, vector3::Vector3},
@@ -57,7 +62,7 @@ use crate::{
     embedded::{EmbeddedServer, HostOperator},
     home::Home,
     identity::Identity,
-    inventory::items,
+    inventory::{items, requests::Button as ClickButton, slots::SlotRef},
     render::camera::look_direction,
     session::{Session, Stage},
     settings::{MAX_RADIUS, MIN_RADIUS, Overrides, Settings},
@@ -70,7 +75,7 @@ const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [
                      [--bench <seconds>]\n       \
                      limonite-client --headless [--home <path>] [--data-dir <path>] [--name <name>] \
                      [--gamemode <mode>] [--radius <chunks>] [--hotbar <items>] [--linger <seconds>] [--measure] \
-                     [--map <path.png>] [--stream <blocks>] [--edits <blocks>]";
+                     [--map <path.png>] [--stream <blocks>] [--edits <blocks>] [--inventory]";
 
 /// Login and spawn must finish within this.
 const SPAWN_DEADLINE: Duration = Duration::from_secs(120);
@@ -138,6 +143,9 @@ struct Args {
     /// Place and break this many blocks near the host with the real packets, and
     /// check that the server applied them.
     edits: Option<u32>,
+    /// Open the inventory and move items with the real packets, and check that the
+    /// server agreed and holds what the client shows.
+    inventory: bool,
     /// Fly the window's camera east for this long, log the frame times, and
     /// exit (`bench.rs`).
     bench: Option<Duration>,
@@ -159,11 +167,12 @@ impl Args {
         let mut map = None;
         let mut stream = None;
         let mut edits = None;
+        let mut inventory = false;
         let mut bench = None;
         // The scripted session's flags, which mean nothing to the window.
         let mut headless_only = Vec::new();
         while let Some(arg) = args.next() {
-            if matches!(arg.as_str(), "--linger" | "--measure" | "--map" | "--stream" | "--edits") {
+            if matches!(arg.as_str(), "--linger" | "--measure" | "--map" | "--stream" | "--edits" | "--inventory") {
                 headless_only.push(arg.clone());
             }
             match arg.as_str() {
@@ -234,6 +243,7 @@ impl Args {
                             .map_err(|_| format!("--edits: `{blocks}` isn't a number of blocks"))?,
                     );
                 }
+                "--inventory" => inventory = true,
                 "--bench" => {
                     let secs = args.next().ok_or("--bench needs a number of seconds")?;
                     let secs = secs
@@ -282,6 +292,7 @@ impl Args {
             map: map.as_deref().map(absolute).transpose()?,
             stream,
             edits,
+            inventory,
             bench,
         })
     }
@@ -508,6 +519,9 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             }
             if let Some(blocks) = args.edits {
                 checks.push(edits_and_check(&mut session, server, blocks));
+            }
+            if args.inventory {
+                checks.push(inventory_and_check(&mut session, server));
             }
             if args.measure {
                 measure(&mut session, server, join_chunks);
@@ -853,6 +867,143 @@ fn edits_and_check(session: &mut Session, server: &EmbeddedServer, blocks: u32) 
             problems.join("; ")
         },
     )
+}
+
+/// Opens the inventory with the real packets, makes the capture's survival moves and then
+/// the creative ones, and after each answer checks that the server agreed and holds what
+/// the client shows (m5-plan Step 12).
+fn inventory_and_check(session: &mut Session, server: &EmbeddedServer) -> Check {
+    const NAME: &str = "inventory";
+    let players = server.server.get_all_players();
+    let Some(player) = players.first() else {
+        return Check::new(NAME, false, "the server has no player".to_string());
+    };
+    let _runtime = server.runtime.enter();
+    let gamemode = session.game().player().map_or(GameMode::Creative, |player| player.gamemode);
+    let mut problems = Vec::new();
+    let mut requests = 0;
+
+    // The capture's survival session: three stacks on the hotbar, the rest empty.
+    player.set_gamemode(GameMode::Survival);
+    for slot in 0..inventory::MAIN {
+        player.inventory().set_slot(slot, ItemStack::EMPTY.clone());
+    }
+    player.inventory().set_slot(0, ItemStack::new(16, &Item::DIRT));
+    player.inventory().set_slot(1, ItemStack::new(16, &Item::OAK_PLANKS));
+    player.inventory().set_slot(2, ItemStack::new(4, &Item::TORCH));
+    player.sync_inventory_to_client();
+    let _ = session.run_until(Instant::now() + SETTLE, |session| {
+        let survival = session.game().player().is_some_and(|player| player.gamemode == GameMode::Survival);
+        survival && session.game().inventory().hotbar()[2].is_some_and(|item| item.count == 4)
+    });
+
+    let moves = [
+        (SlotRef::Main(0), ClickButton::Left, false),
+        (SlotRef::Main(27), ClickButton::Left, false),
+        (SlotRef::Main(1), ClickButton::Right, false),
+        (SlotRef::Main(28), ClickButton::Left, false),
+        (SlotRef::Main(2), ClickButton::Left, false),
+        (SlotRef::Main(27), ClickButton::Left, false),
+        (SlotRef::Main(0), ClickButton::Left, false),
+        (SlotRef::Main(0), ClickButton::Left, true),
+    ];
+    if open_inventory(session) {
+        for (slot, button, shift) in moves {
+            requests += inventory_move(session, |session| session.click_slot(slot, button, shift));
+            compare_inventory(session, player, &mut problems);
+        }
+        close_inventory(session);
+    } else {
+        problems.push("the server didn't open the inventory in survival".to_string());
+    }
+
+    // Creative: a stack of stone from the list, put in the last hotbar slot, then
+    // shift-clicked away.
+    player.set_gamemode(GameMode::Creative);
+    let _ = session.run_until(Instant::now() + SETTLE, |session| {
+        session.game().player().is_some_and(|player| player.gamemode == GameMode::Creative)
+    });
+    let list = session.game().creative();
+    let stone = (0..list.len()).find(|&index| list.entry(index).stack.id == BedrockItem::STONE.id);
+    match stone {
+        _ if list.is_empty() => problems.push("the server sent no creative list".to_string()),
+        None => problems.push("the creative list has no stone".to_string()),
+        Some(stone) => {
+            if open_inventory(session) {
+                requests += inventory_move(session, |session| session.click_creative(Some(stone)));
+                requests += inventory_move(session, |session| session.click_slot(SlotRef::Main(8), ClickButton::Left, false));
+                compare_inventory(session, player, &mut problems);
+                let placed = session.game().inventory().hotbar()[8].map(|item| (item.id, item.count));
+                if placed != Some((BedrockItem::STONE.id, 64)) {
+                    problems.push(format!("the creative take put {placed:?} in the hotbar, not 64 stone"));
+                }
+                requests += inventory_move(session, |session| session.click_slot(SlotRef::Main(8), ClickButton::Left, true));
+                compare_inventory(session, player, &mut problems);
+                close_inventory(session);
+            } else {
+                problems.push("the server didn't open the inventory in creative".to_string());
+            }
+        }
+    }
+    player.set_gamemode(gamemode);
+    let refused = session.game().inventory().refused();
+    if refused > 0 {
+        problems.push(format!("the server refused {refused} of the {requests} requests"));
+    }
+    Check::new(
+        NAME,
+        problems.is_empty(),
+        if problems.is_empty() {
+            format!(
+                "opened the inventory in survival and creative, made the capture's moves in {requests} requests, \
+                 and the server agreed to each and holds what the client shows"
+            )
+        } else {
+            problems.join("; ")
+        },
+    )
+}
+
+/// Asks the server to open the inventory, and says whether it did.
+fn open_inventory(session: &mut Session) -> bool {
+    session.open_inventory();
+    session
+        .run_until(Instant::now() + SETTLE, |session| session.game().inventory().is_open())
+        .is_ok()
+}
+
+/// Shuts the inventory, and waits for the server to say so and send the inventory again.
+fn close_inventory(session: &mut Session) {
+    session.close_inventory();
+    for _ in 0..4 {
+        session.tick();
+        thread::sleep(TICK);
+    }
+}
+
+/// One click, then a release, and the ticks until the server has answered. Says how
+/// many requests that was.
+fn inventory_move(session: &mut Session, click: impl FnOnce(&mut Session)) -> usize {
+    let before = session.game().inventory().sent();
+    click(session);
+    session.pointer_released();
+    let _ = session.run_until(Instant::now() + SETTLE, |session| session.game().inventory().waiting() == 0);
+    // The inventory the server sends after an answer.
+    session.tick();
+    session.game().inventory().sent() - before
+}
+
+/// Notes each slot where what the client shows isn't what the server holds.
+fn compare_inventory(session: &Session, player: &ServerPlayer, problems: &mut Vec<String>) {
+    let shown = session.game().inventory().slots();
+    for slot in 0..inventory::MAIN {
+        let server = NetworkItemStackDescriptor::from(&player.inventory().get_slot(slot));
+        let ours = shown.item(SlotRef::Main(slot as u8)).map(|item| (item.id, item.count));
+        let theirs = (server.id != 0 && server.stack_size > 0).then_some((server.id, server.stack_size));
+        if ours != theirs {
+            problems.push(format!("slot {slot} shows {ours:?}, and the server has {theirs:?}"));
+        }
+    }
 }
 
 /// Compares every decoded chunk the server still has loaded with the
