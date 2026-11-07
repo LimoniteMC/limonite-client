@@ -4,10 +4,31 @@
 //! **A padded neighbourhood** (worth teaching). Whether a face is drawn
 //! depends on the block beside it, and for blocks on the sub-chunk's edge
 //! that block is in another sub-chunk. So [`Neighbourhood`] holds the 16³
-//! blocks plus a one-block border copied from the six neighbours: 18³ cells.
-//! The mesher then reads `x ± 1` for any block without a bounds check or a
-//! lookup in another chunk. The border's edges and corners stay air: only
-//! the six face neighbours decide anything.
+//! blocks plus a one-block border copied from the neighbours: 18³ cells, with
+//! their light. The mesher then reads `x ± 1` for any block without a bounds
+//! check or a lookup in another chunk. The border's edges and corners count
+//! too, since a corner's light and shade take in the blocks diagonally beside
+//! it, so a sub-chunk is meshed only once all eight neighbouring chunks are
+//! lit (`meshes.rs`).
+//!
+//! **Smooth lighting and ambient occlusion** (m5-plan Decision 12; worth
+//! teaching), as Java's renderer does them, at each corner of a face:
+//! - **the light** is the average of the four blocks around the corner on the
+//!   face's open side: the one the face looks into, the two beside it, and the
+//!   one across the corner. A block with no light at all, such as stone, gives
+//!   the first one's instead, so solid blocks don't darken a corner twice;
+//! - **the shade** comes from how many of the three blocks around the corner
+//!   are solid. Each takes a fifth of the light, and a corner between two
+//!   solid sides is as dark as it gets, whatever's across it;
+//! - **a face inside its block,** such as a slab's top, looks into its own
+//!   block instead, and a face smaller than the block takes its corners' light
+//!   from where they fall on the block's face, between the four;
+//! - **liquids, plants' crossed planes and flat lighting** (`smooth_lighting =
+//!   false`) take one light for the whole face, and no shade.
+//!
+//! **No bigger vertex** (worth teaching): the sky and block levels fill the
+//! vertex's spare byte, and the shade two of the face byte's three free bits,
+//! so the GPU's memory for meshes stays where M4 measured it.
 //!
 //! **Translate the palette, not each block** (worth teaching). A sub-chunk
 //! layer stores a short palette of block ids and a small index per
@@ -30,7 +51,10 @@ use crate::{
         shapes,
     },
     render::tint::{Tint, Tints},
-    world::{AIR, World},
+    world::{
+        AIR, World,
+        light::{ChunkLight, Kind},
+    },
 };
 
 /// The neighbourhood's width: 16 blocks and a border block on each side.
@@ -40,6 +64,9 @@ const WHOLE: i16 = 16 * POSITION_SCALE;
 /// A whole texture, in the vertex's units.
 const UV_WHOLE: u8 = 16 * UV_SCALE;
 const CELLS: usize = PAD * PAD * PAD;
+/// Open sky by day, packed as a vertex's light: sky 15, no block light. What a
+/// neighbourhood holds before it's lit, as an icon's or a test's is.
+const DAYLIGHT: u8 = 15 << 4;
 
 /// A cell's index from padded coordinates, each 0 to 17. x is innermost, so
 /// a row of blocks is contiguous.
@@ -79,25 +106,45 @@ pub struct Vertex {
     pub layer: u16,
     /// Texture coordinates in 128ths of the texture ([`UV_SCALE`]): 0 to 128.
     pub uv: [u8; 2],
-    /// The face (bits 0 to 2: [`Face`] order, or [`DIAGONAL`]) and the render
-    /// class (bits 3 and 4: opaque, cutout, overlay, blend).
+    /// The face (bits 0 to 2: [`Face`] order, or [`DIAGONAL`]), the render
+    /// class (bits 3 and 4: opaque, cutout, overlay, blend), and how many of
+    /// the three blocks around the corner shade it (bits 5 and 6).
     pub face_class: u8,
-    pub unused: u8,
+    /// The light at the corner: the sky's level in the high half, the
+    /// blocks' in the low (m5-plan Decision 12).
+    pub light: u8,
     /// The tint, RGBA. White leaves the texture as it is.
     pub tint: [u8; 4],
 }
 
 impl Vertex {
-    #[cfg(test)]
     #[must_use]
     pub const fn face(&self) -> u8 {
         self.face_class & 0b111
     }
 
-    #[cfg(test)]
     #[must_use]
     pub const fn class(&self) -> u8 {
-        self.face_class >> 3
+        self.face_class >> 3 & 0b11
+    }
+
+    /// How many of the three blocks around the corner shade it, 0 to 3.
+    #[cfg(test)]
+    #[must_use]
+    pub const fn occlusion(&self) -> u8 {
+        self.face_class >> 5 & 0b11
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub const fn sky(&self) -> u8 {
+        self.light >> 4
+    }
+
+    #[cfg(test)]
+    #[must_use]
+    pub const fn block(&self) -> u8 {
+        self.light & 15
     }
 
     /// The position in sixteenths of a block, for a corner on that grid.
@@ -146,8 +193,12 @@ pub struct Neighbourhood {
     ids: HashMap<u32, u16>,
     /// For each of the two layers, every cell's index into `looks`.
     cells: [Box<[u16]>; 2],
+    /// Every cell's light, packed as a vertex's: sky high, blocks low.
+    light: Box<[u8]>,
     /// The biome of each column, at `x + 16 z`.
     biomes: [u32; 256],
+    /// Smooth lighting and shade, or one light for each face (the setting).
+    pub smooth: bool,
 }
 
 impl Neighbourhood {
@@ -158,8 +209,10 @@ impl Neighbourhood {
             looks: vec![*table.get(AIR)],
             ids: HashMap::from([(AIR, 0)]),
             cells: [vec![0; CELLS].into_boxed_slice(), vec![0; CELLS].into_boxed_slice()],
+            light: vec![DAYLIGHT; CELLS].into_boxed_slice(),
             // Plains, until a chunk says otherwise.
             biomes: [1; 256],
+            smooth: true,
         }
     }
 
@@ -232,11 +285,9 @@ impl Neighbourhood {
             }
         }
 
-        // A liquid's corners take in the diagonals, so it's only there that the
-        // border's edges are worth filling in.
-        if n.looks.iter().any(|look| look.liquid().is_some()) {
-            n.fill_edges(world, table, chunk_x, base_y, chunk_z);
-        }
+        // A corner's light and shade, and a liquid's height, take in the diagonals.
+        n.fill_edges(world, table, chunk_x, base_y, chunk_z);
+        n.gather_light(world, chunk_x, base_y, chunk_z);
 
         // One biome per column: the sub-chunk's middle.
         for z in 0..16 {
@@ -249,8 +300,36 @@ impl Neighbourhood {
         Some(n)
     }
 
-    /// The border's edges and corners. A chunk that isn't loaded leaves them air, and
-    /// a corner of liquid beside it is a little off until the sub-chunk's next meshed.
+    /// Every cell's light, from the world's (`world/light`). A chunk that isn't lit
+    /// leaves its cells dark, but the meshes wait until all of them are.
+    fn gather_light(&mut self, world: &World, chunk_x: i32, base_y: i32, chunk_z: i32) {
+        let light = world.light();
+        let around: [[Option<&ChunkLight>; 3]; 3] =
+            [-1, 0, 1].map(|dx| [-1, 0, 1].map(|dz| light.chunk(chunk_x + dx, chunk_z + dz)));
+        for x in 0..PAD {
+            // The chunk each cell is in: -1 and 16 are the neighbours'.
+            let (slot_x, column_x) = (usize::from(x != 0) + usize::from(x == PAD - 1), (x + 15) % 16);
+            for z in 0..PAD {
+                let (slot_z, column_z) = (usize::from(z != 0) + usize::from(z == PAD - 1), (z + 15) % 16);
+                let Some(chunk) = around[slot_x][slot_z] else {
+                    for y in 0..PAD {
+                        self.light[cell(x, y, z)] = 0;
+                    }
+                    continue;
+                };
+                for y in 0..PAD {
+                    let block_y = base_y + y as i32 - 1;
+                    // Above the world is open sky, and below it dark.
+                    let outside = if block_y < chunk.min_section * 16 { 0 } else { 15 };
+                    let sky = chunk.get(Kind::Sky, column_x, block_y, column_z).unwrap_or(outside);
+                    let block = chunk.get(Kind::Block, column_x, block_y, column_z).unwrap_or(0);
+                    self.light[cell(x, y, z)] = sky << 4 | block;
+                }
+            }
+        }
+    }
+
+    /// The border's edges and corners. A chunk that isn't loaded leaves them air.
     fn fill_edges(&mut self, world: &World, table: &AppearanceTable, chunk_x: i32, base_y: i32, chunk_z: i32) {
         let on_border = |value: usize| value == 0 || value == PAD - 1;
         for y in 0..PAD {
@@ -288,6 +367,14 @@ impl Neighbourhood {
         // The cells count from the border, so block 8 is cell 9.
         n.set(table, 0, cell(9, 9, 9), id);
         n
+    }
+
+    /// Sets a cell's light, by block coordinates relative to the sub-chunk (-1 to
+    /// 16 on each axis).
+    #[cfg(test)]
+    pub fn set_light(&mut self, x: i32, y: i32, z: i32, sky: u8, block: u8) {
+        let at = |value: i32| usize::try_from(value + 1).expect("inside the border");
+        self.light[cell(at(x), at(y), at(z))] = sky << 4 | block;
     }
 
     /// A neighbourhood from a function of block coordinates relative to the
@@ -752,21 +839,122 @@ impl Block<'_> {
             RenderClass::Blend => 3,
         };
         let tint = self.tint(look, tints);
+        let lit = self.light(face, &corners);
         let out = if look.class == RenderClass::Blend { &mut mesh.blend } else { &mut mesh.opaque };
-        for (corner, uv) in corners.into_iter().zip(uvs) {
+        for ((corner, uv), (light, shade)) in corners.into_iter().zip(uvs).zip(lit) {
             out.push(Vertex {
                 position: [0, 1, 2].map(|axis| self.local[axis] as i16 * 16 * POSITION_SCALE + corner[axis]),
                 layer: look.layer,
                 uv,
-                face_class: face | class << 3,
-                unused: 0,
+                face_class: face | class << 3 | shade << 5,
+                light,
                 tint,
             });
         }
     }
 
+    /// Each corner's light, packed as a vertex's, and how many blocks shade it.
+    fn light(&self, face: u8, corners: &[[i16; 3]; 4]) -> [(u8, u8); 4] {
+        let n = self.n;
+        let Some(&side) = Face::ALL.get(usize::from(face)) else {
+            // A plant's crossed planes: its own block's light.
+            return [(n.light[self.at], 0); 4];
+        };
+        let (axis, sign, across) = face_axes(side);
+        let beyond = self.at.wrapping_add_signed(sign * step(axis));
+        if let Shape::Liquid { .. } = self.look.shape {
+            // A liquid's face: the brighter of its own block and the one it faces.
+            let (own, faced) = (n.light[self.at], n.light[beyond]);
+            return [((own >> 4).max(faced >> 4) << 4 | (own & 15).max(faced & 15), 0); 4];
+        }
+        // A face on the block's boundary looks into the block beside it; one inside
+        // looks into its own.
+        let plane = if sign > 0 { WHOLE } else { 0 };
+        let open = if corners.iter().all(|corner| corner[axis] == plane) { beyond } else { self.at };
+        if !n.smooth {
+            return [(n.light[open], 0); 4];
+        }
+        // The light and shade at the four corners of the block's face, by which end
+        // of each of the two axes across it they're at.
+        let at_corner = [-1, 1].map(|first| [-1, 1].map(|second| n.corner(open, across, first, second)));
+        corners.map(|corner| {
+            // Where on the block's face the vertex falls, from 0 to 1 each way.
+            let [u, v] = across.map(|axis| (f32::from(corner[axis]) / f32::from(WHOLE)).clamp(0.0, 1.0));
+            let mix = |value: fn(&Corner) -> f32| {
+                let near = value(&at_corner[0][0]) + (value(&at_corner[0][1]) - value(&at_corner[0][0])) * v;
+                let far = value(&at_corner[1][0]) + (value(&at_corner[1][1]) - value(&at_corner[1][0])) * v;
+                (near + (far - near) * u).round() as u8
+            };
+            (mix(|c| c.sky) << 4 | mix(|c| c.block), mix(|c| c.shade))
+        })
+    }
+
     fn world_position(&self) -> [i32; 3] {
         [0, 1, 2].map(|axis| self.n.origin[axis] + i32::from(self.local[axis]))
+    }
+}
+
+/// The light and shade at one corner of a block's face, before it's packed.
+struct Corner {
+    sky: f32,
+    block: f32,
+    /// How many of the three blocks around it are solid.
+    shade: f32,
+}
+
+impl Neighbourhood {
+    fn occludes(&self, at: usize) -> bool {
+        self.looks[usize::from(self.cells[0][at])].occludes
+    }
+
+    /// The corner of a face looking into cell `open`, at the `first` end (-1 or 1)
+    /// of the first axis across it and the `second` end of the second, as Java's
+    /// `AmbientOcclusionFace` works it out.
+    fn corner(&self, open: usize, across: [usize; 2], first: isize, second: isize) -> Corner {
+        let beside_first = open.wrapping_add_signed(first * step(across[0]));
+        let beside_second = open.wrapping_add_signed(second * step(across[1]));
+        let diagonal = beside_first.wrapping_add_signed(second * step(across[1]));
+        let (solid_first, solid_second) = (self.occludes(beside_first), self.occludes(beside_second));
+        // Between two solid sides, what's across the corner can't be seen.
+        let (diagonal, solid_diagonal) = if solid_first && solid_second {
+            (beside_first, true)
+        } else {
+            (diagonal, self.occludes(diagonal))
+        };
+        let middle = self.light[open];
+        // No light at all, as in stone, counts as the middle's.
+        let light = |at: usize| match self.light[at] {
+            0 => middle,
+            light => light,
+        };
+        let lights = [middle, light(beside_first), light(beside_second), light(diagonal)];
+        Corner {
+            sky: f32::from(lights.iter().map(|light| light >> 4).sum::<u8>()) / 4.0,
+            block: f32::from(lights.iter().map(|light| light & 15).sum::<u8>()) / 4.0,
+            shade: f32::from(u8::from(solid_first) + u8::from(solid_second) + u8::from(solid_diagonal)),
+        }
+    }
+}
+
+/// A face's normal axis (0 to 2 for x, y and z), which way along it the face
+/// looks, and the two axes across it.
+const fn face_axes(face: Face) -> (usize, isize, [usize; 2]) {
+    match face {
+        Face::Down => (1, -1, [0, 2]),
+        Face::Up => (1, 1, [0, 2]),
+        Face::North => (2, -1, [0, 1]),
+        Face::South => (2, 1, [0, 1]),
+        Face::West => (0, -1, [2, 1]),
+        Face::East => (0, 1, [2, 1]),
+    }
+}
+
+/// The step to the next cell along an axis.
+const fn step(axis: usize) -> isize {
+    match axis {
+        0 => 1,
+        1 => (PAD * PAD) as isize,
+        _ => PAD as isize,
     }
 }
 

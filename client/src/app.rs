@@ -208,6 +208,7 @@ impl<'a> App<'a> {
         let now = Instant::now();
         let input = Input::new(settings.keymap.clone());
         let ui = Ui::new(assets.ui.atlas, assets.ui.font, assets.ui.lang, assets.ui.icons, settings.ui_scale);
+        let flat_lighting = !settings.smooth_lighting;
         Self {
             server,
             session,
@@ -222,7 +223,7 @@ impl<'a> App<'a> {
             animated_tick: None,
             tints: assets.tints,
             approximate: Some(assets.approximate),
-            meshes: Meshes::default(),
+            meshes: Meshes::new(flat_lighting),
             terrain: None,
             ui,
             ui_picture: Some(assets.ui.picture),

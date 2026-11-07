@@ -7,10 +7,10 @@
 //! a block changing (its sub-chunk, and the one across a border it's on); light
 //! changing in it or beside it (`world/light`). A dropped chunk's meshes go.
 //!
-//! **Meshing waits for light** (m5-plan Decision 11): a sub-chunk whose chunk,
-//! or a side neighbour, isn't lit yet waits, and so does one whose chunk lacks a
-//! side neighbour. Each chunk's first light marks it and its neighbours dirty
-//! again.
+//! **Meshing waits for light** (m5-plan Decisions 11 and 12): a sub-chunk waits
+//! until its chunk and all eight around it are lit, since a corner's light and
+//! shade take in the blocks diagonally beside it. Each chunk's first light marks
+//! it and its eight neighbours dirty again.
 
 use std::{
     collections::{HashMap, HashSet},
@@ -127,6 +127,9 @@ impl MeshStats {
     }
 }
 
+/// A chunk and the eight around it, as offsets.
+const AROUND: [(i32, i32); 9] = [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1), (1, 1), (1, -1), (-1, 1), (-1, -1)];
+
 /// The sub-chunks a block's change touches: its own, and across any border it's on,
 /// since the face beside it is in the neighbour's mesh.
 fn touched(x: i32, y: i32, z: i32) -> Vec<SubChunkKey> {
@@ -167,6 +170,8 @@ pub struct Meshes {
     fresh_work: bool,
     /// Sub-chunks the player's edits made dirty, to mesh ahead of the queue.
     urgent: Vec<SubChunkKey>,
+    /// One light for each face, and no shade: `smooth_lighting = false`.
+    pub flat_lighting: bool,
     /// The most quads in any mesh, which the shared index buffer must cover.
     max_quads: u32,
     pub stats: MeshStats,
@@ -181,6 +186,15 @@ pub struct Meshes {
 }
 
 impl Meshes {
+    /// No meshes yet, lit smoothly or with one light a face.
+    #[must_use]
+    pub fn new(flat_lighting: bool) -> Self {
+        Self {
+            flat_lighting,
+            ..Self::default()
+        }
+    }
+
     /// Marks what the world's changes make dirty, and drops the meshes of
     /// chunks it dropped.
     pub fn apply(&mut self, changes: Vec<Change>, world: &World) {
@@ -192,7 +206,7 @@ impl Meshes {
                     self.last_chunk = Some(now);
                 }
                 Change::Lit { x, z } => {
-                    for (dx, dz) in [(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)] {
+                    for (dx, dz) in AROUND {
                         self.mark_column(world, x + dx, z + dz);
                     }
                 }
@@ -325,12 +339,8 @@ impl Meshes {
             self.remove(key);
             return;
         }
-        // Not lit yet, or a side neighbour isn't: its first light will mark this dirty again.
-        let lit = |(x, z): (i32, i32)| world.is_lit(x, z);
-        if ![(0, 0), (1, 0), (-1, 0), (0, 1), (0, -1)]
-            .into_iter()
-            .all(|(dx, dz)| lit((key.x + dx, key.z + dz)))
-        {
+        // Not lit yet, or a neighbour isn't: its first light will mark this dirty again.
+        if !AROUND.into_iter().all(|(dx, dz)| world.is_lit(key.x + dx, key.z + dz)) {
             return;
         }
         let started = Instant::now();
@@ -338,6 +348,8 @@ impl Meshes {
         let Some(neighbourhood) = Neighbourhood::gather(world, table, key.x, index, key.z) else {
             return;
         };
+        let mut neighbourhood = neighbourhood;
+        neighbourhood.smooth = !self.flat_lighting;
         let mesh = mesher::mesh(&neighbourhood, tints);
         self.stats.meshed += 1;
         self.stats.mesh_time += started.elapsed();

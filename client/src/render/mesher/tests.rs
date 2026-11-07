@@ -729,3 +729,159 @@ fn grass_under_snow_shows_a_snowy_side() {
     assert_eq!(layer_quads(&covered.opaque, 40).len(), 4, "the four sides");
     assert_eq!(layer_quads(&covered.opaque, 41).len(), 2, "the top and bottom");
 }
+
+/// The quad of `face` on the block at (`x`, `y`, `z`).
+fn face_of(mesh: &Mesh, face: Face, x: i16, y: i16, z: i16) -> Vec<Vertex> {
+    let (low, high) = ([x, y, z].map(|v| v * 16), [x, y, z].map(|v| v * 16 + 16));
+    let (axis, sign, _) = face_axes(face);
+    quads(&mesh.opaque)
+        .into_iter()
+        .chain(quads(&mesh.blend))
+        .find(|quad| {
+            // Not the block beside's face on the far side of this one's boundary.
+            let plane = quad[0].at()[axis];
+            let own = if sign > 0 { plane > low[axis] } else { plane < high[axis] };
+            quad[0].face() == face as u8
+                && own
+                && quad.iter().all(|vertex| (0..3).all(|axis| (low[axis]..=high[axis]).contains(&vertex.at()[axis])))
+        })
+        .expect("the face")
+        .to_vec()
+}
+
+/// The corner of a quad at these sixteenths.
+fn corner_at(quad: &[Vertex], at: [i16; 3]) -> Vertex {
+    *quad.iter().find(|vertex| vertex.at() == at).expect("a corner there")
+}
+
+/// A stone floor at y 4, the whole sub-chunk wide.
+fn floor_and(extra: &[(i32, i32, i32, u32)]) -> Vec<(i32, i32, i32, u32)> {
+    let mut blocks: Vec<_> = (0..16).flat_map(|x| (0..16).map(move |z| (x, 4, z, STONE))).collect();
+    blocks.extend_from_slice(extra);
+    blocks
+}
+
+/// A neighbourhood of these blocks, lit as daylight until a test says otherwise.
+fn lit(blocks: &[(i32, i32, i32, u32)], water: &[(i32, i32, i32)]) -> Neighbourhood {
+    Neighbourhood::from_fn(&table(), [0, 0, 0], 1, |x, y, z, layer| match layer {
+        0 => blocks.iter().find(|&&(bx, by, bz, _)| (bx, by, bz) == (x, y, z)).map_or(AIR, |&(.., id)| id),
+        _ if water.contains(&(x, y, z)) => WATER,
+        _ => AIR,
+    })
+}
+
+#[test]
+fn shade_in_the_open_along_an_edge_and_in_a_corner() {
+    let up = |extra: &[(i32, i32, i32, u32)]| face_of(&mesh_of(&floor_and(extra), &[]), Face::Up, 5, 4, 5);
+    // In the open, nothing shades the floor's top.
+    assert!(up(&[]).iter().all(|vertex| vertex.occlusion() == 0));
+    // A block beside the block the face looks into, to the east: one at the east corners.
+    let edge = up(&[(6, 5, 5, STONE)]);
+    for (corner, shade) in [([96, 80, 80], 1), ([96, 80, 96], 1), ([80, 80, 80], 0), ([80, 80, 96], 0)] {
+        assert_eq!(corner_at(&edge, corner).occlusion(), shade, "{corner:?}");
+    }
+    // East and south: the corner between them is as dark as it gets.
+    let corner = up(&[(6, 5, 5, STONE), (5, 5, 6, STONE)]);
+    for (at, shade) in [([96, 80, 96], 3), ([96, 80, 80], 1), ([80, 80, 96], 1), ([80, 80, 80], 0)] {
+        assert_eq!(corner_at(&corner, at).occlusion(), shade, "{at:?}");
+    }
+    // Only across a corner: just that corner.
+    let across = up(&[(6, 5, 6, STONE)]);
+    assert_eq!(corner_at(&across, [96, 80, 96]).occlusion(), 1);
+    assert_eq!(corner_at(&across, [96, 80, 80]).occlusion(), 0);
+}
+
+#[test]
+fn smooth_light_averages_the_four_blocks_around_a_corner() {
+    let mut n = lit(&floor_and(&[]), &[]);
+    // The block the face looks into, the ones beside it to the east and the south, and across.
+    n.set_light(5, 5, 5, 15, 0);
+    n.set_light(6, 5, 5, 11, 2);
+    n.set_light(5, 5, 6, 7, 4);
+    n.set_light(6, 5, 6, 3, 6);
+    let quad = face_of(&mesh(&n, &tints()), Face::Up, 5, 4, 5);
+    let east_south = corner_at(&quad, [96, 80, 96]);
+    assert_eq!((east_south.sky(), east_south.block()), (9, 3), "(15 + 11 + 7 + 3) / 4, and (0 + 2 + 4 + 6) / 4");
+    assert_eq!(corner_at(&quad, [80, 80, 80]).sky(), 15, "the west and north are open sky");
+
+    // A block with no light at all, as stone has, counts as the middle one.
+    n.set_light(6, 5, 5, 0, 0);
+    let quad = face_of(&mesh(&n, &tints()), Face::Up, 5, 4, 5);
+    assert_eq!(corner_at(&quad, [96, 80, 96]).sky(), 10, "(15 + 15 + 7 + 3) / 4");
+}
+
+#[test]
+fn a_face_inside_its_block_looks_into_its_own() {
+    let dimmer_around = |n: &mut Neighbourhood| {
+        for x in 4..=6 {
+            for z in 4..=6 {
+                n.set_light(x, 5, z, 9, 0);
+            }
+        }
+    };
+    // A slab's top, halfway up its block, takes its own block's light.
+    let mut slab = lit(&[(5, 5, 5, SLAB)], &[]);
+    dimmer_around(&mut slab);
+    assert!(face_of(&mesh(&slab, &tints()), Face::Up, 5, 5, 5).iter().all(|vertex| vertex.sky() == 9));
+    // A cube's top looks into the block above, open to the sky.
+    let mut cube = lit(&[(5, 5, 5, STONE)], &[]);
+    dimmer_around(&mut cube);
+    assert!(face_of(&mesh(&cube, &tints()), Face::Up, 5, 5, 5).iter().all(|vertex| vertex.sky() == 15));
+}
+
+#[test]
+fn flat_lighting_gives_a_face_the_light_it_looks_into_and_no_shade() {
+    let mut n = lit(&floor_and(&[(6, 5, 5, STONE), (5, 5, 6, STONE)]), &[]);
+    n.set_light(5, 5, 5, 12, 3);
+    n.set_light(6, 5, 6, 2, 0);
+    n.smooth = false;
+    let quad = face_of(&mesh(&n, &tints()), Face::Up, 5, 4, 5);
+    assert!(quad.iter().all(|vertex| (vertex.sky(), vertex.block(), vertex.occlusion()) == (12, 3, 0)));
+}
+
+#[test]
+fn a_liquid_takes_the_brighter_of_its_own_light_and_the_one_it_faces() {
+    let mut n = lit(&[(5, 5, 5, WATER)], &[]);
+    n.set_light(5, 5, 5, 14, 3);
+    n.set_light(5, 6, 5, 12, 7);
+    let top = face_of(&mesh(&n, &tints()), Face::Up, 5, 5, 5);
+    assert!(top.iter().all(|vertex| (vertex.sky(), vertex.block(), vertex.occlusion()) == (14, 7, 0)));
+}
+
+#[test]
+fn light_and_shade_fit_in_the_vertex_without_making_it_bigger() {
+    // The vertex M4 measured.
+    assert_eq!(size_of::<Vertex>(), 16);
+    let mut n = lit(&floor_and(&[(6, 5, 5, STONE), (5, 5, 6, STONE), (5, 5, 5, GLASS)]), &[]);
+    for (x, z) in [(5, 5), (6, 6), (6, 5), (5, 6)] {
+        n.set_light(x, 6, z, 10, 5);
+    }
+    let quad = face_of(&mesh(&n, &tints()), Face::Up, 5, 5, 5);
+    let vertex = corner_at(&quad, [96, 96, 96]);
+    assert_eq!(
+        (vertex.face(), vertex.class(), vertex.occlusion(), vertex.sky(), vertex.block()),
+        (Face::Up as u8, 1, 0, 10, 5),
+        "glass's top: up, cut out, open above, and lit"
+    );
+    let floor = corner_at(&face_of(&mesh(&n, &tints()), Face::Up, 4, 4, 5), [80, 80, 96]);
+    assert_eq!((floor.class(), floor.occlusion()), (0, 1), "the floor beside it, opaque, with a stone at its corner");
+}
+
+#[test]
+fn a_gathered_neighbourhood_has_the_worlds_light() {
+    let stone = BlockState::to_be_network_id(JavaBlock::STONE.default_state.id);
+    let table = AppearanceTable::from_looks([
+        (AIR, look(Shape::Invisible, RenderClass::Opaque, Tint::None, 0)),
+        (stone, look(Shape::Cube, RenderClass::Opaque, Tint::None, 1)),
+    ]);
+    let around: Vec<_> = (-1..=1).flat_map(|x| (-1..=1).map(move |z| (x, z))).collect();
+    let chunks: Vec<_> = around.iter().map(|&at| (at, if at == (0, 0) { &[(5, 70, 5)][..] } else { &[][..] })).collect();
+    let mut world = world_with(&chunks);
+    let top = |world: &World| {
+        let n = Neighbourhood::gather(world, &table, 0, 8, 0).unwrap();
+        face_of(&mesh(&n, &tints()), Face::Up, 5, 6, 5)
+    };
+    assert!(top(&world).iter().all(|vertex| vertex.sky() == 0), "dark until the chunks are lit");
+    world.update_light(std::time::Duration::MAX, (0, 0));
+    assert!(top(&world).iter().all(|vertex| vertex.sky() == 15), "open sky above the stone");
+}

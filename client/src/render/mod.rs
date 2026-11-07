@@ -14,6 +14,7 @@ pub mod meshes;
 pub mod outline;
 #[cfg(test)]
 mod sheet;
+pub mod sky;
 pub mod terrain;
 pub mod textures;
 pub mod animation;

@@ -16,7 +16,7 @@ use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, Vec3};
 
 use super::{
-    Gpu, SKY, animation::Animator, camera::Camera, crack::Crack, meshes::Meshes, outline::Outline,
+    Gpu, SKY, animation::Animator, camera::Camera, crack::Crack, meshes::Meshes, outline::Outline, sky,
     textures::TextureArray,
 };
 
@@ -41,6 +41,8 @@ pub struct Terrain {
     textures: wgpu::Texture,
     /// A view of it, which the UI's block icons sample too.
     pub texture_view: wgpu::TextureView,
+    /// What each pair of sky and block levels looks like (`sky.rs`).
+    light_map: wgpu::Texture,
     frame: wgpu::Buffer,
     depth: wgpu::TextureView,
     depth_size: (u32, u32),
@@ -105,6 +107,29 @@ impl Terrain {
             mipmap_filter: wgpu::MipmapFilterMode::Linear,
             ..Default::default()
         });
+        let light_map = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("light map"),
+            size: wgpu::Extent3d {
+                width: sky::SIZE as u32,
+                height: sky::SIZE as u32,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Not sRGB: the shader multiplies the sRGB values as they are.
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let light_map_view = light_map.create_view(&wgpu::TextureViewDescriptor::default());
+        // Linear, so a face's light runs smoothly between its corners' levels.
+        let light_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("light map"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
         let frame = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("frame"),
             size: size_of::<FrameUniform>() as u64,
@@ -140,6 +165,22 @@ impl Terrain {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
             ],
         });
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -157,6 +198,14 @@ impl Terrain {
                 wgpu::BindGroupEntry {
                     binding: 2,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 3,
+                    resource: wgpu::BindingResource::TextureView(&light_map_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::Sampler(&light_sampler),
                 },
             ],
         });
@@ -176,9 +225,10 @@ impl Terrain {
         let instances = instance_buffer(device, instance_capacity);
         let outline = Outline::new(device, format, DEPTH_FORMAT, &frame);
         let crack = Crack::new(device, textures.crack);
-        Self {
+        let terrain = Self {
             textures: uploaded,
             texture_view,
+            light_map,
             opaque,
             blend,
             cracking,
@@ -194,7 +244,32 @@ impl Terrain {
             crack,
             draws: 0,
             visible: 0,
-        }
+        };
+        terrain.set_light_map(gpu, &sky::light_map(sky::NOON));
+        terrain
+    }
+
+    /// What each pair of sky and block levels is drawn as, from now on.
+    pub fn set_light_map(&self, gpu: &Gpu, map: &[[u8; 4]; sky::SIZE * sky::SIZE]) {
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &self.light_map,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            bytemuck::cast_slice(map),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * sky::SIZE as u32),
+                rows_per_image: Some(sky::SIZE as u32),
+            },
+            wgpu::Extent3d {
+                width: sky::SIZE as u32,
+                height: sky::SIZE as u32,
+                depth_or_array_layers: 1,
+            },
+        );
     }
 
     /// Clears to the sky and draws every mesh the camera can see.

@@ -129,9 +129,9 @@ fn flattened(vertices: &[Vertex; 4]) -> Option<(f32, IconQuad)> {
             corners,
             uvs: vertices.each_ref().map(|vertex| vertex.uv.map(|axis| f32::from(axis) / uv_scale)),
             layer: first.layer,
-            overlay: first.face_class >> 3 == OVERLAY,
+            overlay: first.class() == OVERLAY,
             tint: [r, g, b],
-            shade: SHADE[usize::from(first.face_class & 0b111).min(SHADE.len() - 1)],
+            shade: SHADE[usize::from(first.face()).min(SHADE.len() - 1)],
         },
     ))
 }

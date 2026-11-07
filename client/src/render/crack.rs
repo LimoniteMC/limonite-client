@@ -146,7 +146,7 @@ mod tests {
             layer: 3,
             uv: [8, 16],
             face_class: 1,
-            unused: 0,
+            light: 0,
             tint: [255; 4],
         };
         let whole = 16 * POSITION_SCALE;
