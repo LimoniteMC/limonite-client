@@ -63,7 +63,7 @@ use crate::{
     session::{Session, Stage},
     settings::Settings,
     ui::{self, Ui, render::UiRenderer, screens::inventory::Pressed},
-    world::light,
+    world::light::{self, Kind},
 };
 
 /// What the window draws with, prepared before it opens.
@@ -608,12 +608,20 @@ impl<'a> App<'a> {
         let fps = self.fps;
         let (draws, visible) = self.terrain.as_ref().map_or((0, 0), |t| (t.draws, t.visible));
         let debug = self.browser.as_ref().map_or(String::new(), |browser| format!("{}; ", browser.label()));
+        // The light in the block at the player's feet, as Java's debug screen shows it, until
+        // Step 14 draws it.
+        let light = self.session.world().light();
+        let (x, y, z) = (p.x.floor() as i32, (p.y - EYE_HEIGHT).floor() as i32, p.z.floor() as i32);
+        let here = match (light.level(Kind::Sky, x, y, z), light.level(Kind::Block, x, y, z)) {
+            (Some(sky), Some(block)) => format!("; light {sky} sky, {block} block"),
+            _ => String::new(),
+        };
         window.set_title(&format!(
             "Limonite: {debug}{fps:.0} fps, {:.1} ms; {} chunks ({} unlit), {} meshes ({} waiting), {visible} \
-             visible, {draws} draws; at {:.1}, {:.1}, {:.1}",
+             visible, {draws} draws; at {:.1}, {:.1}, {:.1}{here}",
             1000.0 / fps.max(0.001),
             self.session.world().chunk_count(),
-            self.session.world().light().waiting(),
+            light.waiting(),
             self.meshes.len(),
             self.meshes.waiting(),
             p.x,

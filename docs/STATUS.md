@@ -263,8 +263,9 @@ cargo run -p limonite-client
   Space flies, Space and Shift rise and sink, and another double tap lands. Esc releases the mouse
   (until the pause menu, Step 16). P logs the pose as a `/tp` command for the official client.
   Every binding is in the settings file (below).
-- **The title bar** shows the frame rate and frame time, chunks, meshes and the queue, visible
-  meshes and draws, and the position. Closing the window saves the world and exits.
+- **The title bar** shows the frame rate and frame time, chunks and those still waiting for light,
+  meshes and the queue, visible meshes and draws, the position, and the sky and block light in the
+  block at the player's feet. Closing the window saves the world and exits.
 - **Window flags:**
   - `--bench <seconds>`: the M6 baseline flight ("Notes for M6"). Use a release build. It keeps
     M4's 70-degree field of view, whatever the settings say.

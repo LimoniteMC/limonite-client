@@ -271,8 +271,9 @@ flies). Closing the window saves the world.
 | <kbd>Esc</kbd> | Releases the mouse |
 | <kbd>P</kbd> | Logs where you are as a `/tp` command |
 
-The title bar shows the frame rate and frame time, the chunk and mesh counts, the draw calls and
-your position. Every key can be changed in the settings file (below).
+The title bar shows the frame rate and frame time, the chunk and mesh counts, the draw calls,
+your position, and the sky and block light where you stand. Every key can be changed in the settings
+file (below).
 
 <details>
 <summary><b>Command-line flags</b></summary>
