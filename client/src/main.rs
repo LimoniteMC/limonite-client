@@ -32,6 +32,7 @@ use std::{
     io,
     path::{Path, PathBuf},
     process::ExitCode,
+    sync::PoisonError,
     thread,
     time::{Duration, Instant},
 };
@@ -682,7 +683,17 @@ fn teleport_and_check(session: &mut Session, server: &EmbeddedServer) -> Check {
     let asked = Instant::now();
     player.request_teleport(to, entity.yaw.load(), entity.pitch.load());
     let _ = session.run_until(asked + TELEPORT_DEADLINE, |s| s.teleport_report().is_some());
-    checks::teleport(session.teleport_report(), eyes, asked.elapsed())
+    let waited = asked.elapsed();
+    // The server applies the input on its own tick, so give it a moment to see it.
+    let server_waits = || {
+        player
+            .awaiting_teleport
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .is_some()
+    };
+    let _ = session.run_until(Instant::now() + SETTLE, |_| !server_waits());
+    checks::teleport(session.teleport_report(), eyes, waited, server_waits())
 }
 
 /// What the host can click on from where it stands: looking around, each block a ray

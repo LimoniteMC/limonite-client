@@ -93,7 +93,16 @@ pub fn movement(server: &Server, spawn: &Spawn) -> Check {
 /// Whether the client went where the server teleported it, and said so in
 /// its next input, as the official client does: `HandledTeleport`, the new
 /// eye position, and a `delta` of 0 (m5-plan Step 5).
-pub fn teleport(report: Option<TeleportReport>, expected_eyes: Vector3<f64>, waited: Duration) -> Check {
+///
+/// `server_waits` says whether the server still waits for the client to reach
+/// it. Pumpkin ignores a Bedrock player's input until it does, and sends the
+/// teleport again every 20 inputs that don't (upstream, 2026-11-07).
+pub fn teleport(
+    report: Option<TeleportReport>,
+    expected_eyes: Vector3<f64>,
+    waited: Duration,
+    server_waits: bool,
+) -> Check {
     const NAME: &str = "teleport";
     let Some(report) = report else {
         return Check::new(
@@ -111,16 +120,21 @@ pub fn teleport(report: Option<TeleportReport>, expected_eyes: Vector3<f64>, wai
     let still = delta.x == 0.0 && delta.y == 0.0 && delta.z == 0.0;
     Check::new(
         NAME,
-        off < TELEPORT_TOLERANCE && still,
+        off < TELEPORT_TOLERANCE && still && !server_waits,
         format!(
             "input {} reported HandledTeleport {:.0} ms after the server's teleport, with the eyes \
              {off:.4} blocks from where the server put them (needs under {TELEPORT_TOLERANCE}) and a \
-             delta of ({}, {}, {})",
+             delta of ({}, {}, {}); the server {}",
             report.tick,
             waited.as_secs_f64() * 1000.0,
             delta.x,
             delta.y,
-            delta.z
+            delta.z,
+            if server_waits {
+                "still waits for the client to reach it, and ignores its input"
+            } else {
+                "saw it reached"
+            }
         ),
     )
 }
