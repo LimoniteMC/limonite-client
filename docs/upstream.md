@@ -137,7 +137,8 @@ None.
   --features client`, and 13 palette tests. The 3 that read private captures pass when given them.
 - **Client:** 403 client and 28 `packs` tests pass, the install's 2 as well, and clippy shows only its 2 older warnings.
   - `--headless --edits 4` passes in creative and in survival, 10 PASS lines each, in new worlds, and `--headless
-    --inventory` with `--hotbar` gives 11. No run logs a warning.
+    --inventory` with `--hotbar` gives 11. Each run's only warning is the server's for a new world, and the survival
+    run's log has the same one more as before, a packet for the host after it left.
 - **The stock server** was rebuilt from the merge (5 min 36 s in release).
 - **Not done:** an official-client join, which would show whether 1.26.63 still speaks 2225. Neither NetherNet nor the
   login changed, so the procedure doesn't ask for one.
