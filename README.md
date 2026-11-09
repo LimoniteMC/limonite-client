@@ -290,6 +290,7 @@ file (below).
 | `--gamemode <mode>` | The host's gamemode in a new world, for this run: `survival`, `creative`, `adventure` or `spectator` |
 | `--radius <chunks>` | The view distance to ask for, 2 to 32, for this run |
 | `--hotbar <items>` | Fills the hotbar when you join: item names separated by commas, each with `*` and a count if it isn't 1, like `"dirt*64,oak_log*32,torch"` |
+| `--time <ticks>` | Sets the world's time of day as it opens: 0 is sunrise, 6000 noon, 12000 sunset and 18000 midnight. The day goes on from there, and the world keeps it |
 | `--bench <seconds>` | Flies east for that long and logs frame times; use a release build |
 
 `--name`, `--gamemode` and `--radius` override the settings file without changing it.

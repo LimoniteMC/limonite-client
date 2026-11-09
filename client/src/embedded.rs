@@ -210,6 +210,19 @@ impl EmbeddedServer {
         player.sync_inventory_to_client();
     }
 
+    /// Sets every world's time of day, in ticks: 0 is sunrise, 6,000 noon, 12,000 sunset
+    /// and 18,000 midnight. It reaches clients as a `SetTime`, and the world keeps it
+    /// when it saves. With `stand_still`, the day stops there, as a picture needs.
+    pub fn set_time(&self, time: i64, stand_still: bool) {
+        let _runtime = self.runtime.enter();
+        for world in self.server.worlds.load().iter() {
+            let mut level_time = world.level_time.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            level_time.time_of_day = time;
+            level_time.paused = stand_still;
+            level_time.send_time(world);
+        }
+    }
+
     /// Stops the server, which kicks any players and saves the world, and waits
     /// for its thread to finish.
     ///

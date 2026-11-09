@@ -72,7 +72,7 @@ use crate::{
 const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [--java-jar <path>] [--data-dir <path>] \
                      [--debug-world] [--goto <text>] \
                      [--name <name>] [--gamemode <mode>] [--radius <chunks>] [--hotbar <items>] \
-                     [--bench <seconds>]\n       \
+                     [--time <ticks>] [--bench <seconds>]\n       \
                      limonite-client --headless [--home <path>] [--data-dir <path>] [--name <name>] \
                      [--gamemode <mode>] [--radius <chunks>] [--hotbar <items>] [--linger <seconds>] [--measure] \
                      [--map <path.png>] [--stream <blocks>] [--edits <blocks>] [--inventory]";
@@ -134,6 +134,8 @@ struct Args {
     /// What the host gets in its hotbar on joining: the way to get blocks until there's
     /// an inventory screen.
     hotbar: Vec<(&'static Item, u8)>,
+    /// The world's time of day to start at, in ticks, until the command line can set it.
+    time: Option<i64>,
     /// How long to stay in the world after the checks, still sending input,
     /// so the process can be inspected from outside.
     linger: Duration,
@@ -165,6 +167,7 @@ impl Args {
         let mut data_dir = None;
         let mut overrides = Overrides::default();
         let mut hotbar = Vec::new();
+        let mut time = None;
         let mut linger = Duration::ZERO;
         let mut measure = false;
         let mut map = None;
@@ -210,6 +213,16 @@ impl Args {
                 "--hotbar" => {
                     let list = args.next().ok_or("--hotbar needs a list of items")?;
                     hotbar = embedded::parse_hotbar(&list).map_err(|err| format!("--hotbar: {err}"))?;
+                }
+                "--time" => {
+                    let ticks = args.next().ok_or("--time needs a time of day in ticks")?;
+                    time = Some(
+                        ticks
+                            .parse::<i64>()
+                            .ok()
+                            .filter(|ticks| (0..24_000).contains(ticks))
+                            .ok_or(format!("--time: `{ticks}` isn't a time of day, 0 to 23999 ticks"))?,
+                    );
                 }
                 "--linger" => {
                     let secs = args.next().ok_or("--linger needs a number of seconds")?;
@@ -290,6 +303,7 @@ impl Args {
             data_dir: absolute(&data_dir)?,
             overrides,
             hotbar,
+            time,
             linger,
             measure,
             map: map.as_deref().map(absolute).transpose()?,
@@ -476,10 +490,15 @@ fn start_server(args: &Args, settings: &Settings, identity: &Identity) -> Result
         error!("{err}");
         return Err(ExitCode::FAILURE);
     }
-    EmbeddedServer::start(config).map_err(|err| {
+    let server = EmbeddedServer::start(config).map_err(|err| {
         error!("{err}");
         ExitCode::FAILURE
-    })
+    })?;
+    if let Some(time) = args.time {
+        server.set_time(time, false);
+        info!("The world's time of day is now {time} (--time); the day goes on from there");
+    }
+    Ok(server)
 }
 
 /// The scripted host session: log in, spawn, walk east, check the move on the
@@ -1343,4 +1362,23 @@ fn set_up_process() {
 fn enter_data_dir(dir: &Path) -> io::Result<()> {
     std::fs::create_dir_all(dir)?;
     std::env::set_current_dir(dir)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(flags: &[&str]) -> Result<Args, String> {
+        Args::parse(flags.iter().map(|flag| (*flag).to_string()))
+    }
+
+    #[test]
+    fn time_is_a_time_of_day_in_ticks() {
+        assert_eq!(parse(&["--time", "13000"]).unwrap().time, Some(13_000));
+        assert_eq!(parse(&[]).unwrap().time, None);
+        for bad in ["24000", "-1", "noon"] {
+            assert!(parse(&["--time", bad]).is_err(), "{bad}");
+        }
+        assert!(parse(&["--time"]).is_err());
+    }
 }

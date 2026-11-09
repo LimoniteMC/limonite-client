@@ -270,6 +270,9 @@ cargo run -p limonite-client
   meshes and the queue, visible meshes and draws, the position, and the sky and block light in the
   block at the player's feet. Closing the window saves the world and exits.
 - **Window flags:**
+  - `--time <ticks>`: sets the world's time of day through the server as it starts, for looking at sunset or night
+    until the command line can (m5-plan Step 16): 0 is sunrise, 6000 noon, 12000 sunset, 18000 midnight. The world
+    keeps it. It works with `--headless` too.
   - `--bench <seconds>`: the M6 baseline flight ("Notes for M6"). Use a release build. It keeps
     M4's 70-degree field of view, whatever the settings say.
 - **Dev builds** compile the client crate at `opt-level = 1` (root `Cargo.toml`), so meshing keeps

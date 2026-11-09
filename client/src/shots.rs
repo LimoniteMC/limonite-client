@@ -239,17 +239,6 @@ impl Studio {
         println!("Still loading after {} s; taking it anyway", LOADING.as_secs());
     }
 
-    /// Sets the time of day through the server, and stops it there.
-    fn set_time(&self, time: i64) {
-        let _runtime = self.server.runtime.enter();
-        for world in self.server.server.worlds.load().iter() {
-            let mut level_time = world.level_time.lock().expect("the level's time");
-            level_time.time_of_day = time;
-            level_time.paused = true;
-            level_time.send_time(world);
-        }
-    }
-
     /// Fills a box with a block, through the server.
     fn fill(&self, from: [i32; 3], to: [i32; 3], block: &Block) {
         let _runtime = self.server.runtime.enter();
@@ -471,7 +460,7 @@ fn screenshots() {
                 studio.shoot(shot, &out);
                 pictures += 1;
             }
-            Line::Time(time) => studio.set_time(*time),
+            Line::Time(time) => studio.server.set_time(*time, true),
             Line::Fill(from, to, block) => studio.fill(*from, *to, block),
         }
     }
