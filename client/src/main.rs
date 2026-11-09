@@ -531,6 +531,9 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             checks.push(walk_and_check(&mut session, server, &spawn));
             checks.push(checks::operator(&server.server, login::host_uuid(&settings.name, identity.xid())));
             checks.push(teleport_and_check(&mut session, server));
+            // The server probes once a second, from when the host has loaded.
+            let _ = session.run_until(Instant::now() + SETTLE, |_| checks::latency(&server.server).passed());
+            checks.push(checks::latency(&server.server));
             if args.measure || args.stream.is_some() {
                 // These runs stay a minute or more. A host left standing
                 // with its head in terrain dies in about 10 s, and the server
@@ -560,7 +563,7 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             true
         }
         _ => {
-            for name in ["movement", "operator", "teleport"] {
+            for name in ["movement", "operator", "teleport", "latency"] {
                 checks.push(Check::new(name, false, "not checked: never spawned".to_string()));
             }
             false

@@ -8,6 +8,7 @@ use pumpkin_protocol::{
     BClientPacket, PacketDecodeError, RawPacket,
     bedrock::{
         client::*,
+        network_stack_latency::NetworkStackLatency,
         packet_decoder::BedrockBatchDecoder,
         packet_encoder::BedrockBatchEncoder,
         server::{
@@ -88,6 +89,8 @@ packet_names!(
     CUpdateBlock,
     CUpdateTrade,
     CVoxelShapes,
+    // Goes both ways, so it has neither prefix.
+    NetworkStackLatency,
     // Pumpkin sends these serverbound structs to clients too: the packets go
     // both ways with the same layout.
     SActorEvent,

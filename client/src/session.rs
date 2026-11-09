@@ -24,6 +24,7 @@ use pumpkin_protocol::{
             CChunkRadiusUpdated, CDisconnect, CPlayStatus, CResourcePackStackPacket,
             CResourcePacksInfo, CStartGame, GameType,
         },
+        network_stack_latency::NetworkStackLatency,
         server::{
             animate::{ActorSwingSource, AnimateAction, SAnimate},
             block_pick_request::SBlockPickRequest,
@@ -491,6 +492,17 @@ impl Session {
             CChunkRadiusUpdated::PACKET_ID => match self.decode::<CChunkRadiusUpdated>(packet) {
                 Ok(update) => info!("Chunk radius is {}", update.chunk_radius.0),
                 Err(err) => warn!("Bad ChunkRadiusUpdated: {err}"),
+            },
+            // The server times the round trip with these, once a second. Bedrock clients
+            // answer with the probe's own timestamp, which is what Pumpkin matches on; the
+            // official client's answer is yet to be held up against a capture.
+            NetworkStackLatency::PACKET_ID => match self.decode::<NetworkStackLatency>(packet) {
+                Ok(probe) if probe.from_server => self.send(&NetworkStackLatency {
+                    timestamp: probe.timestamp,
+                    from_server: false,
+                }),
+                Ok(_) => {}
+                Err(err) => warn!("Bad NetworkStackLatency: {err}"),
             },
             CDisconnect::PACKET_ID => {
                 match self.decode::<CDisconnect>(packet) {

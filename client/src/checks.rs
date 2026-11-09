@@ -5,7 +5,7 @@
 
 use std::{
     collections::{HashMap, HashSet, VecDeque},
-    sync::{Arc, PoisonError},
+    sync::{Arc, PoisonError, atomic::Ordering},
     time::Duration,
 };
 
@@ -137,6 +137,27 @@ pub fn teleport(
             }
         ),
     )
+}
+
+/// Whether the server measured the host's round trip, from the
+/// `NetworkStackLatency` probes it sends once a second and the client answers.
+/// Pumpkin waits that long before pushing a Bedrock player again after a motion of
+/// its own, and takes an unmeasured round trip as 9 ticks (`client_push.rs`).
+pub fn latency(server: &Server) -> Check {
+    const NAME: &str = "latency";
+    let players = server.get_all_players();
+    let Some(player) = players.first() else {
+        return Check::new(NAME, false, "server has no player".to_string());
+    };
+    // 0 is Pumpkin's "not measured": it keeps every sample at 1 ms or more.
+    match player.ping.load(Ordering::Relaxed) {
+        0 => Check::new(NAME, false, "the server has no answer to its NetworkStackLatency probes".to_string()),
+        ping => Check::new(
+            NAME,
+            true,
+            format!("the server measured the host's round trip at {ping} ms from its NetworkStackLatency probes"),
+        ),
+    }
 }
 
 /// Whether the server knows the host by the UUID the client worked out for
