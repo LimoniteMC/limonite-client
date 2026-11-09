@@ -28,6 +28,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use glam::Vec3;
 use pumpkin_data::item::Item;
 use pumpkin_util::math::vector3::Vector3;
 use tracing::{debug, error, info, warn};
@@ -56,6 +57,7 @@ use crate::{
         camera::{Camera, FOV_Y},
         crack::Cracked,
         meshes::{self, Meshes},
+        sky::{self, Eyes, FogSettings, Medium},
         terrain::Terrain,
         textures::TextureArray,
         tint::Tints,
@@ -77,6 +79,8 @@ pub struct Assets {
     /// The ids drawn as approximate shapes, for the census once the join settles.
     pub approximate: HashMap<u32, String>,
     pub ui: ui::Assets,
+    /// Bedrock's fogs, from the install.
+    pub fog: FogSettings,
 }
 
 /// The longest step the bench's camera takes in one frame, so a hitch doesn't
@@ -161,6 +165,9 @@ pub struct App<'a> {
     approximate: Option<HashMap<u32, String>>,
     meshes: Meshes,
     terrain: Option<Terrain>,
+    fog: FogSettings,
+    /// What the camera's eyes are in.
+    eyes: Eyes,
     ui: Ui,
     /// The CPU copy of the UI's atlas, until it's uploaded.
     ui_picture: Option<image::RgbaImage>,
@@ -225,6 +232,8 @@ impl<'a> App<'a> {
             approximate: Some(assets.approximate),
             meshes: Meshes::new(flat_lighting),
             terrain: None,
+            fog: assets.fog,
+            eyes: Eyes::default(),
             ui,
             ui_picture: Some(assets.ui.picture),
             ui_renderer: None,
@@ -554,6 +563,17 @@ impl<'a> App<'a> {
 
         self.ui.update(self.session.game());
 
+        // The sky and fog: the time of day, what the eyes are in, and where they look.
+        let time = self.session.game().time().get().unwrap_or(sky::NOON_TICKS);
+        let view = self.view_depth();
+        let sky_frame = match &self.camera {
+            Some(camera) => {
+                let medium = self.eyes.medium(self.session.world(), &self.table, camera.position, now);
+                sky::frame(&self.fog, time, medium, view, camera.forward())
+            }
+            None => sky::frame(&self.fog, time, Medium::Air, view, Vec3::Z),
+        };
+
         // Separate fields, borrowed separately: the frame needs the GPU
         // mutably while the terrain and meshes are read.
         let (Some(gpu), Some(terrain), Some(ui_renderer)) = (&mut self.gpu, &mut self.terrain, &mut self.ui_renderer)
@@ -576,10 +596,11 @@ impl<'a> App<'a> {
             self.animated_tick = Some(self.animation_tick);
             terrain.animate(gpu, &mut self.animator, self.animation_tick);
         }
+        terrain.set_daylight(gpu, sky::daylight(time));
         let (camera, meshes) = (self.camera.as_ref(), &self.meshes);
         let ui_renderer = &*ui_renderer;
         let drawn = gpu.frame(|gpu, views, encoder| {
-            terrain.draw(gpu, &views.world, encoder, camera, meshes);
+            terrain.draw(gpu, &views.world, encoder, camera, meshes, &sky_frame);
             ui_renderer.draw(&views.ui, encoder);
         });
         if drawn == Frame::Drawn {
@@ -599,6 +620,11 @@ impl<'a> App<'a> {
             }
         }
         self.once_a_second(now);
+    }
+
+    /// How far the view reaches, in blocks: what the fog ends at.
+    fn view_depth(&self) -> f32 {
+        self.settings.radius as f32 * 16.0
     }
 
     fn set_title(&self) {

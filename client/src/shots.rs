@@ -27,6 +27,13 @@
 //! a space, and the picture gets the block's name on it. A hotbar slot can follow the
 //! seconds, to select it just before the picture, so that the item's name shows.
 //!
+//! Two more kinds of line set the scene for the pictures after them, through the server:
+//!
+//! ```text
+//! time 12500                      # the time of day, which then stands still
+//! fill 10 64 10 14 66 14 torch    # a box of a block, corner to corner
+//! ```
+//!
 //! `LIMONITE_SHOTS_HOTBAR` fills the hotbar first, through the server: item names
 //! separated by commas, each with `*` and a count if it isn't 1. `LIMONITE_SHOTS_XP`
 //! gives a level and how far the bar is filled, also through the server: `7,0.4`.
@@ -41,7 +48,12 @@ use std::{
     time::{Duration, Instant},
 };
 
-use pumpkin_util::{GameMode, math::vector3::Vector3};
+use pumpkin_data::Block;
+use pumpkin_util::{
+    GameMode,
+    math::{position::BlockPos, vector3::Vector3},
+};
+use pumpkin_world::world::BlockFlags;
 
 use crate::{
     Args,
@@ -56,6 +68,7 @@ use crate::{
         animation::Animator,
         camera::Camera,
         meshes::Meshes,
+        sky::{self, Eyes, FogSettings},
         terrain::Terrain,
         tint::Tints,
     },
@@ -86,6 +99,30 @@ struct Shot {
     seconds: f32,
     /// The hotbar slot to select just before the picture.
     slot: Option<u8>,
+}
+
+/// A line of the list.
+enum Line {
+    Shot(Shot),
+    /// The time of day from now on, standing still.
+    Time(i64),
+    /// A box of a block, from one corner to the other.
+    Fill([i32; 3], [i32; 3], &'static Block),
+}
+
+impl Line {
+    fn parse(line: &str) -> Option<Self> {
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        match *parts.first()? {
+            "time" => Some(Self::Time(parts.get(1)?.parse().ok()?)),
+            "fill" => {
+                let number = |index: usize| parts.get(index).and_then(|part| part.parse::<i32>().ok());
+                let corner = |at: usize| Some([number(at)?, number(at + 1)?, number(at + 2)?]);
+                Some(Self::Fill(corner(1)?, corner(4)?, Block::from_name(parts.get(7)?)?))
+            }
+            _ => Shot::parse(line).map(Self::Shot),
+        }
+    }
 }
 
 enum Place {
@@ -136,6 +173,10 @@ struct Studio {
     camera: Camera,
     pose: Pose,
     browser: Option<Browser>,
+    fog: FogSettings,
+    eyes: Eyes,
+    /// How far the view reaches, in blocks.
+    view: f32,
 }
 
 impl Studio {
@@ -196,6 +237,31 @@ impl Studio {
             }
         }
         println!("Still loading after {} s; taking it anyway", LOADING.as_secs());
+    }
+
+    /// Sets the time of day through the server, and stops it there.
+    fn set_time(&self, time: i64) {
+        let _runtime = self.server.runtime.enter();
+        for world in self.server.server.worlds.load().iter() {
+            let mut level_time = world.level_time.lock().expect("the level's time");
+            level_time.time_of_day = time;
+            level_time.paused = true;
+            level_time.send_time(world);
+        }
+    }
+
+    /// Fills a box with a block, through the server.
+    fn fill(&self, from: [i32; 3], to: [i32; 3], block: &Block) {
+        let _runtime = self.server.runtime.enter();
+        let world = self.server.server.worlds.load().first().expect("a world").clone();
+        let range = |axis: usize| from[axis].min(to[axis])..=from[axis].max(to[axis]);
+        for x in range(0) {
+            for y in range(1) {
+                for z in range(2) {
+                    world.set_block_state(&BlockPos::new(x, y, z), block.default_state.id, BlockFlags::NOTIFY_ALL);
+                }
+            }
+        }
     }
 
     /// Fills the hotbar through the server.
@@ -260,6 +326,10 @@ impl Studio {
             self.ui_renderer.upload(&self.gpu, drawing);
         }
         self.terrain.animate(&self.gpu, &mut self.animator, self.tick);
+        let time = self.session.game().time().get().unwrap_or(sky::NOON_TICKS);
+        let medium = self.eyes.medium(self.session.world(), &self.table, self.camera.position, Instant::now());
+        let sky_frame = sky::frame(&self.fog, time, medium, self.view, self.camera.forward());
+        self.terrain.set_daylight(&self.gpu, sky::daylight(time));
         let aimed = aim::from_camera(self.session.game(), &self.camera);
         let boxes = aimed.as_ref().map_or(&[][..], |hit| &hit.boxes);
         self.terrain.outline.show(&self.gpu, self.camera.position, boxes);
@@ -270,7 +340,7 @@ impl Studio {
             ..Default::default()
         });
         let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        self.terrain.draw(&self.gpu, &world, &mut encoder, Some(&self.camera), &self.meshes);
+        self.terrain.draw(&self.gpu, &world, &mut encoder, Some(&self.camera), &self.meshes, &sky_frame);
         self.ui_renderer.draw(&over, &mut encoder);
         let picture = read_back(&self.gpu, &self.target, encoder);
         let file = out.join(format!("{}.png", shot.name));
@@ -301,11 +371,11 @@ fn screenshots() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
     std::env::set_current_dir(&root).unwrap();
     let list = std::fs::read_to_string(std::env::var("LIMONITE_SHOTS").expect("LIMONITE_SHOTS is set")).unwrap();
-    let shots: Vec<Shot> = list
+    let lines: Vec<Line> = list
         .lines()
         .map(|line| line.split('#').next().unwrap_or_default())
         .filter(|line| !line.trim().is_empty())
-        .map(|line| Shot::parse(line).unwrap_or_else(|| panic!("can't read `{line}`")))
+        .map(|line| Line::parse(line).unwrap_or_else(|| panic!("can't read `{line}`")))
         .collect();
     let flags = std::env::var("LIMONITE_SHOTS_ARGS").unwrap_or_default();
     let args = Args::parse(flags.split_whitespace().map(str::to_string)).unwrap();
@@ -320,6 +390,8 @@ fn screenshots() {
     let looks = blocks::build_appearance(&palette, &vanilla, jar.as_mut());
     let tints = render::load_tints(&vanilla.stack);
     let ui_assets = ui::load(&vanilla.stack, &looks.table, &tints);
+    let (fog, fog_read) = FogSettings::load(&vanilla.stack);
+    fog_read.unwrap();
     let server = start_server(&args, &settings, &identity).unwrap();
     let browser = args.debug_world.then(|| {
         let layout = debug_world::Layout::build(&BlockTable::build());
@@ -382,6 +454,9 @@ fn screenshots() {
         camera,
         pose,
         browser,
+        fog,
+        eyes: Eyes::default(),
+        view: settings.radius as f32 * 16.0,
     };
     if let Ok(experience) = std::env::var("LIMONITE_SHOTS_XP") {
         studio.set_experience(&experience);
@@ -389,10 +464,18 @@ fn screenshots() {
     if let Ok(list) = std::env::var("LIMONITE_SHOTS_HOTBAR") {
         studio.fill_hotbar(&list);
     }
-    for shot in &shots {
-        studio.shoot(shot, &out);
+    let mut pictures = 0;
+    for line in &lines {
+        match line {
+            Line::Shot(shot) => {
+                studio.shoot(shot, &out);
+                pictures += 1;
+            }
+            Line::Time(time) => studio.set_time(*time),
+            Line::Fill(from, to, block) => studio.fill(*from, *to, block),
+        }
     }
-    println!("Wrote {} pictures to {}", shots.len(), out.display());
+    println!("Wrote {pictures} pictures to {}", out.display());
     let Studio { server, session, .. } = studio;
     drop(session);
     server.stop();
@@ -414,6 +497,12 @@ mod tests {
         assert!(matches!(&shot.place, Place::Find(text) if text == "oak_door upper"));
         assert_eq!(shot.seconds, 0.0);
 
+        assert!(matches!(Line::parse("time 12500"), Some(Line::Time(12_500))));
+        assert!(matches!(
+            Line::parse("fill 1 2 3 4 5 6 torch"),
+            Some(Line::Fill([1, 2, 3], [4, 5, 6], block)) if block.name == "torch"
+        ));
+        assert!(Line::parse("fill 1 2 3 torch").is_none());
         assert!(Shot::parse("too few").is_none());
         assert!(Shot::parse("wrong flying 20 20 @door").is_none());
         assert!(Shot::parse("short survival 20 20 1 2 3").is_none());

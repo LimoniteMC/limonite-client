@@ -282,15 +282,6 @@ fn choose_present_mode(offered: &[wgpu::PresentMode], uncapped: bool) -> wgpu::P
         .unwrap_or(wgpu::PresentMode::Fifo)
 }
 
-/// The sky's colour, the clear colour for now: Java's plains sky, #78A7FF,
-/// in linear light for an sRGB surface.
-pub const SKY: wgpu::Color = wgpu::Color {
-    r: 0.188,
-    g: 0.386,
-    b: 1.0,
-    a: 1.0,
-};
-
 /// Loads the biome tints, logging the colormaps, the climate table and the
 /// water colour.
 pub fn load_tints(stack: &PackStack) -> Tints {

@@ -16,7 +16,12 @@ use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, Vec3};
 
 use super::{
-    Gpu, SKY, animation::Animator, camera::Camera, crack::Crack, meshes::Meshes, outline::Outline, sky,
+    Gpu, animation::Animator,
+    camera::Camera,
+    crack::Crack,
+    meshes::Meshes,
+    outline::Outline,
+    sky::{self, SkyFrame},
     textures::TextureArray,
 };
 
@@ -24,15 +29,23 @@ const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Six indices per quad: two triangles, 0-1-2 and 0-2-3, counter-clockwise.
 pub const INDICES_PER_QUAD: u32 = 6;
 
-/// The per-frame uniform: rotation and projection.
+/// The per-frame uniform: rotation and projection first, which the outline reads
+/// too, then the sky and the fog (`terrain.wgsl`).
 #[repr(C)]
 #[derive(Clone, Copy, Pod, Zeroable)]
 struct FrameUniform {
     view_projection: [[f32; 4]; 4],
+    inverse_view_projection: [[f32; 4]; 4],
+    sky_colour: [f32; 4],
+    fog_colour: [f32; 4],
+    glow: [f32; 4],
+    /// Where the fog starts and ends, and which way along x the sun is.
+    fog: [f32; 4],
 }
 
 /// The terrain's GPU state.
 pub struct Terrain {
+    sky: wgpu::RenderPipeline,
     opaque: wgpu::RenderPipeline,
     blend: wgpu::RenderPipeline,
     cracking: wgpu::RenderPipeline,
@@ -41,8 +54,10 @@ pub struct Terrain {
     textures: wgpu::Texture,
     /// A view of it, which the UI's block icons sample too.
     pub texture_view: wgpu::TextureView,
-    /// What each pair of sky and block levels looks like (`sky.rs`).
+    /// What each pair of sky and block levels looks like (`sky.rs`), and for how
+    /// bright a sky.
     light_map: wgpu::Texture,
+    daylight: f32,
     frame: wgpu::Buffer,
     depth: wgpu::TextureView,
     depth_size: (u32, u32),
@@ -141,7 +156,7 @@ impl Terrain {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX,
+                    visibility: wgpu::ShaderStages::VERTEX_FRAGMENT,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -216,6 +231,7 @@ impl Terrain {
         });
         let shader = device.create_shader_module(wgpu::include_wgsl!("terrain.wgsl"));
         let format = gpu.config.format;
+        let sky = sky_pipeline(device, &pipeline_layout, &shader, format);
         let opaque = pipeline(device, &pipeline_layout, &shader, format, Kind::Opaque);
         let blend = pipeline(device, &pipeline_layout, &shader, format, Kind::Blend);
         let cracking = pipeline(device, &pipeline_layout, &shader, format, Kind::Crack);
@@ -229,6 +245,8 @@ impl Terrain {
             textures: uploaded,
             texture_view,
             light_map,
+            daylight: sky::NOON,
+            sky,
             opaque,
             blend,
             cracking,
@@ -249,8 +267,16 @@ impl Terrain {
         terrain
     }
 
+    /// Draws the light for a sky `daylight` bright (`sky::daylight`) from now on.
+    pub fn set_daylight(&mut self, gpu: &Gpu, daylight: f32) {
+        if daylight != self.daylight {
+            self.daylight = daylight;
+            self.set_light_map(gpu, &sky::light_map(daylight));
+        }
+    }
+
     /// What each pair of sky and block levels is drawn as, from now on.
-    pub fn set_light_map(&self, gpu: &Gpu, map: &[[u8; 4]; sky::SIZE * sky::SIZE]) {
+    fn set_light_map(&self, gpu: &Gpu, map: &[[u8; 4]; sky::SIZE * sky::SIZE]) {
         gpu.queue.write_texture(
             wgpu::TexelCopyTextureInfo {
                 texture: &self.light_map,
@@ -272,7 +298,7 @@ impl Terrain {
         );
     }
 
-    /// Clears to the sky and draws every mesh the camera can see.
+    /// Draws the sky, then every mesh the camera can see, faded into the fog.
     pub fn draw(
         &mut self,
         gpu: &Gpu,
@@ -280,6 +306,7 @@ impl Terrain {
         encoder: &mut wgpu::CommandEncoder,
         camera: Option<&Camera>,
         meshes: &Meshes,
+        sky: &SkyFrame,
     ) {
         if self.depth_size != (gpu.config.width, gpu.config.height) {
             (self.depth, self.depth_size) = depth_view(gpu);
@@ -300,8 +327,15 @@ impl Terrain {
                     visible.push((mesh, offset));
                 }
             }
+            let view_projection = camera.view_projection();
+            let colour = |[r, g, b]: [f32; 3]| [r, g, b, 1.0];
             let uniform = FrameUniform {
-                view_projection: camera.view_projection().to_cols_array_2d(),
+                view_projection: view_projection.to_cols_array_2d(),
+                inverse_view_projection: view_projection.inverse().to_cols_array_2d(),
+                sky_colour: colour(sky.sky),
+                fog_colour: colour(sky.fog),
+                glow: sky.glow,
+                fog: [sky.fog_start, sky.fog_end, sky.sun_side, 0.0],
             };
             gpu.queue.write_buffer(&self.frame, 0, bytemuck::bytes_of(&uniform));
         }
@@ -334,7 +368,12 @@ impl Terrain {
                 depth_slice: None,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(SKY),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: f64::from(sky.fog[0]),
+                        g: f64::from(sky.fog[1]),
+                        b: f64::from(sky.fog[2]),
+                        a: 1.0,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
@@ -350,10 +389,15 @@ impl Terrain {
         });
         self.draws = 0;
         self.visible = visible.len() as u32;
-        if visible.is_empty() {
+        if camera.is_none() {
             return;
         }
         pass.set_bind_group(0, &self.bind_group, &[]);
+        pass.set_pipeline(&self.sky);
+        pass.draw(0..3, 0..1);
+        if visible.is_empty() {
+            return;
+        }
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
         pass.set_vertex_buffer(1, self.instances.slice(..));
 
@@ -442,6 +486,47 @@ fn upload_textures(gpu: &Gpu, textures: &TextureArray) -> (wgpu::Texture, wgpu::
         ..Default::default()
     });
     (texture, view)
+}
+
+/// The sky's pipeline: one triangle over the screen, behind everything, writing no
+/// depth.
+fn sky_pipeline(
+    device: &wgpu::Device,
+    layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    format: wgpu::TextureFormat,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("sky"),
+        layout: Some(layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vertex_sky"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            buffers: &[],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: Some(wgpu::DepthStencilState {
+            format: DEPTH_FORMAT,
+            depth_write_enabled: Some(false),
+            depth_compare: Some(wgpu::CompareFunction::Always),
+            stencil: wgpu::StencilState::default(),
+            bias: wgpu::DepthBiasState::default(),
+        }),
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some("fragment_sky"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: None,
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 /// Which of the terrain's pipelines.

@@ -406,6 +406,10 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
         texture_layers: looks.textures.layers,
         uncapped: args.bench.is_some(),
     };
+    let (fog, fog_read) = render::sky::FogSettings::load(&vanilla.stack);
+    if let Err(err) = fog_read {
+        warn!("The install's fog didn't load, so it's Bedrock 1.26.60's: {err}");
+    }
     let assets = app::Assets {
         table: looks.table,
         textures: looks.textures,
@@ -413,6 +417,7 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
         tints,
         approximate,
         ui: ui_assets,
+        fog,
     };
     let browser = args.debug_world.then(|| {
         let layout = debug_world::Layout::build(&BlockTable::build());

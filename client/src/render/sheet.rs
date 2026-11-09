@@ -31,6 +31,7 @@ use super::{
     animation::Animator,
     mesher::{self, Neighbourhood},
     meshes::{Meshes, SubChunkKey},
+    sky,
     terrain::Terrain,
     textures::{self, TextureArray},
     tint::Tints,
@@ -580,7 +581,9 @@ impl Offscreen {
             mapped_at_creation: false,
         });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-        self.terrain.draw(&self.gpu, &self.view, &mut encoder, Some(camera), meshes);
+        // Noon, and no fog to speak of.
+        let sky = sky::frame(&sky::FogSettings::FALLBACK, sky::NOON_TICKS, sky::Medium::Air, 100_000.0, glam::Vec3::Z);
+        self.terrain.draw(&self.gpu, &self.view, &mut encoder, Some(camera), meshes, &sky);
         encoder.copy_texture_to_buffer(
             self.target.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
