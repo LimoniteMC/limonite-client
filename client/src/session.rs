@@ -822,6 +822,11 @@ impl Session {
         }
     }
 
+    /// Logs the entities that came, and how far apart their moves arrived (m5-plan Step 15).
+    pub fn log_entities(&self) {
+        self.game.entities().log();
+    }
+
     /// Logs what lighting cost over the session (m5-plan Decision 11, the stop rule).
     pub fn log_light(&self) {
         let stats = &self.game.world().light().stats;

@@ -6,6 +6,7 @@ mod clock;
 mod debug_world;
 mod edit;
 mod embedded;
+mod entities;
 mod game;
 mod home;
 mod identity;
@@ -41,6 +42,7 @@ use glam::DVec3;
 use pumpkin_core::{entity::player::Player as ServerPlayer, world::World as ServerWorld};
 use pumpkin_data::{
     Block,
+    entity::EntityType,
     item::{BedrockItem, Item},
     item_stack::ItemStack,
 };
@@ -545,6 +547,7 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             // `PlayerSpawn` only means the server has queued enough chunks,
             // not that they've arrived, so wait for them before checking.
             let join_chunks = wait_for_chunks(&mut session);
+            checks.push(entities_and_check(&mut session, server));
             if !args.hotbar.is_empty() {
                 checks.push(hotbar_and_check(&mut session, server, &args.hotbar));
             }
@@ -563,7 +566,7 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             true
         }
         _ => {
-            for name in ["movement", "operator", "teleport", "latency"] {
+            for name in ["movement", "operator", "teleport", "latency", "entities"] {
                 checks.push(Check::new(name, false, "not checked: never spawned".to_string()));
             }
             false
@@ -588,6 +591,7 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
     }
     session.log_edits();
     session.log_light();
+    session.log_entities();
     let mut passed = checks::report(&checks);
     if let Some(path) = &args.map {
         passed &= write_map(&session, path);
@@ -669,6 +673,28 @@ fn hotbar_and_check(session: &mut Session, server: &EmbeddedServer, stacks: &[(&
         got == wanted,
         format!("the client holds stacks of {got:?}, and {wanted:?} went in through the server"),
     )
+}
+
+/// What the entity check summons, so there's always something to compare: animals,
+/// which leave the host alone in survival too. They go where the host stands, which is
+/// open air, since one put into the ground suffocates; they push each other apart.
+const SUMMONS: [(&EntityType, [f64; 3]); 3] = [
+    (&EntityType::COW, [0.0, 0.0, 0.0]),
+    (&EntityType::PIG, [0.0, 0.0, 0.0]),
+    (&EntityType::CHICKEN, [0.0, 0.0, 0.0]),
+];
+
+/// Summons [`SUMMONS`] through the server, then runs ticks until the client has every
+/// entity the server shows the host, for up to [`SETTLE`], and checks it.
+fn entities_and_check(session: &mut Session, server: &EmbeddedServer) -> Check {
+    info!("Summoning {} animals beside the host", SUMMONS.len());
+    if let Some(feet) = server.host_feet() {
+        for (entity_type, offset) in SUMMONS {
+            server.summon(entity_type, [feet[0] + offset[0], feet[1] + offset[1], feet[2] + offset[2]]);
+        }
+    }
+    let _ = session.run_until(Instant::now() + SETTLE, |s| checks::entities(s, &server.server).passed());
+    checks::entities(session, &server.server)
 }
 
 fn teleport_and_check(session: &mut Session, server: &EmbeddedServer) -> Check {

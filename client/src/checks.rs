@@ -4,13 +4,13 @@
 //! done from outside while the session lingers.
 
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
     sync::{Arc, PoisonError, atomic::Ordering},
     time::Duration,
 };
 
 use pumpkin_core::{net::bedrock::level_chunk::CLevelChunk, server::Server};
-use pumpkin_data::{Block, BlockState, BlockStateId, biome::Biome};
+use pumpkin_data::{Block, BlockState, BlockStateId, biome::Biome, entity::EntityType};
 use pumpkin_util::{
     PermissionLvl,
     math::{vector2::Vector2, vector3::Vector3},
@@ -23,6 +23,7 @@ use tracing::{error, info};
 use uuid::Uuid;
 
 use crate::{
+    entities::kinds,
     session::{Session, Spawn, TeleportReport},
     world::{
         AIR, BlockTable, World,
@@ -135,6 +136,71 @@ pub fn teleport(
             } else {
                 "saw it reached"
             }
+        ),
+    )
+}
+
+/// How far apart the client's and the server's copy of an entity may be: the most a mob
+/// moves in a tick or two, while the server's tick and the client's reading of it overlap.
+const ENTITY_TOLERANCE: f64 = 0.5;
+
+/// Whether the client has every entity the server shows the host, and nothing else: the
+/// same ones, by runtime id, of the same types, and where the server has them. Positions
+/// are compared as Bedrock sends them, so a wrong offset between an entity's feet and
+/// its network position shows.
+pub fn entities(session: &Session, server: &Server) -> Check {
+    const NAME: &str = "entities";
+    let players = server.get_all_players();
+    let Some(player) = players.first() else {
+        return Check::new(NAME, false, "server has no player".to_string());
+    };
+    let mut theirs: HashMap<u64, (&'static EntityType, Vector3<f64>, bool)> = HashMap::new();
+    player.world().entity_tracker.for_each_entity_tracked_by(player, |entity| {
+        let base = entity.get_entity();
+        theirs.insert(base.entity_id as u64, (base.entity_type, entity.bedrock_pos(), base.has_vehicle()));
+    });
+    let ours = session.game().entities().latest();
+    let (mut wrong_type, mut far, mut exact, mut extra) = (0, 0, 0, 0);
+    // How far off the farthest is, and what it is.
+    let mut farthest = (0.0_f64, "none", false);
+    let mut by_name: BTreeMap<&str, u32> = BTreeMap::new();
+    for (runtime_id, entity_type, pose) in &ours {
+        let Some(&(their_type, at, riding)) = theirs.get(runtime_id) else {
+            extra += 1;
+            continue;
+        };
+        if entity_type.map(|t| t.id) != Some(their_type.id) {
+            wrong_type += 1;
+            continue;
+        }
+        *by_name.entry(their_type.resource_name).or_default() += 1;
+        let ours_at = pose.feet + glam::DVec3::Y * kinds::network_height(*entity_type);
+        let off = (ours_at - glam::DVec3::new(at.x, at.y, at.z)).length();
+        if off > farthest.0 {
+            farthest = (off, their_type.resource_name, riding);
+        }
+        if off > ENTITY_TOLERANCE {
+            far += 1;
+        } else if off < 0.001 {
+            exact += 1;
+        }
+    }
+    let missing = theirs.len() - (ours.len() - extra);
+    let counts: Vec<String> = by_name.iter().map(|(name, count)| format!("{count} {name}")).collect();
+    let passed = !theirs.is_empty() && missing == 0 && extra == 0 && wrong_type == 0 && far == 0;
+    Check::new(
+        NAME,
+        passed,
+        format!(
+            "the server shows the host {} entities and the client has {}: {missing} missing, {extra} extra, \
+             {wrong_type} of another type; {exact} exactly where the server has them, the farthest a {}{} {:.3} \
+             blocks off (needs under {ENTITY_TOLERANCE}); {}",
+            theirs.len(),
+            ours.len(),
+            farthest.1,
+            if farthest.2 { " riding" } else { "" },
+            farthest.0,
+            if counts.is_empty() { "none to compare".to_string() } else { counts.join(", ") }
         ),
     )
 }

@@ -135,6 +135,7 @@ pub fn run(
     }
     app.session.log_edits();
     app.session.log_light();
+    app.session.log_entities();
     // Dropping the app drops the session, so the host leaves before the
     // caller stops the server.
     match app.failure {

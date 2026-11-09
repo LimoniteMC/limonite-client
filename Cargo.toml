@@ -48,6 +48,8 @@ glam = "0.34.1"
 pollster = "1.0.1"
 # Casts vertices and uniforms to bytes for the GPU. Already in the lockfile through `image`.
 bytemuck = { version = "1.25.2", features = ["derive"] }
+# The entities' ECS (M5, m5-plan Decision 13): no scheduler, which suits the client's own loop.
+hecs = "0.11.2"
 # The map's PNG writer, and the block textures' PNG and TGA decoders. `png` is exactly
 # pumpkin-core's spec; `tga` is built into `image` and adds no package.
 image = { version = "0.25.10", default-features = false, features = ["png", "tga"] }

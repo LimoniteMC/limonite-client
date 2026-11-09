@@ -8,7 +8,7 @@
 //! and from Step 8 the UI, only read `Game`. So the wall PLAN.md puts between
 //! networking and rendering ("UI reads world state; it never reads packets
 //! directly") now holds for the player and the clock too, not just chunks.
-//! Entities and the inventory join it in later steps.
+//! The inventory joined it in Step 9, and the other entities in Step 15.
 
 use std::{fmt, time::Instant};
 
@@ -18,9 +18,12 @@ use pumpkin_protocol::{
     RawPacket,
     bedrock::{
         client::{
-            CCorrectPlayerMovePrediction, CMovePlayer, CSetActorMotion, CSetHealth, CSetPlayerGameType,
+            CAddActor, CAddItemActor, CAddPlayer, CChangeDimension, CCorrectPlayerMovePrediction,
+            CMoveActorAbsolute, CMoveActorDelta, CMovePlayer, CSetActorLink, CSetActorMotion, CSetHealth,
+            CSetPlayerGameType, common::ActorLink,
             CSetTime, CStartGame, CUpdateAbilities, CUpdateAttributes, GameType,
             container_open::CContainerOpen,
+            remove_actor::CRemoveActor,
             creative_content::CCreativeContent,
             inventory_content::CInventoryContent,
             inventory_slot::CInventorySlot,
@@ -42,6 +45,7 @@ use tracing::{info, warn};
 use crate::{
     clock::TimeOfDay,
     edit::predict::Predictions,
+    entities::Entities,
     inventory::{CONTAINER_MAIN, Inventory, creative::CreativeList},
     packets::PacketName,
     player::{self, Abilities, Motion, Player, Pose, terrain::WorldTerrain},
@@ -59,7 +63,9 @@ pub enum Effect {
     Time,
     /// The player's inventory.
     Inventory,
-    /// Nothing the client keeps yet, or something about someone else.
+    /// The other entities: mobs, players, items.
+    Entities,
+    /// Nothing the client keeps yet, or about an entity it doesn't have.
     Ignored,
 }
 
@@ -89,6 +95,8 @@ pub struct Game {
     creative: CreativeList,
     /// What the world shows that the server hasn't agreed to yet.
     predictions: Predictions,
+    /// Everything else that moves.
+    entities: Entities,
     time: TimeOfDay,
     /// Ticks stepped since `StartGame`.
     ticks: u64,
@@ -104,6 +112,7 @@ impl Default for Game {
             inventory: Inventory::default(),
             creative: CreativeList::default(),
             predictions: Predictions::default(),
+            entities: Entities::default(),
             time: TimeOfDay::default(),
             ticks: 0,
             world_gamemode: GameType::Default,
@@ -143,6 +152,10 @@ impl Game {
 
     pub const fn creative(&self) -> &CreativeList {
         &self.creative
+    }
+
+    pub const fn entities(&self) -> &Entities {
+        &self.entities
     }
 
     /// Ticks stepped since `StartGame`.
@@ -245,6 +258,7 @@ impl Game {
         if let Some(player) = &mut self.player {
             player.step(motion, &terrain);
         }
+        self.entities.forget_old(Instant::now());
     }
 
     /// Applies one packet from the server.
@@ -297,6 +311,44 @@ impl Game {
                 self.creative = CreativeList::new(&content);
                 Ok(Effect::Inventory)
             }
+            // Entities, each pose timed by when it arrived (`entities/track.rs`).
+            CAddActor::PACKET_ID => {
+                self.entities.add_actor(&read(packet)?, Instant::now());
+                Ok(Effect::Entities)
+            }
+            CAddPlayer::PACKET_ID => {
+                self.entities.add_player(&read(packet)?, Instant::now());
+                Ok(Effect::Entities)
+            }
+            CAddItemActor::PACKET_ID => {
+                self.entities.add_item(&read(packet)?, Instant::now());
+                Ok(Effect::Entities)
+            }
+            CMoveActorDelta::PACKET_ID => {
+                let known = self.entities.move_delta(&read(packet)?, Instant::now());
+                Ok(if known { Effect::Entities } else { Effect::Ignored })
+            }
+            CMoveActorAbsolute::PACKET_ID => {
+                let known = self.entities.move_absolute(&read(packet)?, Instant::now());
+                Ok(if known { Effect::Entities } else { Effect::Ignored })
+            }
+            CRemoveActor::PACKET_ID => {
+                let removed: CRemoveActor = read(packet)?;
+                let known = self.entities.remove(removed.target_actor_id.0);
+                Ok(if known { Effect::Entities } else { Effect::Ignored })
+            }
+            // `SetActorLink` holds one `ActorLink` and nothing else. The fork's client codecs
+            // read the link but not the packet, so the client reads the link.
+            CSetActorLink::PACKET_ID => {
+                let link: ActorLink = read(packet)?;
+                self.entities.link(&link, Instant::now());
+                Ok(Effect::Entities)
+            }
+            // Another dimension's entities come anew.
+            CChangeDimension::PACKET_ID => {
+                self.entities.clear();
+                Ok(Effect::Entities)
+            }
             CItemStackResponse::PACKET_ID => {
                 let response: CItemStackResponse = read(packet)?;
                 self.inventory.answer(&response);
@@ -342,7 +394,8 @@ impl Game {
             CMovePlayer::PACKET_ID => {
                 let moved: CMovePlayer = read(packet)?;
                 if moved.player_runtime_id.0 != player.runtime_id {
-                    return Ok(Effect::Ignored);
+                    let known = self.entities.move_player(&moved, Instant::now());
+                    return Ok(if known { Effect::Entities } else { Effect::Ignored });
                 }
                 if moved.mode == CMovePlayer::MODE_ROTATION {
                     player.turn(moved.pitch, moved.yaw);
@@ -392,7 +445,8 @@ impl Game {
             CSetActorData::PACKET_ID => {
                 let data: CSetActorData = read(packet)?;
                 if data.target_runtime_id.0 != player.runtime_id {
-                    return Ok(Effect::Ignored);
+                    let known = self.entities.set_data(data.target_runtime_id.0, &data.actor_data);
+                    return Ok(if known { Effect::Entities } else { Effect::Ignored });
                 }
                 if let Some(MetadataValue::Short(air)) = data.actor_data.0.get(&entity_data_key::AIR_SUPPLY) {
                     player.attributes.air = f32::from(*air);

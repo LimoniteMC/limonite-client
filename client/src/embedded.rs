@@ -14,8 +14,13 @@ use pumpkin_core::{
     net::bedrock::local::LocalConnector,
     server::Server,
 };
-use pumpkin_data::{item::Item, item_stack::ItemStack};
-use pumpkin_util::PermissionLvl;
+use pumpkin_core::entity::{
+    mob::spawn::{EntitySpawnReason, finalize_spawn},
+    r#type::from_type,
+};
+use pumpkin_data::{entity::EntityType, item::Item, item_stack::ItemStack};
+use pumpkin_util::{PermissionLvl, math::vector3::Vector3};
+use uuid::Uuid;
 use tokio::runtime::{Handle, Runtime};
 use tracing::{error, info};
 
@@ -211,6 +216,27 @@ impl EmbeddedServer {
             player.inventory().insert_stack(slot, &mut ItemStack::new(count, item));
         }
         player.sync_inventory_to_client();
+    }
+
+    /// Puts an entity's feet at `at`, as `/summon` does: made, its spawn finished as a
+    /// command's, and added to the world, which then sends it to the host. For the
+    /// headless check and the screenshots, as [`Self::fill_hotbar`] is.
+    pub fn summon(&self, entity_type: &'static EntityType, at: [f64; 3]) {
+        let _runtime = self.runtime.enter();
+        let Some(world) = self.server.worlds.load().first().cloned() else {
+            return;
+        };
+        let entity = from_type(entity_type, Vector3::new(at[0], at[1], at[2]), &world, Uuid::new_v4());
+        finalize_spawn(&entity, &world, EntitySpawnReason::Command, None);
+        world.spawn_entity(entity);
+    }
+
+    /// Where the host's feet are, as the server has them.
+    #[must_use]
+    pub fn host_feet(&self) -> Option<[f64; 3]> {
+        let players = self.server.get_all_players();
+        let at = players.first()?.position();
+        Some([at.x, at.y, at.z])
     }
 
     /// Sets every world's time of day, in ticks: 0 is sunrise, 6,000 noon, 12,000 sunset
