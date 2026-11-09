@@ -700,6 +700,26 @@ Found earlier:
   - **The flight leaves the template's area** at radius 16 and 32, so the server generates chunks
     during those runs. That's the same for M6, so it's fair, but a bigger template would take
     worldgen out of the numbers.
+- **Learn from Java's optimisation mods, Sodium first** (the owner's idea, 2026-11-09). Study them
+  when planning M6, and measure each idea against the baseline before keeping it. What Sodium is
+  known for, to check against its own documentation and code:
+  - **fewer draw calls:** the meshes of many sections share buffers, drawn with multi-draw
+    commands. M4 draws once per sub-chunk mesh, about 10,700 times a frame at radius 32; wgpu's
+    indirect multi-draw is a capability to detect, not a vendor;
+  - **culling by the way faces look:** each mesh's quads grouped by direction, so whole groups
+    that face away from the camera aren't drawn. Our quads already carry their face;
+  - **culling by what can be seen:** a search out from the camera through sections, crossing a
+    section only between faces its open space connects, as vanilla Java does, so caves and the
+    far side of hills aren't drawn;
+  - **culling by the fog:** nothing wholly past the fog is drawn. Since Step 14 the fog ends at
+    the view's edge, and the meshed area reaches past it on the diagonals, so those meshes are
+    drawn and can't be seen;
+  - **sorting blended quads one by one,** where M4 sorts whole sub-chunks, and **animating only
+    the textures in view.**
+
+  Check its licence before reading its code closely: an idea can be used, but its code can't come
+  into a GPL-3.0 project unless its licence allows it. Our vertex is already as compact as
+  Sodium's is known to be (16 bytes, light included).
 
 ## Notes for M7 (found while planning M5)
 
