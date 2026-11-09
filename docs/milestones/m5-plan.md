@@ -1443,6 +1443,17 @@ The questions as they were asked:
 
     The sky's colour is Java's plains blue, since Bedrock's lives in its engine. The sun, moon, stars and clouds stay
     out of scope.
+60. **Riders sit on their vehicles' seats** (Step 15). Decision 13 draws each entity between its own poses, but the
+    server sends a rider no position while it rides, only which way it looks. Pumpkin's tracker does the same for every
+    passenger, as Bedrock expects the client to seat it. So the client keeps who rides what, from `SetActorLink` and
+    `AddActor`'s links, and draws a rider on its vehicle's seat, by the seat points `pumpkin-data` has from Java, as
+    Pumpkin's default seating places it (`position_rider`). Pumpkin seats a few others its own way: boats, a villager in
+    a minecart, and some mobs. Those come out near, not exact. The fork has no reader for `SetActorLink`, but the packet
+    is one `ActorLink`, which the client codecs read, so the fork doesn't change.
+61. **The headless run checks entities against the server** (Step 15), beyond the plan's tests. It summons a cow, a pig
+    and a chicken where the host stands, through the server as `/summon` does, and then checks the client has every
+    entity the server shows the host and nothing else: the same runtime ids, of the same types, where the server has
+    them, compared where Bedrock puts each entity's position, so a wrong offset from its feet would show.
 
 ## Results (filled in during execution)
 
@@ -1759,6 +1770,72 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 15: Entities (2026-11-10)
+
+- **Commits:** `0af1e2a` (the entities, their motion and the headless check) and `5f1ecb5` (drawing them). Phase F's
+  first step, after the upstream sync of the same day (`docs/upstream.md`), which brought the server's pushes on the
+  player and its latency probes.
+- **The entities** (`client/src/entities/`), in a `hecs` world (Decision 13). Each has its two ids, what it is, its
+  last poses and when it first came; an item has its stack, a player its name, and an entity whose data says so, a
+  `Look`: a baby, or a scale. The client reads `AddActor`, `AddPlayer`, `AddItemActor`, `MoveActorDelta`,
+  `MoveActorAbsolute`, another player's `MovePlayer`, `RemoveActor`, `SetActorData`'s baby flag and scale, and
+  `SetActorLink`; a change of dimension forgets them all.
+- **What each is** (`entities/kinds.rs`): Pumpkin's own table of Bedrock names, `entity_type_to_bedrock_identifier`
+  over every entity type, turned round, with the villager's `villager_v2`. So any name the server can send is known,
+  and a test checks every one. The box is the type's size, a baby's own where it has one, times the scale. The feet
+  are where Bedrock puts the position less Pumpkin's offsets: a player's eyes, an item's 0.125 and a falling block's
+  0.49.
+- **Motion, drawn a little in the past** (`entities/track.rs`): each frame draws every entity where it was 75 ms ago,
+  a tick and a margin of 25 ms, between the two poses either side of that moment. Angles turn the short way, a
+  teleport blends nothing, and past the newest pose it stays put: nothing is guessed. The server sends only what
+  changed, so a move after a gap longer than 75 ms means the entity stood still, and it moves only over the tick
+  before.
+- **The margin, measured:** in four headless runs, moves while moving came 49 ms apart at the median, 50 to 70 at the
+  95th percentile and 52 to 74 at the 99th, over 6,000 to 8,600 moves a run. The last run's log splits what's longer:
+  none came 75 to 90 ms apart, which would be late, and 358 came 90 to 125 ms apart, which is a tick standing still,
+  about 100 ms. The headless loop reads packets once a tick, though, and the window once a frame, so the window's log
+  is the measure that counts, and nobody has run it yet. It logs the same line when the window closes.
+- **Riders** (Deviation 60): drawn on their vehicles' seats, as Pumpkin seats them by default. A chicken jockey's
+  zombie sits on the chicken and goes where it goes, and getting off leaves it where it sat.
+- **Drawn** (`render/entities.rs`, `entities.wgsl`), in the terrain's pass after its opaque faces:
+  - **boxes** of each entity's size, in one colour per group: monsters red, other mobs green, players blue, the rest
+    grey. Each is turned to its yaw, as a model would be, with its front a little darker, so which way it faces shows;
+  - **dropped items** as the icon the hotbar shows, on a card half a block across that turns a radian a second and
+    bobs a tenth of a block, Java's numbers. A block's icon is many quads in one plane, each set a hair in front of the
+    last so that depth keeps the UI's order, and there's a picture on each side, so either reads the right way round;
+  - **lit** by the light in the block at the box's middle, through the terrain's light map, shaded by face as the
+    terrain is, and fogged as it is. Positions are worked out from the eye each frame on the CPU, which for a few
+    thousand vertices costs nothing to speak of. The bench draws none, to keep M4's picture.
+- **Checked against the server** (Deviation 61): a new check in `--headless`, "entities". In six runs, the client had
+  every entity the server showed the host, 95 to 119 of them, and nothing else, each of the same type. In five, every
+  one was where the server had it, to the thousandth of a block. In the sixth, 82 of 116 were, and the rest were
+  caught mid-move, the farthest a bat flying 0.33 blocks off.
+- **Logged:** at the end of a session, how many came and went, the names the client doesn't know (none, so far), the
+  packets about entities it didn't have, and how far apart moves came. Those packets are `SetActorData` for an entity
+  that hasn't come yet, or never comes: 0 to 40 a run, which `AddActor`'s own data makes up for.
+- **Tests** (30 more): a pose halfway between two moves; the frame a delay late; staying put past the newest pose; a
+  move after standing still; angles; a teleport; forgetting old poses but keeping the two a frame needs; an entity
+  that comes, moves and goes; an unknown name; items' and players' feet; a baby's box; the same id again; a chicken
+  jockey on its seat, moving and getting off; a rider whose vehicle goes; the server's every entity name; groups and
+  sizes; the gap histogram; boxes from the eye, their light, their yaw and front; and the shader validates.
+- **Frames** (`run/step15/shots`, gitignored), from the screenshot tool, whose list can now `summon` an entity and
+  `drop` an item: Step 14's stone room lit by two torches, with a cow, a pig, a chicken and a zombie in it and a sword,
+  torches, dirt and logs on the floor, by day and by night and from low down.
+- **Checks:** 433 client tests, clippy with the same 2 warnings, and the headless run's 10 PASS lines, 11 with
+  `--edits` and 12 with `--inventory`.
+- **Not verified:**
+  - nobody has watched them move in the window, where the gaps are measured per frame;
+  - the boxes beside the official client's mobs at the same pose (Step 18), and how the official client answers the
+    server's latency probes (`docs/upstream.md`).
+- **Left:**
+  - models, textures, animations and name tags (milestone 8): a player's name is kept for them;
+  - the hurt flash and the death fall (`ActorEvent`), what mobs hold and wear, and the player's own picture in the
+    inventory screen;
+  - Step 11's placing doesn't know about entities yet, so a place into a mob is shown and then taken back by the
+    server;
+  - the server's pushes on the player apply when they arrive, where the official client rewinds to their tick
+    (`docs/upstream.md`); with the embedded server's round trip of about a tick, that's near the same.
 
 ### Step 14: Draw the light (2026-11-09)
 

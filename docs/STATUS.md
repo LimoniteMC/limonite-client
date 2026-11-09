@@ -82,7 +82,12 @@ _Last updated: 2026-11-10._
     sunrise and sunset glow, and fades into Bedrock's own fog from the install (`client/src/render/sky.rs`).
   - **Checkpoint 3 (2026-11-10): go.** The owner found the lit frames all good: noon, sunset, night and a torch-lit
     cave.
-  - **Next:** Step 15, entities.
+  - **Step 15 is done (2026-11-10):** the client keeps every entity the server shows it in a `hecs` world
+    (`client/src/entities/`), each drawn 75 ms behind, between two of the server's moves, and a rider on its vehicle's
+    seat. Mobs are boxes of their own size in a colour by kind, turned the way they face, and a dropped item is its
+    hotbar icon on a turning card (`client/src/render/entities.rs`). `--headless` checks them against the server's:
+    the same ones, of the same types, and nearly all exactly where the server has them, the rest mid-move.
+  - **Next:** Step 16, worlds, pausing, death and commands, and then the owner's checkpoint 4.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -271,8 +276,9 @@ cargo run -p limonite-client
   (until the pause menu, Step 16). P logs the pose as a `/tp` command for the official client.
   Every binding is in the settings file (below).
 - **The title bar** shows the frame rate and frame time, chunks and those still waiting for light,
-  meshes and the queue, visible meshes and draws, the position, and the sky and block light in the
-  block at the player's feet. Closing the window saves the world and exits.
+  meshes and the queue, visible meshes and draws, the entities, the position, and the sky and block light
+  in the block at the player's feet. Closing the window saves the world and exits, and logs how far apart
+  entities' moves came (m5-plan Step 15).
 - **Window flags:**
   - `--time <ticks>`: sets the world's time of day through the server as it starts, for looking at sunset or night
     until the command line can (m5-plan Step 16): 0 is sunrise, 6000 noon, 12000 sunset, 18000 midnight. The world
@@ -291,8 +297,12 @@ copy of the list is in `run/step8`. The world is a copy, because the run changes
 LIMONITE_SHOTS=run/step8/shots-world.txt LIMONITE_SHOTS_ARGS="--data-dir run/step8/shots-world --home run/step8/home --radius 16" LIMONITE_SHOTS_HOTBAR="dirt*64,oak_log*12,poppy,torch*32,oak_stairs*16,diamond_sword,apple*5,oak_fence*8,grass_block*64" CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo test --release -p limonite-client --bin limonite-client screenshots -- --ignored --nocapture
 ```
 
-The list can also hold `time 12500`, which sets the time of day through the server and stops it there, and `fill`
-with two corners and a block, such as `fill 10 64 10 14 66 14 torch`, for the pictures after them (m5-plan Step 14).
+The list can also hold, for the pictures after them, through the server:
+
+- `time 12500`, which sets the time of day and stops it there (m5-plan Step 14);
+- `fill` with two corners and a block, such as `fill 10 64 10 14 66 14 torch` (Step 14);
+- `summon` with an entity and where its feet go, such as `summon cow 10.5 64 12.5`, and `drop` with an item, a
+  count and a block, such as `drop torch 3 11 64 12` (Step 15).
 
 The HUD alone, every piece of it over stripes, goes to `run/sheets`, and the inventory screen with
 `inventory_sheets` (`_sheets` runs both):
@@ -360,10 +370,11 @@ make the capture's moves (m5-plan Step 12). A new world's spawn is random, so a 
   1. Starts the embedded server and joins as the host.
   2. Walks 8 blocks east, has the server teleport it 5 blocks up, then waits for the join's
      chunks.
-  3. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, teleport, latency, chunks,
-     chunks decoded, world matches server, and light matches server. The flags below add edits,
-     the hotbar and the inventory.
-  4. Writes the map, if asked.
+  3. Summons a cow, a pig and a chicken where the host stands, through the server.
+  4. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, teleport, latency, entities,
+     chunks, chunks decoded, world matches server, and light matches server. The flags below add
+     edits, the hotbar and the inventory.
+  5. Writes the map, if asked.
 
   The exit code is non-zero on any failure.
 - **Debug logging:** `limonite_client=debug` logs every packet name received, and the world
