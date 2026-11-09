@@ -4,7 +4,7 @@ A living page: where the project is, how to build and run it, and what bites. Up
 milestone step lands. Architecture decisions live in `docs/PLAN.md`; this page is about progress
 and environment.
 
-_Last updated: 2026-11-09._
+_Last updated: 2026-11-10._
 
 ## Where we are
 
@@ -91,9 +91,11 @@ _Last updated: 2026-11-09._
 - **Upstream syncs are weekly** (owner, 2026-10-26): merge upstream Pumpkin's `master` into the
   fork once a calendar week. `docs/upstream.md` has the procedure, and a log of what each sync
   brought in.
-  - **Last sync:** 2026-11-04, upstream `a83abee` (64 commits, with the move to Bedrock 1.26.60). It left the fork's
-    `limonite` at `8acb34b`, which `main` bumped in `010e373`. Step 12's codecs are on top, at `13bda25`, bumped in `483a043`.
-  - **Next sync due:** 2026-11-11.
+  - **Last sync:** 2026-11-10, upstream `ac235ed` (40 commits). It left the fork's `limonite` at `d9cc703`, which `main`
+    bumped in `4cbd50e`. The server now ignores the host's input until it reaches a teleport, pushes it as
+    `SetActorMotion`, times the round trip with probes the client answers, and gives Bedrock players fall damage
+    (`docs/upstream.md`).
+  - **Next sync due:** 2026-11-17.
 - **Milestone 4 is done (2026-10-24).** Plan, results and deviations: `docs/milestones/m4-plan.md`.
   - **What it built:** a window (winit) with a wgpu device and a fly camera that flies the host;
     CPU meshes for every loaded sub-chunk, drawn with vanilla textures read at runtime from the
@@ -358,8 +360,9 @@ make the capture's moves (m5-plan Step 12). A new world's spawn is random, so a 
   1. Starts the embedded server and joins as the host.
   2. Walks 8 blocks east, has the server teleport it 5 blocks up, then waits for the join's
      chunks.
-  3. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, teleport, chunks, chunks
-     decoded, world matches server, and light matches server.
+  3. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, teleport, latency, chunks,
+     chunks decoded, world matches server, and light matches server. The flags below add edits,
+     the hotbar and the inventory.
   4. Writes the map, if asked.
 
   The exit code is non-zero on any failure.
@@ -457,7 +460,7 @@ cargo clippy -p pumpkin-core --all-targets
   capture's folder:
 
   ```bash
-  LIMONITE_M5_CAPTURES="C:\Users\LaDoodleInTheHat\Desktop\big projects\limonite-client\run\captures\m5-official" cargo test -p pumpkin-protocol --features client --lib client_codecs -- --ignored
+  LIMONITE_M5_CAPTURES="C:\Users\LaDoodleInTheHat\Desktop\big projects\limonite-client\run\captures\m5-official" cargo test -p pumpkin-protocol --features client --lib client_codecs::actions -- --ignored
   ```
 
 **Run the server**
@@ -468,7 +471,8 @@ cargo clippy -p pumpkin-core --all-targets
   ```
 
 - `run/pumpkin/pumpkin.toml` overrides `networking.bedrock.online_mode = false`,
-  `networking.java.enabled = false` and `telemetry.enabled = false`. Pumpkin fills in all other
+  `networking.java.enabled = false`, `telemetry.enabled = false` and, since the sync of 2026-11-10,
+  `update_checker.enabled = false`. Pumpkin fills in all other
   defaults on first start.
 - Expect `Bedrock NetherNet signaling is listening on 0.0.0.0:19132`, then
   `Accepted Bedrock NetherNet connection` and `… joined the game` when the client connects.
@@ -574,7 +578,8 @@ the gitignored folder.
 - **Exact protocol:** Pumpkin accepts one Bedrock protocol only. Don't update the Bedrock client
   mid-milestone; if it updates past 2225, the official client can no longer join.
   - **The Store updates it unasked:** it took it to 1.26.60.5 on 2026-10-28, and the fork followed on 2026-11-04
-    (`docs/upstream.md`). Check its version at each sync: `(Get-AppxPackage Microsoft.MinecraftUWP).Version`.
+    (`docs/upstream.md`). It was on 1.26.63.1 by 2026-11-10, a hotfix, which no join has tried yet. Check its version
+    at each sync: `(Get-AppxPackage Microsoft.MinecraftUWP).Version`.
 - **Stopping the server:** stopping a background shell doesn't always kill `pumpkin.exe` on
   Windows. Check with `Get-Process pumpkin`.
 - **A commit message can close an issue, in any repo.** GitHub reads close, fix or resolve, in any form, followed by
@@ -591,6 +596,9 @@ the gitignored folder.
 
 - **Telemetry:** Pumpkin's defaults to **on** (heartbeat to `market.pumpkinmc.org`). Keep it off in
   every config.
+  - **So does its update checker** (since the sync of 2026-11-10), which asks `api.github.com` for the latest release at
+    every start. Off in the embedded config and the stock server's. A test in `embedded.rs` checks every way out of the
+    embedded config is shut, so a sync that adds one fails there.
 - **Lockfile and profiles:** building from the repo root ignores Pumpkin's `Cargo.lock`,
   profiles and `rust-toolchain.toml`. The root has mirrored copies, so when the fork changes them:
   - **After an upstream sync,** copy `pumpkin/Cargo.lock` over the root `Cargo.lock` again and
@@ -825,6 +833,9 @@ upstream fixes it and a weekly sync brings the fix in:
 - **No fall damage for Bedrock players:** Pumpkin-MC/Pumpkin#3396, already open. The Bedrock input
   handler (`net/bedrock/play/player_auth_input.rs`) never calls `LivingEntity::fall`, which the
   Java handlers do (`net/java/play/player_position.rs:157`, `:316`).
+  - **Gone upstream, and here since the sync of 2026-11-10:** both editions' moves go through `apply_client_move`
+    now, which checks fall damage (upstream `ddd13a2`). A survival run's 5-block drop hurts the host. The issue is
+    still open, as it lists more than this, so the owner may want to say so there.
 - **Block pick is always ignored:** Pumpkin-MC/Pumpkin#4321, opened by the owner's account on
   2026-10-26. `block_pick_request.rs:23-26` takes `max_slots` as the slot to fill, and the official
   client always sends 9, so the handler returns.

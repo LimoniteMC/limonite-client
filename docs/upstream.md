@@ -78,6 +78,119 @@ newest first: what came in, what it changed for Limonite, and how the conflicts 
 
 ## Log
 
+### 2026-11-10: `a83abee` to `ac235ed`, 40 commits
+
+- **Commits:** fork `d9cc703` (the merge); superproject `4cbd50e` (the bump, with the lockfile and the update checker
+  off), `f1a3ca3` (the teleport check) and `33a1b75` (the latency probes). Upstream's commits are dated 2026-11-04 to
+  2026-11-09. A day early, with the owner's go.
+- **Bedrock protocol:** unchanged, 2225 (1.26.60). Pumpkin's own version is `0.2.2+26.3-26.60` now.
+- **Block data:** unchanged. `assets/blocks.json`, the Bedrock palette and the generated block tables are identical,
+  so saved worlds and `run/m4-template` load the same. World generation places the same blocks; only the villagers a
+  structure spawns now take the biome they stand in (`ccdbb49`).
+- **The official client** is 1.26.63.1 now (`1.26.6301.0`): the Store updated it after the join of 2026-11-05. A hotfix
+  usually keeps its protocol, and upstream hasn't moved, but no join has checked it yet. The install gained a
+  `vanilla_1.26.63` pack, which the client leaves out, being past the fork's 1.26.60.
+- **No conflicts.** The fork's own diff is the same, file for file: `git diff a83abee 13bda25` and `git diff ac235ed
+  d9cc703` both give 109 files, +4367 and -141, apart from line numbers.
+
+**What it changes for Limonite**
+
+1. **Bedrock movement goes through Java's path now** (`ddd13a2`, Pumpkin-MC/Pumpkin#3793). `apply_client_move` takes
+   both editions' moves, which changes three things the host meets:
+   - **The server ignores the host's input until it reaches a teleport,** within 0.1 blocks of the position sent, and
+     sends the teleport again after every 20 inputs that don't. The client reports a teleport on its next input, as
+     before. The "teleport" check now also waits for the server to stop waiting (`f1a3ca3`), so a run where the server
+     ignores the host fails there.
+   - **Fall damage reaches Bedrock players,** since the shared path checks it. In a survival run, the teleport check's
+     5-block drop brings a hurt event, and then the health back every half second, as regeneration gives it.
+     Pumpkin-MC/Pumpkin#3396 is still open, as it lists more than this.
+   - **Standing on the ground** is read from the collision flag and the last input's `delta.y`, the motion the tick
+     started with, as Geyser does.
+2. **Entity pushes reach a Bedrock player as `SetActorMotion`,** tagged with its last input's tick. The official client
+   rewinds to that tick and replays its inputs since. Ours sets the velocity when the packet arrives, which over the
+   embedded server's round trip of about a tick comes to nearly the same. That's for Step 15, when mobs show.
+3. **The server times the round trip with `NetworkStackLatency` probes,** once a second, and matches each answer by
+   its timestamp. Its pushes wait a round trip after a motion of the player's own, and take an unmeasured one as 9
+   ticks (`client_push.rs`). So the client answers each probe with its timestamp (`33a1b75`), and the headless run has
+   a "latency" check: the server measured 19 to 40 ms. The official client's answer is yet to be held up against a
+   capture.
+4. **An update checker** (`4f77297`), on by default, asks `api.github.com` for Pumpkin's latest release at startup, and
+   tells operators in chat when there's a newer one. The embedded config turns it off beside telemetry, and a new test
+   holds the config to its promise that nothing opens a socket or reaches the internet. The stock server's
+   `pumpkin.toml` turns it off too.
+5. **Entities, for Step 15:** faster entity tracking (`3644ab7`), and villagers on a brain, with points of interest, a
+   schedule, gossip and breeding, and parity work on 10 more mobs. The tracker still sends a Bedrock entity's moves
+   every tick, as `MoveActorDelta` with only the fields that changed.
+6. **Dependencies:** none moved. The root's lockfile is the fork's again, with `glam`, `ordered-float` and `toml_edit`
+   pinned back to the client's versions. Only Pumpkin's own 13 crates changed, to 0.2.2.
+7. **The other two Pumpkin bugs the M5 capture found** are still there: two items per placement
+   (Pumpkin-MC/Pumpkin#4130, the `decrement(1)` after the predicted slot change, now at `inventory_action.rs:273`) and
+   block pick (Pumpkin-MC/Pumpkin#4321, whose handler hasn't changed).
+
+**Conflicts, and how they were resolved**
+
+None.
+
+**Checks**
+
+- **Fork:** clippy is clean in all five configurations. The tests pass: 47 in `net::bedrock`, 227 in `pumpkin-protocol
+  --features client`, and 13 palette tests. The 3 that read private captures pass when given them.
+- **Client:** 403 client and 28 `packs` tests pass, the install's 2 as well, and clippy shows only its 2 older warnings.
+  - `--headless --edits 4` passes in creative and in survival, 10 PASS lines each, in new worlds, and `--headless
+    --inventory` with `--hotbar` gives 11. No run logs a warning.
+- **The stock server** was rebuilt from the merge (5 min 36 s in release).
+- **Not done:** an official-client join, which would show whether 1.26.63 still speaks 2225. Neither NetherNet nor the
+  login changed, so the procedure doesn't ask for one.
+
+**Every upstream commit, by area**
+
+- **Players and movement:**
+  - `ddd13a2` fix(entity): vanilla player touch area and push velocity sync (#3793)
+- **Server and tools:**
+  - `4f77297` feat: add update checker
+  - `eda6944` chore: bump version to 0.2.2+26.3-26.60
+  - `3644ab7` perf(world): optimize entity tracking and player spatial queries
+  - `ae36c3a` fix(egg): add --init-settings and stop cleanly on install
+  - `691c884` fix(egg): switch to pelican-eggs debian images for newer glibc
+- **Villagers and golems:**
+  - `a16320a` feat(entity): add a typed POI manager, villager schedule and village sensors
+  - `9d09755` feat(entity): add villager job site and POI walking behaviors
+  - `fcfd840` refactor(entity): move villager restock, composter and bone meal helpers out of the goal code
+  - `9846e2d` feat(entity): add villager work, rest, panic, trade and door behaviors
+  - `4b6ae0f` feat(entity): add villager sleeping, gossip, golem summoning and breeding
+  - `36c768f` feat(entity): run villagers on the brain instead of goals
+  - `080cd5b` fix(entity): stop a completed trade from deadlocking on the merchant screen
+  - `68e114b` feat(entity): finish vanilla parity for villager
+  - `ccdbb49` fix(entity): finalize structure villagers with the biome they generate in
+  - `12d4d81` feat(entity): vanilla parity for iron golem
+  - `c53fd57` feat(entity): add iron golem village stroll and return goals
+- **Other entities:**
+  - `3522114` feat(entity): vanilla parity for bat (#4304)
+  - `8ca756a` feat(entity): vanilla parity for rabbit
+  - `c116bc6` feat(entity): port mooshroom shearing, stew feeding and lightning conversion
+  - `556733f` feat(entity): vanilla parity for tadpole
+  - `56eed15` feat(entity): vanilla parity for endermite (#4481)
+  - `6361843` fix(entity): add missing endermite ambient sound (#4495)
+  - `593aac6` feat(entity): implement vanilla parrot behavior (#4486)
+  - `d1190dc` fix(entity): check entity and border collisions when teleporting tamed mobs to their owner
+  - `b27db4a` feat(entity): port frog brain AI and behaviors
+  - `4042a9b` fix(entity): attack as the frog so magma cubes drop froglights
+  - `725c9c1` feat(entity): vanilla parity for enderman (#4490)
+  - `ce6d166` feat(entity): port sulfur cube
+  - `ba1b65e` fix(entity): carry split data and piercing checks for sulfur cubes
+  - `df5daf6` fix(entity): apply the sulfur cube fluid jump threshold everywhere
+  - `3ea7d28` feat(entity): vanilla parity for cat (#4493)
+- **World, items and advancements:**
+  - `e0f536d` fix(worldgen): locate structures with the height sampler that generation uses
+  - `494c29a` fix(item): apply suspicious stew effects from recipes, trades and loot
+  - `576cca2` fix(advancement): stop structure location criteria matching everywhere
+- **CI:**
+  - `bc494ec` build(ci): add x86-64-v3 release and nightly builds
+  - `ef039bf` build(ci): use x86-64-v3 binary when supported in Docker and egg
+  - `6026a81` build(ci): bump Android NDK to r30
+  - `4314c07` build(ci): drop musl targets and lower glibc baseline
+  - `ac235ed` build(deps): bump crate-ci/typos from 1.51.1 to 1.52.0 (#4526)
+
 ### 2026-11-04: `eba538f` to `a83abee`, 64 commits, and Bedrock 1.26.60
 
 - **Commits:** fork `4caebaf` (the merge), `22ebc6f` (what the merge needed to build) and `8acb34b` (the swing's
