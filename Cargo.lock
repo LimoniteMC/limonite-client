@@ -3129,7 +3129,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-auth"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "base64 0.23.1",
  "crypto-bigint",
@@ -3149,7 +3149,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-codecs"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "serde_json",
  "tracing",
@@ -3157,7 +3157,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-command"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "pumpkin-codecs",
  "pumpkin-data",
@@ -3172,7 +3172,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-config"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "pumpkin-util",
  "rand 0.10.3",
@@ -3184,7 +3184,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-core"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "aes 0.9.3",
  "arc-swap",
@@ -3244,7 +3244,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-data"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "crc32c",
  "flate2",
@@ -3261,7 +3261,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-gametest"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "async-trait",
  "pumpkin-data",
@@ -3276,7 +3276,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-inventory"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "pumpkin-data",
  "pumpkin-nbt",
@@ -3290,7 +3290,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-macros"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "heck",
  "proc-macro-error2",
@@ -3301,7 +3301,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-nbt"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "bytes",
  "flate2",
@@ -3313,7 +3313,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-protocol"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "aes 0.9.3",
  "base64 0.23.1",
@@ -3335,7 +3335,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-util"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "bytes",
  "colored",
@@ -3352,7 +3352,7 @@ dependencies = [
 
 [[package]]
 name = "pumpkin-world"
-version = "0.2.1+26.3-26.60"
+version = "0.2.2+26.3-26.60"
 dependencies = [
  "arc-swap",
  "bitflags 2.13.2",

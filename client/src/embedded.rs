@@ -50,6 +50,9 @@ pub fn config(settings: &Settings) -> PumpkinConfig {
     networking.bedrock.view_distance = NonZero::new(32).unwrap_or(NonZero::<u8>::MIN);
     // Pumpkin's default sends a heartbeat to market.pumpkinmc.org.
     config.telemetry.enabled = false;
+    // Pumpkin's default asks api.github.com for its latest release at every start,
+    // and tells operators in chat when there's a newer one.
+    config.advanced.update_checker.enabled = false;
     config.advanced.plugins.enabled = false;
     // The client owns the terminal; Pumpkin must not read stdin.
     config.advanced.commands.use_console = false;
@@ -391,5 +394,25 @@ mod tests {
     #[test]
     fn spawn_protection_is_off() {
         assert_eq!(config(&Settings::default()).basic.spawn_protection, 0);
+    }
+
+    /// `config`'s promise: nothing opens a socket or reaches the internet. Some of these
+    /// are off by Pumpkin's own default, and are checked so that an upstream sync that
+    /// turns one on fails here. One that adds a new way out, as the update checker did
+    /// (2026-11-10), needs a line in `config` and one here.
+    #[test]
+    fn nothing_opens_a_socket_or_reaches_the_internet() {
+        let config = config(&Settings::default());
+        let networking = &config.advanced.networking;
+        assert!(!networking.bedrock.nethernet.enabled);
+        assert!(!networking.bedrock.online_mode);
+        assert!(!networking.java.enabled);
+        assert!(!networking.query.enabled);
+        assert!(!networking.management.enabled);
+        assert!(!networking.proxy.enabled);
+        assert!(!networking.lan_broadcast.enabled);
+        assert!(!config.telemetry.enabled);
+        assert!(!config.advanced.update_checker.enabled);
+        assert!(!config.advanced.plugins.enabled);
     }
 }
