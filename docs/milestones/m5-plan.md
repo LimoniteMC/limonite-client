@@ -1796,10 +1796,15 @@ by Pumpkin's own reader with no bytes left over.
   for 1,926 meshes, against 3,077 for 2,011, so its meshing took about 12% more time in all. Frames took 0.39 ms on
   average and 0.97 ms at p99, against Step 13's 0.38 and 0.87.
 - **Checks:** 401 client tests, clippy with the same 2 warnings, and the headless run's 8 PASS lines.
-- **Not verified:** the owner's checkpoint, frames held up against the official client's.
+- **Not verified:** the frames held up beside the official client's at the same pose, which is Step 18's comparison.
 - **Left:**
   - the water's surface seen from below, which back-face culling hides;
   - Bedrock's per-biome fogs and sky colours, and the sun, moon, stars and clouds (out of scope).
+- **The owner's checkpoint (2026-11-10): go.** Frames at noon, at sunset and at night, and a torch-lit cave, in the
+  window with `--time`: all good, so phase F, entities and worlds, starts.
+  - **Phase E** (light, Steps 13 and 14) took four days, 2026-11-06 to 11-09, with a day lost to the usage limit.
+    Phase D took six (2026-11-01 to 11-06, with the move to Bedrock 1.26.60 in it), phase C one, and phase B five,
+    with Steps 7b to 7d added at its checkpoint.
 
 ### Step 13: Light (2026-11-07)
 

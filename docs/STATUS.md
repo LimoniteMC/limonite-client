@@ -80,7 +80,9 @@ _Last updated: 2026-11-09._
   - **Step 14 is done (2026-11-09):** the terrain is drawn lit, with smooth lighting and shaded corners
     (`client/src/render/mesher.rs`), through a light map that follows the time of day, under a sky with Java's
     sunrise and sunset glow, and fades into Bedrock's own fog from the install (`client/src/render/sky.rs`).
-  - **Next:** the owner's checkpoint 3, lit frames by day and night, then Step 15, entities.
+  - **Checkpoint 3 (2026-11-10): go.** The owner found the lit frames all good: noon, sunset, night and a torch-lit
+    cave.
+  - **Next:** Step 15, entities.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
