@@ -4,7 +4,7 @@ A living page: where the project is, how to build and run it, and what bites. Up
 milestone step lands. Architecture decisions live in `docs/PLAN.md`; this page is about progress
 and environment.
 
-_Last updated: 2026-11-07._
+_Last updated: 2026-11-09._
 
 ## Where we are
 
@@ -77,7 +77,10 @@ _Last updated: 2026-11-07._
     (`client/src/world/light/`), and meshing waits for it. `--headless` checks it against the server's light at every
     block, and explains each difference as a place where the server's light breaks its own rules (m5-plan Deviation
     57). Nothing draws it yet.
-  - **Next:** Step 14, drawing the light.
+  - **Step 14 is done (2026-11-09):** the terrain is drawn lit, with smooth lighting and shaded corners
+    (`client/src/render/mesher.rs`), through a light map that follows the time of day, under a sky with Java's
+    sunrise and sunset glow, and fades into Bedrock's own fog from the install (`client/src/render/sky.rs`).
+  - **Next:** the owner's checkpoint 3, lit frames by day and night, then Step 15, entities.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -280,6 +283,9 @@ copy of the list is in `run/step8`. The world is a copy, because the run changes
 ```bash
 LIMONITE_SHOTS=run/step8/shots-world.txt LIMONITE_SHOTS_ARGS="--data-dir run/step8/shots-world --home run/step8/home --radius 16" LIMONITE_SHOTS_HOTBAR="dirt*64,oak_log*12,poppy,torch*32,oak_stairs*16,diamond_sword,apple*5,oak_fence*8,grass_block*64" CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 cargo test --release -p limonite-client --bin limonite-client screenshots -- --ignored --nocapture
 ```
+
+The list can also hold `time 12500`, which sets the time of day through the server and stops it there, and `fill`
+with two corners and a block, such as `fill 10 64 10 14 66 14 torch`, for the pictures after them (m5-plan Step 14).
 
 The HUD alone, every piece of it over stripes, goes to `run/sheets`, and the inventory screen with
 `inventory_sheets` (`_sheets` runs both):

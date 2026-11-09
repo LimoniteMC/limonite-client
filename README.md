@@ -34,8 +34,8 @@
 
 > [!WARNING]
 > **Limonite is under heavy construction, so expect little to no functionality.** Today you can
-> walk and fly around a singleplayer world drawn with vanilla textures, with a HUD, break and place
-> blocks, and move things about in your inventory, and that's it: no lighting, sky or mobs yet.
+> walk and fly around a singleplayer world drawn with vanilla textures, lit as the day goes by, with a
+> HUD, break and place blocks, and move things about in your inventory, and that's it: no mobs yet.
 
 > [!IMPORTANT]
 > **Current phase of development: [Milestone 5, playable singleplayer](docs/milestones/m5-plan.md).**
@@ -167,8 +167,10 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
   your install, and creative breaks with a click.
 - **An outline on what you aim at.** Thin dark lines along the shape of the block you're looking at, within
   reach: 4.5 blocks, or 5 in creative.
-- **Light, worked out on the client.** Sky and block light spread through the world by the server's own rules, and
-  the headless run checks them against the server's light at every block. Drawing it comes next.
+- **Light, and the time of day.** Sky and block light spread through the world by the server's own rules, checked
+  against the server's light at every block, and the terrain is drawn with smooth lighting and shaded corners, as the
+  official client does by default. The sun rises and sets, and the view's edge fades into Bedrock's own fog from your
+  install, which closes in under water.
 - **A debug world.** `--debug-world` holds every block state in a grid, and you can jump to any of them.
 - **Bedrock-native world state.** Chunks decode straight into Bedrock's own palette format, and
   the client's world equals the server's, block for block and biome for biome. That's checked on
@@ -325,9 +327,9 @@ cargo run -p limonite-client -- --headless --map run/m3/map.png
 - **Your world carries over.** Each run starts where the last one ended. Delete `run/client/` for a
   fresh world.
 - **Your settings** are in `run/home/settings.toml`: your name, the view distance, the field of
-  view, the mouse sensitivity, the UI scale, the gamemode for new worlds, and every key. The first run writes it
-  with comments. Edit it while the client is closed; a setting that's missing or wrong gets its
-  default back.
+  view, the mouse sensitivity, the UI scale, smooth lighting, the gamemode for new worlds, and every
+  key. The first run writes it with comments. Edit it while the client is closed; a setting that's
+  missing or wrong gets its default back.
 - **Your identity** is in `run/home/identity.toml`, made on the first run. Worlds remember your
   inventory and position by it, so keep it: without it, your worlds see a new player.
 - **Logging:** `RUST_LOG` picks what gets logged. `RUST_LOG=info,limonite_client=debug` also logs

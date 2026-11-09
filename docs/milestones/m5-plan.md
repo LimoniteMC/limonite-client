@@ -1424,6 +1424,25 @@ The questions as they were asked:
     breaks its own rules, or where the blocks differ. The check finds each group and that block. A group with neither
     fails, and so does one where our own light breaks the rules. It compares the chunks whose 5 × 5 neighbourhood is
     lit on our side, so their 3 × 3 has all its light.
+58. **The fog is Bedrock's own, read from the install** (Step 14). Decision 12 has fog fade the terrain into the sky,
+    ending just inside the meshed area, and denser and blue under water. Bedrock's vanilla packs say exactly how, in
+    `fogs/default_fog_setting.json`, which the client reads at startup, as it reads textures:
+    - **air:** from 92% of the view distance to its edge, in `#ABD2FF`;
+    - **water:** 60 blocks in `#44AFF5`, closing in to a quarter of that as the eyes go under, and opening again over
+      30 s, as Bedrock's `transition_fog` says;
+    - **lava:** under a block, in `#991A00`.
+
+    The colours darken at night by Java's curve. Bedrock's per-biome fogs, beside the default in `fogs/`, aren't read
+    yet.
+59. **The sky is Java's, with its sunrise and sunset glow** (Step 14). Decision 12 says the sky is a colour by the time
+    of day. One colour would meet the fog at a hard line, so the sky is Java's instead:
+    - a plane 16 blocks up in the sky's colour, fogged by its distance, so the horizon shows the fog's colour and the
+      sky's begins a little way up;
+    - the fan of Java's sunrise and sunset colours on the horizon below the sun, 50° across. Looking towards the sun
+      tints the fog too, as in Java.
+
+    The sky's colour is Java's plains blue, since Bedrock's lives in its engine. The sun, moon, stars and clouds stay
+    out of scope.
 
 ## Results (filled in during execution)
 
@@ -1740,6 +1759,47 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 14: Draw the light (2026-11-09)
+
+- **Commits:** `9f33240` (the terrain lit, with smooth lighting) and `1233426` (the time of day, the sky and fog).
+- **Smooth lighting and ambient occlusion** (`render/mesher.rs`), as Java's `AmbientOcclusionFace` works them out, at
+  each corner of each face:
+  - **the light:** the average of the four blocks around the corner on the face's open side. A block with no light at
+    all, as stone has, counts as the one the face looks into, so a solid block doesn't darken a corner twice;
+  - **the shade:** a fifth less light for each solid block of the three around the corner. Between two solid sides
+    it's as dark as it gets, whatever's across;
+  - **a face inside its block,** such as a slab's top, looks into its own block, and a face smaller than the block
+    takes its corners' light from where they fall on the block's face;
+  - **one light a face** for liquids (the brighter of their own block and the one faced), plants' crossed planes
+    (their own) and `smooth_lighting = false` (the block faced), with no shade;
+  - **packed as planned:** whole levels in the vertex's spare byte and the shade in two free bits of the face byte, so
+    the vertex stays 16 bytes. Java keeps a corner's average in quarters; here it's rounded to a level;
+  - **meshing waits** until a chunk and all eight around it are lit, since corners take in the blocks diagonally
+    beside them, and the neighbourhood now fills its edges and corners for every sub-chunk.
+- **The light map** (`render/sky.rs`): Java's `LightTexture` curve, at its default 50% brightness, sampled smoothly
+  between levels. Nothing is quite black, and a torch's light is white at its brightest and warm further out.
+- **The time of day** (`render/sky.rs`): Java's curves on the server's time: how bright the sky is, from 1 at noon to
+  0.2 at midnight, and the sky's and fog's colours. The light map changes as the sky's brightness does.
+- **The sky and fog** (Deviations 58 and 59): Bedrock's fog from the install, Java's sky plane and its glow at sunrise
+  and sunset. Fog ends at the view's edge, just inside the meshed area, so the dark band M4 saw over far water has gone.
+- **Tests** (11 more): shade in the open, along an edge and in a corner; the four blocks' average, and a dark block
+  counting as the middle one; a face inside its block; flat lighting; a liquid's light; the packing, which keeps the
+  vertex 16 bytes; a gathered neighbourhood reading the world's light; the light map by day and by night; the day's
+  curves; the sky and fog by the time and what the eyes are in. The shader validates, with its sky pass.
+- **Frames** (`run/screenshots`, gitignored), from the screenshot tool, whose list can now set the time of day and
+  fill boxes through the server: hills at noon, sunset and midnight; the sea from above at noon, at sunset and by
+  night; a sunset looking west, into its glow; under water; and a stone room lit by two torches, by day and by night.
+- **What meshing costs:** the release bench at radius 8, on a fresh copy of `run/m4-dev`, meshed sub-chunks in
+  239 µs each, against Step 13's 161 µs. Reading the neighbourhood's light and working out each corner costs half as
+  much again a sub-chunk, but waiting for all eight neighbours meshes fewer of them: the join meshed 2,318 sub-chunks
+  for 1,926 meshes, against 3,077 for 2,011, so its meshing took about 12% more time in all. Frames took 0.39 ms on
+  average and 0.97 ms at p99, against Step 13's 0.38 and 0.87.
+- **Checks:** 401 client tests, clippy with the same 2 warnings, and the headless run's 8 PASS lines.
+- **Not verified:** the owner's checkpoint, frames held up against the official client's.
+- **Left:**
+  - the water's surface seen from below, which back-face culling hides;
+  - Bedrock's per-biome fogs and sky colours, and the sun, moon, stars and clouds (out of scope).
 
 ### Step 13: Light (2026-11-07)
 
