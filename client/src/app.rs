@@ -28,7 +28,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use glam::Vec3;
+use glam::{IVec3, Vec3};
 use pumpkin_data::item::Item;
 use pumpkin_util::math::vector3::Vector3;
 use tracing::{debug, error, info, warn};
@@ -56,16 +56,20 @@ use crate::{
         animation::Animator,
         camera::{Camera, FOV_Y},
         crack::Cracked,
+        entities::{self, EntityRenderer, Looks},
         meshes::{self, Meshes},
         sky::{self, Eyes, FogSettings, Medium},
-        terrain::Terrain,
+        terrain::{self, Terrain},
         textures::TextureArray,
         tint::Tints,
     },
     session::{Session, Stage},
     settings::Settings,
     ui::{self, Ui, render::UiRenderer, screens::inventory::Pressed},
-    world::light::{self, Kind},
+    world::{
+        World,
+        light::{self, Kind},
+    },
 };
 
 /// What the window draws with, prepared before it opens.
@@ -593,6 +597,18 @@ impl<'a> App<'a> {
             Some(Cracked { block, id, stage })
         });
         terrain.crack.show(gpu, &self.table, &self.tints, cracked);
+        // The entities, as they were a moment ago (`entities/track.rs`). The bench keeps
+        // M4's picture, which had none.
+        if let (Some(camera), Some(renderer)) = (&self.camera, &mut terrain.entities) {
+            let drawn = if self.bench.is_none() { self.session.game().entities().drawn(now) } else { Vec::new() };
+            let world = self.session.world();
+            let looks = Looks {
+                icons: self.ui.icons(),
+                atlas: self.ui.atlas(),
+            };
+            let vertices = entities::vertices(&drawn, camera.position, &|at| light_byte(world, at), Some(looks));
+            renderer.upload(gpu, &vertices);
+        }
         if self.animated_tick != Some(self.animation_tick) {
             self.animated_tick = Some(self.animation_tick);
             terrain.animate(gpu, &mut self.animator, self.animation_tick);
@@ -646,12 +662,13 @@ impl<'a> App<'a> {
         };
         window.set_title(&format!(
             "Limonite: {debug}{fps:.0} fps, {:.1} ms; {} chunks ({} unlit), {} meshes ({} waiting), {visible} \
-             visible, {draws} draws; at {:.1}, {:.1}, {:.1}{here}",
+             visible, {draws} draws; {} entities; at {:.1}, {:.1}, {:.1}{here}",
             1000.0 / fps.max(0.001),
             self.session.world().chunk_count(),
             light.waiting(),
             self.meshes.len(),
             self.meshes.waiting(),
+            self.session.game().entities().len(),
             p.x,
             p.y,
             p.z
@@ -729,8 +746,17 @@ impl ApplicationHandler for App<'_> {
                 if let Some(textures) = self.textures.take() {
                     self.terrain = Some(Terrain::new(&gpu, &textures));
                 }
-                if let (Some(picture), Some(terrain)) = (self.ui_picture.take(), &self.terrain) {
-                    self.ui_renderer = Some(UiRenderer::new(&gpu, &picture, &terrain.texture_view));
+                if let (Some(picture), Some(terrain)) = (self.ui_picture.take(), &mut self.terrain) {
+                    let ui_renderer = UiRenderer::new(&gpu, &picture, &terrain.texture_view);
+                    terrain.entities = Some(EntityRenderer::new(
+                        &gpu,
+                        terrain::DEPTH_FORMAT,
+                        terrain.frame(),
+                        &terrain.texture_view,
+                        &terrain.light_map_view(),
+                        ui_renderer.atlas_view(),
+                    ));
+                    self.ui_renderer = Some(ui_renderer);
                 }
                 let size = window.inner_size();
                 self.ui.resize(size.width, size.height);
@@ -874,4 +900,13 @@ impl ApplicationHandler for App<'_> {
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.ticks.next()));
     }
+}
+
+/// The light in a block, as the terrain's vertices pack it: the sky's level high and the
+/// blocks' low. Where nothing's lit yet, the open sky.
+pub fn light_byte(world: &World, at: IVec3) -> u8 {
+    let light = world.light();
+    let sky = light.level(Kind::Sky, at.x, at.y, at.z).unwrap_or(15);
+    let block = light.level(Kind::Block, at.x, at.y, at.z).unwrap_or(0);
+    sky << 4 | block
 }

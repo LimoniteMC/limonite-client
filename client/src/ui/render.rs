@@ -240,6 +240,8 @@ fn add_text(text: &str, at: [f32; 2], color: [u8; 4], looks: Looks<'_>, drawing:
 
 /// The UI's GPU state.
 pub struct UiRenderer {
+    /// The atlas on the GPU, which the entities' item cards sample too.
+    atlas: wgpu::TextureView,
     alpha: wgpu::RenderPipeline,
     invert: wgpu::RenderPipeline,
     block: wgpu::RenderPipeline,
@@ -362,6 +364,7 @@ impl UiRenderer {
         let block = pipeline(device, &pipeline_layout, &shader, format, block_entry, wgpu::BlendState::ALPHA_BLENDING);
         let (vertices, indices) = buffers(device, QUADS_AT_FIRST);
         Self {
+            atlas: view,
             alpha,
             invert,
             block,
@@ -376,6 +379,12 @@ impl UiRenderer {
     }
 
     /// Takes a new version of the UI, for a window of the GPU's current size.
+    /// The atlas, which the entities' item cards sample.
+    #[must_use]
+    pub const fn atlas_view(&self) -> &wgpu::TextureView {
+        &self.atlas
+    }
+
     pub fn upload(&mut self, gpu: &Gpu, drawing: &Drawing) {
         let size = [gpu.config.width as f32, gpu.config.height as f32];
         gpu.queue.write_buffer(&self.screen, 0, bytemuck::cast_slice(&size));

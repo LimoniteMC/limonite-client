@@ -231,6 +231,16 @@ impl EmbeddedServer {
         world.spawn_entity(entity);
     }
 
+    /// Drops `count` of an item in the block at `at`, as a broken block drops what it gives.
+    #[cfg(test)]
+    pub fn drop_item(&self, item: &'static Item, count: u8, at: [i32; 3]) {
+        let _runtime = self.runtime.enter();
+        if let Some(world) = self.server.worlds.load().first() {
+            let block = pumpkin_util::math::position::BlockPos::new(at[0], at[1], at[2]);
+            world.drop_stack(&block, ItemStack::new(count, item));
+        }
+    }
+
     /// Where the host's feet are, as the server has them.
     #[must_use]
     pub fn host_feet(&self) -> Option<[f64; 3]> {

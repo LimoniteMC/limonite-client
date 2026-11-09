@@ -19,13 +19,14 @@ use super::{
     Gpu, animation::Animator,
     camera::Camera,
     crack::Crack,
+    entities::EntityRenderer,
     meshes::Meshes,
     outline::Outline,
     sky::{self, SkyFrame},
     textures::TextureArray,
 };
 
-const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Six indices per quad: two triangles, 0-1-2 and 0-2-3, counter-clockwise.
 pub const INDICES_PER_QUAD: u32 = 6;
 
@@ -72,6 +73,9 @@ pub struct Terrain {
     pub outline: Outline,
     /// The crack on a block being broken.
     pub crack: Crack,
+    /// Mobs, players and items, drawn among the terrain since they need its depth. Set
+    /// once the UI's atlas exists, which their icons come from (`app.rs`).
+    pub entities: Option<EntityRenderer>,
     /// The last frame's numbers, for the title and the benchmark.
     pub draws: u32,
     pub visible: u32,
@@ -260,11 +264,24 @@ impl Terrain {
             instance_capacity,
             outline,
             crack,
+            entities: None,
             draws: 0,
             visible: 0,
         };
         terrain.set_light_map(gpu, &sky::light_map(sky::NOON));
         terrain
+    }
+
+    /// The per-frame uniform, which the outline and the entities read too.
+    #[must_use]
+    pub const fn frame(&self) -> &wgpu::Buffer {
+        &self.frame
+    }
+
+    /// A view of the light map, for the entities.
+    #[must_use]
+    pub fn light_map_view(&self) -> wgpu::TextureView {
+        self.light_map.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
     /// Draws the light for a sky `daylight` bright (`sky::daylight`) from now on.
@@ -396,6 +413,9 @@ impl Terrain {
         pass.set_pipeline(&self.sky);
         pass.draw(0..3, 0..1);
         if visible.is_empty() {
+            if let Some(entities) = &self.entities {
+                entities.draw(&mut pass);
+            }
             return;
         }
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint32);
@@ -411,6 +431,11 @@ impl Terrain {
         }
 
         self.outline.draw(&mut pass);
+        // Opaque, like the terrain's faces before them, and before the blended ones, so
+        // water in front of a mob tints it.
+        if let Some(entities) = &self.entities {
+            entities.draw(&mut pass);
+        }
         pass.set_bind_group(0, &self.bind_group, &[]);
 
         // Back to front by the distance to each sub-chunk's centre.

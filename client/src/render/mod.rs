@@ -8,6 +8,7 @@
 
 pub mod camera;
 pub mod crack;
+pub mod entities;
 pub mod icons;
 pub mod mesher;
 pub mod meshes;

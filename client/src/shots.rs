@@ -27,11 +27,13 @@
 //! a space, and the picture gets the block's name on it. A hotbar slot can follow the
 //! seconds, to select it just before the picture, so that the item's name shows.
 //!
-//! Two more kinds of line set the scene for the pictures after them, through the server:
+//! More kinds of line set the scene for the pictures after them, through the server:
 //!
 //! ```text
 //! time 12500                      # the time of day, which then stands still
 //! fill 10 64 10 14 66 14 torch    # a box of a block, corner to corner
+//! summon cow 10.5 64 12.5         # an entity, its feet there
+//! drop torch 3 11 64 12           # some of an item, dropped in that block
 //! ```
 //!
 //! `LIMONITE_SHOTS_HOTBAR` fills the hotbar first, through the server: item names
@@ -48,7 +50,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use pumpkin_data::Block;
+use pumpkin_data::{Block, entity::EntityType, item::Item};
 use pumpkin_util::{
     GameMode,
     math::{position::BlockPos, vector3::Vector3},
@@ -67,9 +69,10 @@ use crate::{
         self, Gpu, Needs,
         animation::Animator,
         camera::Camera,
+        entities::{self, EntityRenderer, Looks},
         meshes::Meshes,
         sky::{self, Eyes, FogSettings},
-        terrain::Terrain,
+        terrain::{self, Terrain},
         tint::Tints,
     },
     session::{Session, Stage},
@@ -108,6 +111,10 @@ enum Line {
     Time(i64),
     /// A box of a block, from one corner to the other.
     Fill([i32; 3], [i32; 3], &'static Block),
+    /// An entity, with its feet there.
+    Summon(&'static EntityType, [f64; 3]),
+    /// Some of an item, dropped in a block.
+    Drop(&'static Item, u8, [i32; 3]),
 }
 
 impl Line {
@@ -119,6 +126,16 @@ impl Line {
                 let number = |index: usize| parts.get(index).and_then(|part| part.parse::<i32>().ok());
                 let corner = |at: usize| Some([number(at)?, number(at + 1)?, number(at + 2)?]);
                 Some(Self::Fill(corner(1)?, corner(4)?, Block::from_name(parts.get(7)?)?))
+            }
+            "summon" => {
+                let number = |index: usize| parts.get(index).and_then(|part| part.parse::<f64>().ok());
+                let at = [number(2)?, number(3)?, number(4)?];
+                Some(Self::Summon(EntityType::from_name(parts.get(1)?)?, at))
+            }
+            "drop" => {
+                let number = |index: usize| parts.get(index).and_then(|part| part.parse::<i32>().ok());
+                let count = parts.get(2)?.parse().ok()?;
+                Some(Self::Drop(Item::from_registry_key(parts.get(1)?)?, count, [number(3)?, number(4)?, number(5)?]))
             }
             _ => Shot::parse(line).map(Self::Shot),
         }
@@ -322,6 +339,16 @@ impl Studio {
         let aimed = aim::from_camera(self.session.game(), &self.camera);
         let boxes = aimed.as_ref().map_or(&[][..], |hit| &hit.boxes);
         self.terrain.outline.show(&self.gpu, self.camera.position, boxes);
+        let drawn = self.session.game().entities().drawn(Instant::now());
+        let looks = Looks {
+            icons: self.ui.icons(),
+            atlas: self.ui.atlas(),
+        };
+        let world_ref = self.session.world();
+        let vertices = entities::vertices(&drawn, self.camera.position, &|at| crate::app::light_byte(world_ref, at), Some(looks));
+        if let Some(renderer) = &mut self.terrain.entities {
+            renderer.upload(&self.gpu, &vertices);
+        }
 
         let world = self.target.create_view(&wgpu::TextureViewDescriptor::default());
         let over = self.target.create_view(&wgpu::TextureViewDescriptor {
@@ -337,7 +364,7 @@ impl Studio {
 
         let player = self.session.game().player().expect("the player");
         println!(
-            "{}: {:?}, health {}, hunger {}, air {}, level {} and {}; {} meshes, {} in view; aimed at {:?}",
+            "{}: {:?}, health {}, hunger {}, air {}, level {} and {}; {} meshes, {} in view; {} entities; aimed at {:?}",
             shot.name,
             player.gamemode,
             player.attributes.health,
@@ -347,6 +374,7 @@ impl Studio {
             player.attributes.experience,
             self.meshes.len(),
             self.terrain.visible,
+            drawn.len(),
             aimed.as_ref().map(|hit| hit.block),
         );
     }
@@ -393,8 +421,16 @@ fn screenshots() {
         uncapped: false,
     };
     let gpu = Gpu::offscreen(WIDTH, HEIGHT, &needs).expect("a GPU");
-    let terrain = Terrain::new(&gpu, &looks.textures);
+    let mut terrain = Terrain::new(&gpu, &looks.textures);
     let ui_renderer = UiRenderer::new(&gpu, &ui_assets.picture, &terrain.texture_view);
+    terrain.entities = Some(EntityRenderer::new(
+        &gpu,
+        terrain::DEPTH_FORMAT,
+        terrain.frame(),
+        &terrain.texture_view,
+        &terrain.light_map_view(),
+        ui_renderer.atlas_view(),
+    ));
     let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("screenshot"),
         size: wgpu::Extent3d {
@@ -462,6 +498,8 @@ fn screenshots() {
             }
             Line::Time(time) => studio.server.set_time(*time, true),
             Line::Fill(from, to, block) => studio.fill(*from, *to, block),
+            Line::Summon(entity_type, at) => studio.server.summon(entity_type, *at),
+            Line::Drop(item, count, at) => studio.server.drop_item(item, *count, *at),
         }
     }
     println!("Wrote {pictures} pictures to {}", out.display());

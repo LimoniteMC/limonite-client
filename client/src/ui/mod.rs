@@ -198,6 +198,17 @@ impl Ui {
     }
 
     /// Follows the window's size.
+    /// The atlas's sprites, and every item's icon, which the item cards in the world use.
+    #[must_use]
+    pub const fn atlas(&self) -> &Atlas {
+        &self.atlas
+    }
+
+    #[must_use]
+    pub const fn icons(&self) -> &ItemIcons {
+        &self.icons
+    }
+
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 || self.window == [width, height] {
             return;
