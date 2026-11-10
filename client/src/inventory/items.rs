@@ -34,7 +34,7 @@ use tracing::{info, warn};
 use crate::{
     blocks::appearance::AppearanceTable,
     render::{
-        icons::{Icon, IconQuad, block_icon},
+        icons::{Icon, IconQuad, ModelQuad, block_icon, block_model},
         textures::{MISSING_TEXTURE, read_image},
         tint::Tints,
     },
@@ -206,7 +206,8 @@ const ODD_NAMES: [(&str, &str); 48] = [
     ("golden_carrot", "carrot_golden"),
 ];
 
-/// Every item's icon, and the quads of those drawn as blocks.
+/// Every item's icon, and the quads of those drawn as blocks, flat for the inventory and
+/// whole for a dropped one.
 #[derive(Debug, Default)]
 pub struct ItemIcons {
     by_item: HashMap<i16, Icon>,
@@ -215,6 +216,11 @@ pub struct ItemIcons {
     names: HashMap<i16, &'static str>,
     quads: Vec<IconQuad>,
     missing: Option<Icon>,
+    /// The models of the items drawn as blocks, by item and by variant, as where their
+    /// quads start and how many there are.
+    models: HashMap<i16, (u32, u32)>,
+    variant_models: HashMap<(i16, u32), (u32, u32)>,
+    model_quads: Vec<ModelQuad>,
 }
 
 impl ItemIcons {
@@ -229,6 +235,33 @@ impl ItemIcons {
     #[must_use]
     pub fn quads(&self, first: u32, count: u32) -> &[IconQuad] {
         &self.quads[first as usize..(first + count) as usize]
+    }
+
+    /// The model a dropped one of this item shows: `None` unless its icon is a block's,
+    /// and that block isn't drawn flat.
+    #[must_use]
+    pub fn model(&self, id: i16, aux: u32) -> Option<&[ModelQuad]> {
+        let &(first, count) = self.variant_models.get(&(id, aux)).or_else(|| self.models.get(&id))?;
+        Some(&self.model_quads[first as usize..(first + count) as usize])
+    }
+
+    /// An item drawn as `quads` when it's dropped, for tests elsewhere.
+    #[cfg(test)]
+    pub fn with_model(id: i16, quads: Vec<ModelQuad>) -> Self {
+        let mut icons = Self::default();
+        icons.models.insert(id, (0, quads.len() as u32));
+        icons.model_quads = quads;
+        icons
+    }
+
+    /// Stores a block's model, if it has one.
+    fn add_model(&mut self, quads: &[ModelQuad]) -> Option<(u32, u32)> {
+        if quads.is_empty() {
+            return None;
+        }
+        let first = self.model_quads.len() as u32;
+        self.model_quads.extend(quads);
+        Some((first, quads.len() as u32))
     }
 
     /// The item's name with its namespace, as the game knows it.
@@ -412,12 +445,18 @@ pub fn build_icons(pictures: &Pictures, atlas: &Atlas, table: &AppearanceTable, 
         .collect::<std::collections::BTreeSet<u32>>()
         .into_iter()
         .collect();
-    let drawn: Vec<(u32, Vec<IconQuad>)> =
-        wanted.par_iter().map(|&block| (block, block_icon(table, tints, block))).collect();
+    let drawn: Vec<(u32, Vec<IconQuad>, Vec<ModelQuad>)> = wanted
+        .par_iter()
+        .map(|&block| (block, block_icon(table, tints, block), block_model(table, tints, block)))
+        .collect();
     let mut by_block: HashMap<u32, Icon> = HashMap::with_capacity(drawn.len());
-    for (block, quads) in drawn {
+    let mut model_by_block: HashMap<u32, (u32, u32)> = HashMap::with_capacity(drawn.len());
+    for (block, quads, model) in drawn {
         if let Some(icon) = icons.add_quads(&quads) {
             by_block.insert(block, icon);
+        }
+        if let Some(model) = icons.add_model(&model) {
+            model_by_block.insert(block, model);
         }
     }
 
@@ -435,6 +474,9 @@ pub fn build_icons(pictures: &Pictures, atlas: &Atlas, table: &AppearanceTable, 
         let base = block_of(item.id, 0);
         if let Some(icon) = base.and_then(|block| by_block.get(&block)) {
             icons.by_item.insert(item.id, *icon);
+            if let Some(model) = base.and_then(|block| model_by_block.get(&block)) {
+                icons.models.insert(item.id, *model);
+            }
             as_block += u32::from(can_be_sent);
         } else if can_be_sent {
             missing.push(short_name(item.registry_key));
@@ -445,14 +487,19 @@ pub fn build_icons(pictures: &Pictures, atlas: &Atlas, table: &AppearanceTable, 
             if let Some(icon) = block.and_then(|block| by_block.get(&block)) {
                 icons.by_variant.insert((item.id, aux), *icon);
             }
+            if let Some(model) = block.and_then(|block| model_by_block.get(&block)) {
+                icons.variant_models.insert((item.id, aux), *model);
+            }
         }
     }
     missing.sort_unstable();
     info!(
         "Items: {} known, of which the server can send {sendable}: {with_picture} with a picture, {as_block} as blocks \
-         ({} block quads), {} draw the missing texture",
+         ({} block quads, and {} models with {} quads, for when they drop), {} draw the missing texture",
         BedrockItem::ALL_BEDROCK_ITEMS.len(),
         icons.quads.len(),
+        icons.models.len(),
+        icons.model_quads.len(),
         missing.len(),
     );
     if !missing.is_empty() {

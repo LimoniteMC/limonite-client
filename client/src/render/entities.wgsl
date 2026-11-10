@@ -27,13 +27,15 @@ struct Frame {
 @group(0) @binding(5) var atlas: texture_2d<f32>;
 @group(0) @binding(6) var atlas_sampler: sampler;
 
-// Where a vertex's colour comes from: the tint alone, a block texture or an item picture
-// cut out by alpha, or a block texture whose alpha marks the texels the tint takes, drawn
-// opaque, as the terrain draws a grass block's sides.
+// Where a vertex's colour comes from: the tint alone; a block texture or an item picture
+// cut out by alpha; a block texture whose alpha marks the texels the tint takes, drawn
+// opaque, as the terrain draws a grass block's sides; or a block texture drawn whole, as
+// the terrain draws an opaque block.
 const FLAT: u32 = 0u;
 const BLOCKS: u32 = 1u;
 const ATLAS: u32 = 2u;
 const OVERLAY: u32 = 3u;
+const SOLID: u32 = 4u;
 
 struct Vertex {
     // In blocks, from the eye.
@@ -112,6 +114,9 @@ fn fragment_main(in: Varyings) -> @location(0) vec4<f32> {
         }
         case OVERLAY: {
             color = block.rgb * mix(vec3<f32>(1.0), tint, block.a);
+        }
+        case SOLID: {
+            color = block.rgb * tint;
         }
         default: {}
     }

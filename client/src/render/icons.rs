@@ -13,6 +13,10 @@
 //!
 //! **Plants and other flat blocks** show their texture flat, as they do on Bedrock:
 //! seen from that angle, a cross of two planes is an X of nothing much.
+//!
+//! **A dropped block is its model** (m5-plan Deviation 62): the same mesh, kept in three
+//! dimensions ([`block_model`]), which `render/entities.rs` turns and bobs on the ground.
+//! A flat block drops as its flat icon, on a card, as an item with a picture does.
 
 use super::{
     mesher::{self, Neighbourhood, Vertex},
@@ -53,6 +57,23 @@ pub struct IconQuad {
     pub tint: [u8; 3],
     /// How much of the light it gets, from 0 to 1.
     pub shade: f32,
+}
+
+/// One quad of a block's model, as a dropped block draws it.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ModelQuad {
+    /// Its corners from the block's middle, in blocks, counter-clockwise seen from the
+    /// front, as the terrain's quads are.
+    pub corners: [[f32; 3]; 4],
+    /// Each corner's place on the texture, from 0 to 1.
+    pub uvs: [[f32; 2]; 4],
+    pub layer: u16,
+    /// Which way it faces, in [`Face`](crate::blocks::models) order, for its shade.
+    pub face: u8,
+    /// The terrain's render class: 0 opaque, 1 cutout, 2 overlay and 3 blended.
+    pub class: u8,
+    /// sRGB-encoded.
+    pub tint: [u8; 3],
 }
 
 /// What an item's icon is.
@@ -106,6 +127,37 @@ pub fn block_icon(table: &AppearanceTable, tints: &Tints, id: u32) -> Vec<IconQu
     let mut quads: Vec<(f32, IconQuad)> = opaque.iter().chain(blend).filter_map(flattened).collect();
     quads.sort_by(|a, b| a.0.total_cmp(&b.0));
     quads.into_iter().map(|(_, quad)| quad).collect()
+}
+
+/// The quads of the block with this id as the world draws it, for a dropped block. Empty
+/// for one the inventory shows flat, such as a flower, which drops as its flat icon.
+#[must_use]
+pub fn block_model(table: &AppearanceTable, tints: &Tints, id: u32) -> Vec<ModelQuad> {
+    if matches!(
+        table.get(id).shape,
+        Shape::Invisible | Shape::Cross | Shape::Stalk { .. } | Shape::Planes { .. }
+    ) {
+        return Vec::new();
+    }
+    let mesh = mesher::mesh(&Neighbourhood::single(table, PLAINS, id), tints);
+    let uv_scale = f32::from(UV_SCALE) * 16.0;
+    let (opaque, blend) = (mesh.opaque.as_chunks::<4>().0, mesh.blend.as_chunks::<4>().0);
+    opaque
+        .iter()
+        .chain(blend)
+        .map(|vertices| {
+            let first = &vertices[0];
+            let [r, g, b, _] = first.tint;
+            ModelQuad {
+                corners: vertices.each_ref().map(from_middle),
+                uvs: vertices.each_ref().map(|vertex| vertex.uv.map(|axis| f32::from(axis) / uv_scale)),
+                layer: first.layer,
+                face: first.face(),
+                class: first.class(),
+                tint: [r, g, b],
+            }
+        })
+        .collect()
 }
 
 /// A quad of the mesh, flattened, with how near it is. `None` if it faces away.
@@ -250,6 +302,34 @@ mod tests {
     #[test]
     fn nothing_to_draw_is_no_quads() {
         assert!(block_icon(&table(look(Shape::Invisible, [0; 6])), &tints(), 5).is_empty());
+    }
+
+    #[test]
+    fn a_cubes_model_is_all_six_sides_round_its_middle() {
+        let quads = block_model(&table(look(Shape::Cube, LAYERS)), &tints(), 5);
+        let mut layers: Vec<u16> = quads.iter().map(|quad| quad.layer).collect();
+        layers.sort_unstable();
+        assert_eq!(layers, LAYERS);
+        let corners: Vec<[f32; 3]> = quads.iter().flat_map(|quad| quad.corners).collect();
+        assert!(corners.iter().all(|corner| corner.iter().all(|axis| (axis.abs() - 0.5).abs() < 1e-6)), "{corners:?}");
+        // The top faces up, at the top: face 1, every corner at y 0.5.
+        let top = quads.iter().find(|quad| quad.layer == 11).unwrap();
+        assert_eq!(top.face, 1);
+        assert!(top.corners.iter().all(|corner| (corner[1] - 0.5).abs() < 1e-6));
+        assert!(top.uvs.iter().all(|uv| uv.iter().all(|axis| (0.0..=1.0).contains(axis))));
+    }
+
+    #[test]
+    fn a_slabs_model_is_half_a_block_tall() {
+        let quads = block_model(&table(look(Shape::Slab { bottom: 0, top: 8 }, LAYERS)), &tints(), 5);
+        let top = quads.iter().flat_map(|quad| quad.corners).map(|[_, y, _]| y).fold(f32::MIN, f32::max);
+        assert!(top.abs() < 1e-6, "from -0.5 to the middle: {top}");
+    }
+
+    #[test]
+    fn a_plant_or_nothing_has_no_model() {
+        assert!(block_model(&table(look(Shape::Cross, [7; 6])), &tints(), 5).is_empty());
+        assert!(block_model(&table(look(Shape::Invisible, [0; 6])), &tints(), 5).is_empty());
     }
 
     #[test]

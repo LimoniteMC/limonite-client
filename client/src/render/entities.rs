@@ -7,12 +7,17 @@
 //! the light where it stands, through the terrain's light map, so a zombie in a dark cave
 //! is dark and one under a torch is lit.
 //!
-//! **Items are their icons, on a card.** A dropped item is the picture the hotbar shows for
-//! it, on a small card that turns and bobs, as Java's turn and bob: a radian a second, and
-//! a tenth of a block up and down. A block's icon is many quads in one plane, which the UI
-//! draws back to front; here each is set a hair in front of the last, so the depth test
-//! keeps that order. The card has a picture on each side, each facing out, and the back
-//! face of each is culled, so whichever side the eye sees reads the right way round.
+//! **A dropped block is its model; an item, its picture on a card.** Both turn and bob, as
+//! Java's do: a radian a second, and a tenth of a block up and down.
+//! - **A block** that has a shape of its own is its model, the world's own mesh of it, a
+//!   quarter size with its middle a quarter of a block up, as Java's ground transform has
+//!   it (m5-plan Deviation 62). It's shaded by face, as the terrain is.
+//! - **An item with a picture,** and a block the inventory shows flat, such as a flower, is
+//!   that picture on a card half a block across, as Java draws a flat item. A flat block's
+//!   icon can be more than one quad in a plane, which the UI draws back to front; here each
+//!   is set a hair in front of the last, so the depth test keeps that order. The card has a
+//!   picture on each side, each facing out, and the back face of each is culled, so
+//!   whichever side the eye sees reads the right way round.
 //!
 //! **Camera-relative, every frame.** Entities move every frame, and there are a few
 //! thousand vertices at most, so the CPU works their positions out from the eye each
@@ -24,7 +29,10 @@ use std::f32::consts::TAU;
 use bytemuck::{Pod, Zeroable};
 use glam::{DVec3, IVec3, Vec3};
 
-use super::{Gpu, icons::Icon};
+use super::{
+    Gpu,
+    icons::{Icon, ModelQuad},
+};
 use crate::{
     entities::Drawn,
     inventory::items::ItemIcons,
@@ -52,6 +60,12 @@ const FLAT: u8 = 0;
 const BLOCKS: u8 = 1;
 const ATLAS: u8 = 2;
 const OVERLAY: u8 = 3;
+/// A block texture drawn whole, as the terrain draws an opaque block.
+const SOLID: u8 = 4;
+
+/// The terrain's render classes, as a model's quads keep them.
+const OPAQUE_CLASS: u8 = 0;
+const OVERLAY_CLASS: u8 = 2;
 
 /// The faces, as the terrain's shader shades them: 0.5 below, 1 above, 0.8 north and
 /// south, 0.6 west and east.
@@ -66,6 +80,11 @@ const EAST: u8 = 5;
 const FRONT: f32 = 0.7;
 /// An item card's side, in blocks: Java draws a dropped item at half size.
 const CARD: f32 = 0.5;
+/// A dropped block's size, and how far above the item's feet its middle is, in blocks:
+/// Java's ground transform for a block, a quarter size and 3/16 up, with the 1/16 more its
+/// renderer adds for a quarter-size model.
+const BLOCK: f32 = 0.25;
+const BLOCK_LIFT: f32 = 0.25;
 /// How far apart the quads of a block's icon stand, front to back, in blocks.
 const LAYERED: f32 = 0.002;
 /// How fast a dropped item turns, in radians a second, and bobs: Java's.
@@ -91,7 +110,9 @@ pub fn vertices(drawn: &[Drawn], eye: DVec3, light: &dyn Fn(IVec3) -> u8, looks:
         let from_eye = (entity.pose.feet - eye).as_vec3();
         match (entity.dropped, looks) {
             (Some(dropped), Some(looks)) => {
-                if let Some(icon) = looks.icons.get(dropped.item, dropped.aux) {
+                if let Some(model) = looks.icons.model(dropped.item, dropped.aux) {
+                    spinning_block(&mut out, entity, from_eye, lit, model);
+                } else if let Some(icon) = looks.icons.get(dropped.item, dropped.aux) {
                     card(&mut out, entity, from_eye, lit, icon, looks);
                 }
             }
@@ -150,13 +171,44 @@ fn cuboid(out: &mut Vec<EntityVertex>, entity: &Drawn, from_eye: Vec3, light: u8
     }
 }
 
-/// A dropped item: its icon on a card that turns and bobs.
-fn card(out: &mut Vec<EntityVertex>, entity: &Drawn, from_eye: Vec3, light: u8, icon: Icon, looks: Looks<'_>) {
+/// How far a dropped item has turned, in degrees, and how far up it's bobbed, in blocks.
+fn turn_and_bob(entity: &Drawn) -> (f32, f32) {
     let seconds = entity.age.as_secs_f32();
     // Each item starts its turn and bob somewhere else, so a pile doesn't turn as one.
     let offset = (entity.runtime_id as f32 * 0.618_034).fract() * TAU;
     let spin = (seconds * SPIN + offset).to_degrees();
     let lift = ((seconds * BOB_SPEED + offset).sin() + 1.0) * BOB;
+    (spin, lift)
+}
+
+/// A dropped block: its model, a quarter size, turning and bobbing.
+fn spinning_block(out: &mut Vec<EntityVertex>, entity: &Drawn, from_eye: Vec3, light: u8, model: &[ModelQuad]) {
+    let (spin, lift) = turn_and_bob(entity);
+    let middle = from_eye + Vec3::Y * (BLOCK_LIFT + lift);
+    for piece in model {
+        let [r, g, b] = piece.tint;
+        let source = match piece.class {
+            OPAQUE_CLASS => SOLID,
+            OVERLAY_CLASS => OVERLAY,
+            _ => BLOCKS,
+        };
+        // A turn and a scale keep a quad's corners going round the same way.
+        quad(
+            out,
+            [0, 1, 2, 3].map(|i| EntityVertex {
+                position: (middle + turned(Vec3::from_array(piece.corners[i]) * BLOCK, spin)).to_array(),
+                uv: piece.uvs[i],
+                layer: u32::from(piece.layer),
+                tint: [r, g, b, 255],
+                info: [source, piece.face, light, 0],
+            }),
+        );
+    }
+}
+
+/// A dropped item: its icon on a card that turns and bobs.
+fn card(out: &mut Vec<EntityVertex>, entity: &Drawn, from_eye: Vec3, light: u8, icon: Icon, looks: Looks<'_>) {
+    let (spin, lift) = turn_and_bob(entity);
     let base = from_eye + Vec3::Y * lift;
     // Each side faces out: the front along +z, turned, and the back along -z. The back is
     // the front seen from behind, so its x runs the other way and it reads the right way
@@ -496,6 +548,72 @@ mod tests {
     #[test]
     fn a_vertex_is_32_bytes() {
         assert_eq!(size_of::<EntityVertex>(), 32);
+    }
+
+    fn cube() -> Vec<ModelQuad> {
+        // Four sides and the top and bottom of a block, round its middle.
+        let faces: [(u8, [[f32; 3]; 4]); 6] = [
+            (DOWN, [[-0.5, -0.5, -0.5], [0.5, -0.5, -0.5], [0.5, -0.5, 0.5], [-0.5, -0.5, 0.5]]),
+            (UP, [[-0.5, 0.5, -0.5], [-0.5, 0.5, 0.5], [0.5, 0.5, 0.5], [0.5, 0.5, -0.5]]),
+            (NORTH, [[-0.5, -0.5, -0.5], [-0.5, 0.5, -0.5], [0.5, 0.5, -0.5], [0.5, -0.5, -0.5]]),
+            (SOUTH, [[-0.5, -0.5, 0.5], [0.5, -0.5, 0.5], [0.5, 0.5, 0.5], [-0.5, 0.5, 0.5]]),
+            (WEST, [[-0.5, -0.5, -0.5], [-0.5, -0.5, 0.5], [-0.5, 0.5, 0.5], [-0.5, 0.5, -0.5]]),
+            (EAST, [[0.5, -0.5, -0.5], [0.5, 0.5, -0.5], [0.5, 0.5, 0.5], [0.5, -0.5, 0.5]]),
+        ];
+        faces
+            .into_iter()
+            .map(|(face, corners)| ModelQuad {
+                corners,
+                uvs: [[0.0, 1.0], [1.0, 1.0], [1.0, 0.0], [0.0, 0.0]],
+                layer: 40 + u16::from(face),
+                face,
+                class: OPAQUE_CLASS,
+                tint: [255; 3],
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_dropped_block_is_its_model_a_quarter_size_on_the_ground() {
+        use crate::{entities::Dropped, inventory::items::ItemIcons};
+
+        let icons = ItemIcons::with_model(1, cube());
+        let (atlas, _) = Atlas::pack(Vec::new());
+        let looks = Looks {
+            icons: &icons,
+            atlas: &atlas,
+        };
+        let mut stone = drawn(Group::Item, [0.25, 0.25], 0.0);
+        stone.dropped = Some(Dropped { item: 1, aux: 0, count: 1 });
+        let eye = stone.pose.feet;
+        let out = vertices(&[stone], eye, &|_| 0xF0, Some(looks));
+        // All six sides, turned but whole: six quads of two triangles.
+        assert_eq!(out.len(), 36);
+        let (min, max) = bounds(&out);
+        let across = (max - min).x.max((max - min).z);
+        assert!(across > 0.249 && across < 0.36, "a quarter of a block, turned: {across}");
+        assert!((max.y - min.y - 0.25).abs() < 1e-5, "and a quarter tall");
+        // Its middle a quarter up, and a bob of up to a fifth more.
+        let middle = (min.y + max.y) / 2.0;
+        assert!((0.25..=0.45).contains(&middle), "{middle}");
+        // Opaque, from the block textures, each side shaded by its face.
+        assert!(out.iter().all(|v| v.info[0] == SOLID && v.layer == 40 + u32::from(v.info[1])));
+    }
+
+    #[test]
+    fn a_dropped_item_without_a_model_is_a_card() {
+        use crate::{entities::Dropped, inventory::items::ItemIcons};
+
+        // No icon at all draws nothing; with a model, that wins over the icon.
+        let icons = ItemIcons::default();
+        let (atlas, _) = Atlas::pack(Vec::new());
+        let looks = Looks {
+            icons: &icons,
+            atlas: &atlas,
+        };
+        let mut stick = drawn(Group::Item, [0.25, 0.25], 0.0);
+        stick.dropped = Some(Dropped { item: 2, aux: 0, count: 1 });
+        assert!(vertices(&[stick], DVec3::ZERO, &|_| 0xF0, Some(looks)).is_empty());
     }
 
     #[test]
