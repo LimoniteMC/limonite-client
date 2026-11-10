@@ -84,8 +84,9 @@ _Last updated: 2026-11-10._
     cave.
   - **Step 15 is done (2026-11-10):** the client keeps every entity the server shows it in a `hecs` world
     (`client/src/entities/`), each drawn 75 ms behind, between two of the server's moves, and a rider on its vehicle's
-    seat. Mobs are boxes of their own size in a colour by kind, turned the way they face, and a dropped item is its
-    hotbar icon on a turning card (`client/src/render/entities.rs`). `--headless` checks them against the server's:
+    seat. Mobs are boxes of their own size in a colour by kind, turned the way they face. A dropped block is its model,
+    turning and bobbing, and an item its picture on a turning card (`client/src/render/entities.rs`; the blocks were
+    the owner's fix, m5-plan Deviation 62). `--headless` checks them against the server's:
     the same ones, of the same types, and nearly all exactly where the server has them, the rest mid-move.
   - **Next:** Step 16, worlds, pausing, death and commands, and then the owner's checkpoint 4.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.

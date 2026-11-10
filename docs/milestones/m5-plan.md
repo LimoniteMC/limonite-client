@@ -1454,6 +1454,12 @@ The questions as they were asked:
     and a chicken where the host stands, through the server as `/summon` does, and then checks the client has every
     entity the server shows the host and nothing else: the same runtime ids, of the same types, where the server has
     them, compared where Bedrock puts each entity's position, so a wrong offset from its feet would show.
+62. **A dropped block spins as its model** (the owner, 2026-11-10, on Step 15). Decision 13 has dropped items drawn as
+    small spinning icons, and Step 15 first drew a block's icon, its inventory picture, flat on a card. The owner found
+    that wrong: the game draws a dropped block as the block itself. So a block with a shape of its own drops as its
+    model, the world's own mesh of it, kept alongside its icon when the icons are built, at a quarter size with its middle
+    a quarter of a block up, as Java's ground transform has it. An item with a picture, and a block the inventory shows
+    flat, such as a flower, stay pictures on a card, as the game draws them.
 
 ## Results (filled in during execution)
 
@@ -1801,9 +1807,12 @@ by Pumpkin's own reader with no bytes left over.
 - **Drawn** (`render/entities.rs`, `entities.wgsl`), in the terrain's pass after its opaque faces:
   - **boxes** of each entity's size, in one colour per group: monsters red, other mobs green, players blue, the rest
     grey. Each is turned to its yaw, as a model would be, with its front a little darker, so which way it faces shows;
-  - **dropped items** as the icon the hotbar shows, on a card half a block across that turns a radian a second and
-    bobs a tenth of a block, Java's numbers. A block's icon is many quads in one plane, each set a hair in front of the
-    last so that depth keeps the UI's order, and there's a picture on each side, so either reads the right way round;
+  - **dropped blocks** as their models, the world's own mesh of each, a quarter size, turning a radian a second and
+    bobbing a tenth of a block, Java's numbers (Deviation 62, the owner's fix: they were first their inventory icons,
+    flat on a card);
+  - **dropped items** with a picture, and blocks the inventory shows flat, such as flowers, as that picture on a card
+    half a block across, turning and bobbing the same way, with a picture on each side, so either reads the right way
+    round;
   - **lit** by the light in the block at the box's middle, through the terrain's light map, shaded by face as the
     terrain is, and fogged as it is. Positions are worked out from the eye each frame on the CPU, which for a few
     thousand vertices costs nothing to speak of. The bench draws none, to keep M4's picture.
@@ -1814,15 +1823,18 @@ by Pumpkin's own reader with no bytes left over.
 - **Logged:** at the end of a session, how many came and went, the names the client doesn't know (none, so far), the
   packets about entities it didn't have, and how far apart moves came. Those packets are `SetActorData` for an entity
   that hasn't come yet, or never comes: 0 to 40 a run, which `AddActor`'s own data makes up for.
-- **Tests** (30 more): a pose halfway between two moves; the frame a delay late; staying put past the newest pose; a
+- **Tests** (35 more): a pose halfway between two moves; the frame a delay late; staying put past the newest pose; a
   move after standing still; angles; a teleport; forgetting old poses but keeping the two a frame needs; an entity
   that comes, moves and goes; an unknown name; items' and players' feet; a baby's box; the same id again; a chicken
   jockey on its seat, moving and getting off; a rider whose vehicle goes; the server's every entity name; groups and
-  sizes; the gap histogram; boxes from the eye, their light, their yaw and front; and the shader validates.
+  sizes; the gap histogram; boxes from the eye, their light, their yaw and front; a block's model all round its middle,
+  a slab's half as tall, and none for a flower; a dropped block a quarter size on the ground, and no picture, no card;
+  and the shader validates.
 - **Frames** (`run/step15/shots`, gitignored), from the screenshot tool, whose list can now `summon` an entity and
   `drop` an item: Step 14's stone room lit by two torches, with a cow, a pig, a chicken and a zombie in it and a sword,
-  torches, dirt and logs on the floor, by day and by night and from low down.
-- **Checks:** 433 client tests, clippy with the same 2 warnings, and the headless run's 10 PASS lines, 11 with
+  torches, dirt and logs on the floor, by day and by night and from low down; and the same room with dirt, a grass
+  block, logs, stairs, a fence, glass, a slab, a poppy, a sword and torches dropped, from near and far.
+- **Checks:** 438 client tests, clippy with the same 2 warnings, and the headless run's 10 PASS lines, 11 with
   `--edits` and 12 with `--inventory`.
 - **Not verified:**
   - nobody has watched them move in the window, where the gaps are measured per frame;

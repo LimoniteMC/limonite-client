@@ -175,7 +175,8 @@ Milestones 0 to 4 are done, and Milestone 5 is under way. Here's what they've bu
 - **Mobs, other players and dropped items.** Everything the server shows you comes in, and moves smoothly: each is
   drawn a moment behind, blended between the server's moves, and a rider sits on what it rides. A headless check
   holds the client's copy to the server's. Until milestone 8 gives them models, mobs are boxes of their own size,
-  coloured by kind and turned the way they face, and a dropped item is its hotbar icon on a little turning card.
+  coloured by kind and turned the way they face. A dropped block spins on the ground as a small copy of itself, and
+  an item as its picture.
 - **A debug world.** `--debug-world` holds every block state in a grid, and you can jump to any of them.
 - **Bedrock-native world state.** Chunks decode straight into Bedrock's own palette format, and
   the client's world equals the server's, block for block and biome for biome. That's checked on
