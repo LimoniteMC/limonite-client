@@ -31,11 +31,13 @@ use pumpkin_protocol::{
             container_close::SContainerClose,
             cursor_item_drag::{CURSOR_ITEM_DRAG_START, CURSOR_ITEM_DRAG_STOP, SCursorItemDrag},
             interact::{Action as InteractAction, SInteract},
+            inventory_transaction::{MismatchTransactionData, SInventoryTransaction, TransactionData},
             mob_equipment::SMobEquipment,
             player_action::{PlayerActionType, SPlayerAction},
             player_auth_input::{InputData, PlayerBlockAction, SPlayerAuthInput},
             request_chunk_radius::SRequestChunkRadius,
             resource_pack_client_response::SResourcePackClientResponse,
+            respawn::{RespawnState, SRespawn},
             set_local_player_as_initialized::SSetLocalPlayerAsInitialized,
             set_player_inventory_options::SSetPlayerInventoryOptions,
         },
@@ -190,6 +192,9 @@ pub struct Session {
     /// Whether a click put the cursor's stack down and the button is still held: the
     /// official client calls that a drag.
     dragging: bool,
+    /// Whether the death screen's Respawn has been pressed, and the server's answer is
+    /// awaited.
+    respawn_asked: bool,
 }
 
 impl Session {
@@ -225,6 +230,7 @@ impl Session {
             stats: Stats::default(),
             start_game: None,
             dragging: false,
+            respawn_asked: false,
         };
         // No `RequestNetworkSettings` first: compression then never turns on,
         // and every batch stays plain bytes (recon §5).
@@ -504,6 +510,11 @@ impl Session {
                 Ok(_) => {}
                 Err(err) => warn!("Bad NetworkStackLatency: {err}"),
             },
+            // The server says the host died, and later that it can respawn (`respawn`).
+            SRespawn::PACKET_ID => match self.decode::<SRespawn>(packet) {
+                Ok(respawn) => self.on_respawn(&respawn),
+                Err(err) => warn!("Bad Respawn: {err}"),
+            },
             CDisconnect::PACKET_ID => {
                 match self.decode::<CDisconnect>(packet) {
                     Ok(disconnect) => warn!(
@@ -599,6 +610,47 @@ impl Session {
         // The server sends PlayerSpawn once more than 4 chunks are on their way;
         // it can arrive before they do.
         info!("Spawned ({} LevelChunk packets so far)", self.level_chunks);
+    }
+
+    /// The server's half of dying and respawning, in the official client's order (m5-plan
+    /// Results, Step 1):
+    /// 1. The host dies, and the server says it's looking for a spawn point. The official
+    ///    client then says its inventory no longer matches, since the server has just dropped
+    ///    it, and shows the death screen.
+    /// 2. Respawn, on that screen, sends our `Respawn`, that the client is ready ([`respawn`]).
+    /// 3. The server answers that it's ready too, and the client sends the `Respawn` player
+    ///    action, for which the server moves the host to its spawn point.
+    ///
+    /// [`respawn`]: Self::respawn
+    fn on_respawn(&mut self, respawn: &SRespawn) {
+        let Some(spawn) = self.spawn else {
+            return;
+        };
+        match respawn.state {
+            RespawnState::SearchingForSpawn => {
+                info!("The host died");
+                self.send(&mismatch());
+            }
+            RespawnState::ReadyToSpawn if self.respawn_asked => {
+                self.respawn_asked = false;
+                self.send(&player_action(spawn.runtime_id, PlayerActionType::Respawn, IVec3::ZERO, IVec3::ZERO, -1));
+                info!("Respawning");
+            }
+            _ => {}
+        }
+    }
+
+    /// Respawn was pressed on the death screen: tells the server the client is ready to
+    /// respawn, once, and waits for its answer (`on_respawn`).
+    pub fn respawn(&mut self) {
+        let Some(spawn) = self.spawn else {
+            return;
+        };
+        if self.respawn_asked || !self.game.is_dead() {
+            return;
+        }
+        self.respawn_asked = true;
+        self.send(&ready_to_respawn(spawn.runtime_id));
     }
 
     fn send_pack_response(&self, response: u8) {
@@ -1021,6 +1073,28 @@ fn block_pos(block: IVec3) -> BlockPos {
 }
 
 /// A `PlayerAction` packet.
+/// The client's `Respawn`: ready to respawn, with no position, as the official client sends it.
+fn ready_to_respawn(runtime_id: u64) -> SRespawn {
+    SRespawn {
+        position: Vector3::new(0.0, 0.0, 0.0),
+        state: RespawnState::ClientReadyToSpawn,
+        player_runtime_id: VarULong(runtime_id),
+    }
+}
+
+/// The transaction the official client sends as it dies: of type mismatch, with nothing in
+/// it, saying the inventory no longer matches.
+fn mismatch() -> SInventoryTransaction {
+    SInventoryTransaction {
+        legacy_request_id: VarInt(0),
+        legacy_set_item_slots: Vec::new(),
+        has_value: false,
+        actions: Vec::new(),
+        transaction_type: VarUInt(1),
+        transaction_data: TransactionData::Mismatch(MismatchTransactionData),
+    }
+}
+
 fn player_action(runtime_id: u64, action: PlayerActionType, block: IVec3, result: IVec3, face: i32) -> SPlayerAction {
     SPlayerAction {
         player_runtime_id: VarULong(runtime_id),
@@ -1045,4 +1119,39 @@ fn swing(runtime_id: u64, source: ActorSwingSource) -> SAnimate {
 
 fn vec2(v: glam::DVec2) -> Vector2<f32> {
     Vector2::new(v.x as f32, v.y as f32)
+}
+
+#[cfg(test)]
+mod tests {
+    use pumpkin_protocol::serial::PacketWrite;
+
+    use super::*;
+
+    fn written(packet: &impl PacketWrite) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        packet.write(&mut bytes).unwrap();
+        bytes
+    }
+
+    #[test]
+    fn respawning_is_the_official_clients_two_packets() {
+        // Runtime id 1, as the captured host's was.
+        let ready = written(&ready_to_respawn(1));
+        assert_eq!(
+            ready,
+            include_bytes!("../../pumpkin/crates/pumpkin-protocol/src/bedrock/client_codecs/fixtures/respawn.bin")
+        );
+        let action = written(&player_action(1, PlayerActionType::Respawn, IVec3::ZERO, IVec3::ZERO, -1));
+        assert_eq!(
+            action,
+            include_bytes!("../../pumpkin/crates/pumpkin-protocol/src/bedrock/client_codecs/fixtures/player_action-respawn.bin")
+        );
+    }
+
+    #[test]
+    fn dying_says_the_inventory_no_longer_matches_as_the_official_client_does() {
+        // The M5 capture's, as the host died: no legacy request, no slots, type 1, mismatch,
+        // and no actions.
+        assert_eq!(written(&mismatch()), [0x00, 0x00, 0x01, 0x00]);
+    }
 }

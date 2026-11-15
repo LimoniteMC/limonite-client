@@ -551,5 +551,13 @@ fn menu_sheets() {
 
     ui.show_busy("menu.loadingLevel");
     draw(&mut ui, Some("busy"), at(0.0, 0.0));
+
+    // Over a world: the pause menu, the pointer on Resume Game, and the death screen.
+    ui.show_game();
+    ui.set_menu(crate::ui::Menu::Pause);
+    let [_, height] = ui.screen();
+    draw(&mut ui, Some("pause"), at(0.0, height / 2.0 - 12.0));
+    ui.set_menu(crate::ui::Menu::Death);
+    draw(&mut ui, Some("death"), at(0.0, height / 2.0 + 12.0));
     println!("Wrote the menus' sheets to {}", out.display());
 }

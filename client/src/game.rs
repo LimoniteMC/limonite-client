@@ -138,6 +138,13 @@ impl Game {
         self.player.as_mut()
     }
 
+    /// Whether the host is dead: its health is gone, until the server gives it back on a
+    /// respawn. The death screen shows while it is.
+    #[must_use]
+    pub fn is_dead(&self) -> bool {
+        self.player.as_ref().is_some_and(|player| player.attributes.health <= 0.0)
+    }
+
     pub const fn time(&self) -> &TimeOfDay {
         &self.time
     }

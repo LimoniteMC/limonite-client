@@ -8,7 +8,8 @@
 //!   the GPU, so they're tested without one.
 //! - [`render`] turns the tree into quads and draws them. [`input`] is the pointer.
 //! - [`button`] and [`text_field`] are the widgets the menus are made of.
-//! - [`screens`] are what's built from all that: the HUD, the inventory and the world list.
+//! - [`screens`] are what's built from all that: the HUD, the inventory, the world list, and
+//!   the pause and death screens.
 //!
 //! **The UI reads the game; it never reads packets** (PLAN.md, UI). [`Ui::update`]
 //! is handed the [`Game`], and that's its only way in.
@@ -43,6 +44,7 @@ use self::{
     screens::{
         hud::{self, Hud, HudState},
         inventory::{self, InventoryScreen, Pressed, View},
+        overlay::{self, Overlay, OverlayChoice},
         worlds::{self as worlds_screen, Choice, Key, Message, WorldsScreen},
     },
     tree::Tree,
@@ -121,7 +123,11 @@ fn load_with(stack: &PackStack, table: &AppearanceTable, tints: &Tints, extra: &
         Ok(input) => inputs.push(input),
         Err(reason) => missing.push(format!("{path} ({reason})")),
     };
-    let menus = button::SPRITES.iter().chain(&text_field::SPRITES).chain(&worlds_screen::SPRITES);
+    let menus = button::SPRITES
+        .iter()
+        .chain(&text_field::SPRITES)
+        .chain(&worlds_screen::SPRITES)
+        .chain(&overlay::SPRITES);
     for path in hud::SPRITES.iter().chain(&inventory::SPRITES).chain(menus).chain(extra) {
         take(path, atlas::read_sprite(stack, path));
     }
@@ -190,10 +196,21 @@ enum Screen {
     Game,
 }
 
+/// A menu over a world, which has the mouse and the keys while it's up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Menu {
+    #[default]
+    None,
+    Pause,
+    Death,
+}
+
 /// What a click or a key on a menu asked for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Clicked {
     Worlds(Choice),
+    /// On the pause menu or the death screen.
+    Overlay(OverlayChoice),
 }
 
 /// The UI, on the CPU.
@@ -202,7 +219,10 @@ pub struct Ui {
     hud: Hud,
     inventory: InventoryScreen,
     worlds: WorldsScreen,
+    pause: Overlay,
+    death: Overlay,
     screen: Screen,
+    menu: Menu,
     atlas: Atlas,
     font: Font,
     lang: Lang,
@@ -224,12 +244,18 @@ impl Ui {
         // After the HUD, so it draws over it.
         let inventory = InventoryScreen::build(&mut tree, &atlas);
         let worlds = WorldsScreen::build(&mut tree, &atlas, &lang);
+        // Over the world's screens, so they're drawn over them.
+        let pause = Overlay::pause(&mut tree, &atlas, &lang);
+        let death = Overlay::death(&mut tree, &atlas, &lang);
         Self {
             tree,
             hud,
             inventory,
             worlds,
+            pause,
+            death,
             screen: Screen::Game,
+            menu: Menu::None,
             atlas,
             font,
             lang,
@@ -283,6 +309,7 @@ impl Ui {
 
     fn hide_game(&mut self) {
         self.screen = Screen::Worlds;
+        self.set_menu(Menu::None);
         self.hud.update(&mut self.tree, &self.icons, &self.lang, None);
         self.inventory.update(&mut self.tree, &self.icons, &self.lang, None);
         self.hud.set_note(&mut self.tree, None);
@@ -299,16 +326,51 @@ impl Ui {
         &self.lang
     }
 
+    /// Shows a menu over the world, or none.
+    pub fn set_menu(&mut self, menu: Menu) {
+        if self.menu == menu {
+            return;
+        }
+        self.menu = menu;
+        self.pause.set_visible(&mut self.tree, menu == Menu::Pause);
+        self.death.set_visible(&mut self.tree, menu == Menu::Death);
+    }
+
+    /// The menu over the world, if one is up.
+    fn overlay(&self) -> Option<&Overlay> {
+        match self.menu {
+            Menu::None => None,
+            Menu::Pause => Some(&self.pause),
+            Menu::Death => Some(&self.death),
+        }
+    }
+
+    fn overlay_mut(&mut self) -> Option<&mut Overlay> {
+        match self.menu {
+            Menu::None => None,
+            Menu::Pause => Some(&mut self.pause),
+            Menu::Death => Some(&mut self.death),
+        }
+    }
+
     /// Whether the keys are the UI's: a menu is up, rather than the game.
     #[must_use]
     pub fn wants_keys(&self) -> bool {
-        self.screen == Screen::Worlds
+        self.screen == Screen::Worlds || self.menu != Menu::None
     }
 
     /// Brings the menus' looks up to date: what's under the pointer, and the carets' blink.
     pub fn update_menus(&mut self, now: Instant) {
-        if self.screen == Screen::Worlds {
-            self.worlds.update(&mut self.tree, &self.font, now);
+        match self.screen {
+            Screen::Worlds => self.worlds.update(&mut self.tree, &self.font, now),
+            Screen::Game => {
+                let (pause, death) = (&self.pause, &self.death);
+                match self.menu {
+                    Menu::None => {}
+                    Menu::Pause => pause.update(&mut self.tree),
+                    Menu::Death => death.update(&mut self.tree),
+                }
+            }
         }
     }
 
@@ -316,7 +378,7 @@ impl Ui {
     pub fn key(&mut self, key: Key) -> Option<Clicked> {
         match self.screen {
             Screen::Worlds => self.worlds.key(&mut self.tree, key, Instant::now()).map(Clicked::Worlds),
-            Screen::Game => None,
+            Screen::Game => self.overlay().and_then(|overlay| overlay.key(key)).map(Clicked::Overlay),
         }
     }
 
@@ -371,9 +433,13 @@ impl Ui {
         let scale = f64::from(self.scale);
         let at = [(x / scale) as f32, (y / scale) as f32];
         self.pointer.moved(at);
+        let over = self.tree.hit(at);
         match self.screen {
-            Screen::Worlds => self.worlds.pointer_over(self.tree.hit(at)),
-            Screen::Game => self.inventory.pointer_moved(&mut self.tree, at),
+            Screen::Worlds => self.worlds.pointer_over(over),
+            Screen::Game => match self.overlay_mut() {
+                Some(overlay) => overlay.pointer_over(over),
+                None => self.inventory.pointer_moved(&mut self.tree, at),
+            },
         }
     }
 
@@ -404,7 +470,7 @@ impl Ui {
                 .worlds
                 .clicked(&mut self.tree, &self.lang, clicked, Instant::now())
                 .map(Clicked::Worlds),
-            Screen::Game => None,
+            Screen::Game => self.overlay().and_then(|overlay| overlay.clicked(clicked)).map(Clicked::Overlay),
         }
     }
 }

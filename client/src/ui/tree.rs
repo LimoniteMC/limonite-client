@@ -159,6 +159,15 @@ impl Node {
         self
     }
 
+    /// Multiplied by this colour, if it's a picture: plain white tinted red, say.
+    #[must_use]
+    pub const fn tinted(mut self, color: [u8; 4]) -> Self {
+        if let Kind::Image(image) = &mut self.kind {
+            image.color = color;
+        }
+        self
+    }
+
     /// Lets the pointer land on it.
     #[must_use]
     pub const fn clickable(mut self) -> Self {

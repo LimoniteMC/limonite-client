@@ -23,8 +23,9 @@ use super::{
 
 const BOX: &str = "textures/ui/edit_box_indent";
 const BOX_HOVER: &str = "textures/ui/edit_box_indent_hover";
-/// What the caret is drawn with: one unit of plain white, stretched.
-pub const WHITE: &str = "textures/ui/white";
+/// What the caret is drawn with: plain white, stretched. (`textures/ui/white` is white in a
+/// black frame.)
+pub const WHITE: &str = "textures/ui/white_background";
 
 /// The pictures text fields ask for.
 pub const SPRITES: [&str; 3] = [BOX, BOX_HOVER, WHITE];

@@ -34,13 +34,16 @@ use std::{
     collections::HashSet,
     path::{Path, PathBuf},
     process::ExitCode,
-    sync::PoisonError,
+    sync::{PoisonError, atomic::Ordering},
     thread,
     time::{Duration, Instant},
 };
 
-use glam::DVec3;
-use pumpkin_core::{entity::player::Player as ServerPlayer, world::World as ServerWorld};
+use glam::{DVec3, IVec3};
+use pumpkin_core::{
+    entity::{EntityBase, player::Player as ServerPlayer},
+    world::World as ServerWorld,
+};
 use pumpkin_data::{
     Block,
     entity::EntityType,
@@ -68,6 +71,7 @@ use crate::{
     home::Home,
     identity::Identity,
     inventory::{items, requests::Button as ClickButton, slots::SlotRef},
+    player::EYE_HEIGHT,
     render::camera::look_direction,
     session::{Session, Stage},
     settings::{MAX_RADIUS, MIN_RADIUS, Overrides, Settings},
@@ -81,7 +85,7 @@ const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [
                      [--time <ticks>] [--bench <seconds>]\n       \
                      limonite-client --headless [--home <path>] [--data-dir <path>] [--name <name>] \
                      [--gamemode <mode>] [--radius <chunks>] [--hotbar <items>] [--linger <seconds>] [--measure] \
-                     [--map <path.png>] [--stream <blocks>] [--edits <blocks>] [--inventory]";
+                     [--map <path.png>] [--stream <blocks>] [--edits <blocks> [--check-edits]] [--inventory]";
 
 /// Login and spawn must finish within this.
 const SPAWN_DEADLINE: Duration = Duration::from_secs(120);
@@ -163,6 +167,9 @@ struct Args {
     /// Place and break this many blocks near the host with the real packets, and
     /// check that the server applied them.
     edits: Option<u32>,
+    /// After the edits, Save & Quit, open the same world again in a new server, and check
+    /// that the edits, where the host stood and what it held all came back (m5-plan Step 16).
+    check_edits: bool,
     /// Open the inventory and move items with the real packets, and check that the
     /// server agreed and holds what the client shows.
     inventory: bool,
@@ -188,6 +195,7 @@ impl Args {
         let mut map = None;
         let mut stream = None;
         let mut edits = None;
+        let mut check_edits = false;
         let mut inventory = false;
         let mut bench = None;
         let mut supervised = None;
@@ -195,7 +203,10 @@ impl Args {
         // The scripted session's flags, which mean nothing to the window.
         let mut headless_only = Vec::new();
         while let Some(arg) = args.next() {
-            if matches!(arg.as_str(), "--linger" | "--measure" | "--map" | "--stream" | "--edits" | "--inventory") {
+            if matches!(
+                arg.as_str(),
+                "--linger" | "--measure" | "--map" | "--stream" | "--edits" | "--check-edits" | "--inventory"
+            ) {
                 headless_only.push(arg.clone());
             }
             match arg.as_str() {
@@ -276,6 +287,7 @@ impl Args {
                             .map_err(|_| format!("--edits: `{blocks}` isn't a number of blocks"))?,
                     );
                 }
+                "--check-edits" => check_edits = true,
                 "--inventory" => inventory = true,
                 supervisor::SUPERVISED => {
                     supervised = Some(PathBuf::from(args.next().ok_or("--supervised needs a path")?));
@@ -298,6 +310,9 @@ impl Args {
                 "the scripted session's flags need --headless: {}",
                 headless_only.join(", ")
             ));
+        }
+        if check_edits && edits.is_none() {
+            return Err("--check-edits needs --edits: it checks what the edits left".to_string());
         }
         if headless && bench.is_some() {
             return Err("--bench measures the window's frames, so it can't run with --headless".to_string());
@@ -335,6 +350,7 @@ impl Args {
             map: map.as_deref().map(absolute).transpose()?,
             stream,
             edits,
+            check_edits,
             inventory,
             bench,
         })
@@ -497,13 +513,10 @@ fn windowed(args: &Args, home: &Home, settings: Settings, identity: &Identity) -
 /// The scripted session (`--headless`): the M2 and M3 acceptance run, which
 /// needs no GPU and no Bedrock install.
 fn headless(args: &Args, settings: &Settings, identity: &Identity) -> ExitCode {
-    let server = match start_server(args, settings, identity) {
-        Ok(server) => server,
-        Err(code) => return code,
-    };
-    let result = play(&server, args, settings, identity);
-    server.stop();
-    result
+    match start_server(args, settings, identity) {
+        Ok(server) => play(server, args, settings, identity),
+        Err(code) => code,
+    }
 }
 
 /// Opens the run's own world, `--data-dir`'s, and starts its server: the scripted session's,
@@ -536,16 +549,258 @@ fn start_server(args: &Args, settings: &Settings, identity: &Identity) -> Result
 }
 
 /// The scripted host session: log in, spawn, walk east, check the move on the
-/// server, optionally linger, and report.
-fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Identity) -> ExitCode {
+/// server, optionally linger, and report. The server is stopped by the end.
+fn play(server: EmbeddedServer, args: &Args, settings: &Settings, identity: &Identity) -> ExitCode {
     let mut session = match Session::connect(&server.connector, &settings.name, identity.xid(), settings.radius) {
         Ok(session) => session,
         Err(err) => {
             error!("Couldn't connect to the embedded server: {err}");
+            server.stop();
             return ExitCode::FAILURE;
         }
     };
+    let (mut checks, spawned) = run_checks(&mut session, &server, args, settings, identity);
+    session.log_edits();
+    session.log_light();
+    session.log_entities();
+    let mut passed = true;
+    if let Some(path) = &args.map {
+        passed &= write_map(&session, path);
+    }
 
+    // Save & Quit, and the same world again, in a new server in this process, as the window
+    // does (`--check-edits`). Then dying and respawning, in whichever world is open.
+    let mut open = Some((session, server));
+    if args.check_edits {
+        if spawned {
+            let (session, server) = open.take().unwrap_or_else(|| unreachable!("the world is open"));
+            let (check, reopened) = reload_and_check(session, server, args, settings, identity);
+            checks.push(check);
+            open = reopened;
+        } else {
+            checks.push(Check::new("reload", false, "not checked: never spawned".to_string()));
+        }
+    }
+    match &mut open {
+        Some((session, server)) if spawned => checks.push(respawn_and_check(session, server)),
+        _ => checks.push(Check::new("respawn", false, "not checked: no world to die in".to_string())),
+    }
+    passed &= checks::report(&checks);
+    // Dropping the session closes the connection: the host leaves the game
+    // before the server stops.
+    if let Some((session, server)) = open {
+        drop(session);
+        server.stop();
+    }
+
+    if passed {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::FAILURE
+    }
+}
+
+/// What the host left in a world, to find again once it's opened anew (`--check-edits`).
+struct Left {
+    /// Every block around the edits' floor, as the client showed it.
+    blocks: Vec<(IVec3, u32)>,
+    /// Where the server had the host's feet.
+    feet: [f64; 3],
+    /// What the client showed in each of the 36 slots.
+    slots: Vec<Option<(i16, u16)>>,
+}
+
+/// How far round the host the reload check looks: the edits' floor, and four blocks over it.
+const LEFT_REACH: i32 = EDIT_FLOOR;
+const LEFT_HEIGHT: i32 = 4;
+
+/// What the client shows of the edits' floor and over it, where the host stands, and what it
+/// holds.
+fn what_is_left(session: &Session, feet: [f64; 3]) -> Result<Left, String> {
+    let (x, z) = (feet[0].floor() as i32, feet[2].floor() as i32);
+    let mut blocks = Vec::new();
+    for dx in -LEFT_REACH..=LEFT_REACH {
+        for dz in -LEFT_REACH..=LEFT_REACH {
+            for y in EDIT_FLOOR_Y..EDIT_FLOOR_Y + LEFT_HEIGHT {
+                let at = IVec3::new(x + dx, y, z + dz);
+                let id = session.game().world().block(at.x, at.y, at.z, 0).ok_or_else(|| format!("the client has no block at {at}"))?;
+                blocks.push((at, id));
+            }
+        }
+    }
+    Ok(Left {
+        blocks,
+        feet,
+        slots: held(session),
+    })
+}
+
+/// What the client shows in each of the 36 slots.
+fn held(session: &Session) -> Vec<Option<(i16, u16)>> {
+    let slots = session.game().inventory().slots();
+    (0..inventory::MAIN).map(|slot| slots.item(SlotRef::Main(slot as u8)).map(|item| (item.id, item.count))).collect()
+}
+
+/// Places one more block with the real packets, and leaves it, for the reload to find.
+fn keep_a_block(session: &mut Session, world: &ServerWorld) -> Result<IVec3, String> {
+    session.select_slot(0);
+    let hit = clicks_in_reach(session)
+        .into_iter()
+        .find(|hit| plan_for(session, hit).is_ok())
+        .ok_or("nothing in reach to place a block on")?;
+    let (plan, item) = plan_for(session, &hit)?;
+    let at = plan.result;
+    let pos = BlockPos::new(at.x, at.y, at.z);
+    session.use_pressed(Some(&hit));
+    if !edit_ticks(session, 40, |_| world.get_block(&pos).id == item.id) {
+        return Err(format!("the server didn't place the kept block at {at}"));
+    }
+    Ok(at)
+}
+
+/// Save & Quit, and the same world opened again (m5-plan Step 16, `--check-edits`). Leaves a
+/// block placed, notes what's round the edits, where the host stands and what it holds, and
+/// leaves: the host goes, and the server stops, which saves. Then a new server opens the same
+/// world in this process, as the window's world list does, the host joins it, and all that
+/// has to have come back. Gives back the reopened world, to go on in.
+fn reload_and_check(
+    mut session: Session,
+    server: EmbeddedServer,
+    args: &Args,
+    settings: &Settings,
+    identity: &Identity,
+) -> (Check, Option<(Session, EmbeddedServer)>) {
+    const NAME: &str = "reload";
+    let fail = |detail: String| Check::new(NAME, false, detail);
+    let Some(world) = server.server.get_all_players().first().map(|player| player.world().clone()) else {
+        return (fail("the server has no player".to_string()), Some((session, server)));
+    };
+    let kept = match keep_a_block(&mut session, &world) {
+        Ok(kept) => kept,
+        Err(err) => return (fail(err), Some((session, server))),
+    };
+    // A moment for the client to hear about it, and for the last input to reach the server.
+    let _ = session.run_until(Instant::now() + Duration::from_secs(1), |_| false);
+    let left = server.host_feet().ok_or_else(|| "the server has no player".to_string()).and_then(|feet| what_is_left(&session, feet));
+    let left = match left {
+        Ok(left) => left,
+        Err(err) => return (fail(err), Some((session, server))),
+    };
+    info!("Save & Quit: leaving, and stopping the server, which saves the world");
+    drop(session);
+    server.stop();
+
+    info!("Opening the same world again, in a new server");
+    let reopened = Instant::now();
+    let Ok(server) = start_server(args, settings, identity) else {
+        return (fail("the world couldn't be opened again".to_string()), None);
+    };
+    let mut session = match Session::connect(&server.connector, &settings.name, identity.xid(), settings.radius) {
+        Ok(session) => session,
+        Err(err) => {
+            server.stop();
+            return (fail(format!("couldn't join the reopened world: {err}")), None);
+        }
+    };
+    if session.run_until(Instant::now() + SPAWN_DEADLINE, |s| s.stage() == Stage::Spawned).is_err() {
+        return (fail("the host never spawned in the reopened world".to_string()), Some((session, server)));
+    }
+    let spawned_in = reopened.elapsed().as_secs_f64();
+    let blocks_back = |session: &Session| {
+        left.blocks.iter().all(|&(at, _)| session.game().world().block(at.x, at.y, at.z, 0).is_some())
+    };
+    let _ = session.run_until(Instant::now() + CHUNKS_MAX_WAIT, blocks_back);
+    let _ = session.run_until(Instant::now() + SETTLE, |session| held(session) == left.slots);
+
+    let mut problems = Vec::new();
+    let changed: Vec<String> = left
+        .blocks
+        .iter()
+        .filter_map(|&(at, id)| {
+            let now = session.game().world().block(at.x, at.y, at.z, 0);
+            (now != Some(id)).then(|| format!("{at} was {id:#x} and is {now:?}"))
+        })
+        .collect();
+    if let Some(first) = changed.first() {
+        problems.push(format!("{} blocks came back changed, such as {first}", changed.len()));
+    }
+    let came = session.spawn().map(|spawn| spawn.eye_position);
+    let off = came.map(|eyes| {
+        let feet = [f64::from(eyes.x), f64::from(eyes.y) - EYE_HEIGHT, f64::from(eyes.z)];
+        feet.iter().zip(&left.feet).map(|(a, b)| (a - b).powi(2)).sum::<f64>().sqrt()
+    });
+    match off {
+        Some(off) if off <= 0.01 => {}
+        Some(off) => problems.push(format!("the host came back {off:.3} blocks from where it left")),
+        None => problems.push("the reopened world never placed the host".to_string()),
+    }
+    let now_held = held(&session);
+    if now_held != left.slots {
+        problems.push(format!("the host held {:?} and now holds {now_held:?}", left.slots));
+    }
+    let stacks = left.slots.iter().flatten().count();
+    let detail = if problems.is_empty() {
+        format!(
+            "left a block placed at {kept}, then Save & Quit, and a new server in this process gave back all {} \
+             blocks round the edits, the host {:.3} blocks from where it left, and its {stacks} stacks; spawned \
+             {spawned_in:.1} s after the reopen began",
+            left.blocks.len(),
+            off.unwrap_or_default()
+        )
+    } else {
+        problems.join("; ")
+    };
+    (Check::new(NAME, problems.is_empty(), detail), Some((session, server)))
+}
+
+/// Kills the host through the server, as `/kill` does, presses Respawn as the death screen
+/// does, and checks that the client saw it die, and that it lives again on both sides.
+fn respawn_and_check(session: &mut Session, server: &EmbeddedServer) -> Check {
+    const NAME: &str = "respawn";
+    let players = server.server.get_all_players();
+    let Some(player) = players.first() else {
+        return Check::new(NAME, false, "the server has no player".to_string());
+    };
+    info!("Killing the host, as /kill does");
+    {
+        let _runtime = server.runtime.enter();
+        EntityBase::kill(player.as_ref(), player.as_ref());
+    }
+    let _ = session.run_until(Instant::now() + SETTLE, |s| s.game().is_dead());
+    if !session.game().is_dead() {
+        return Check::new(NAME, false, "the client never saw the host die".to_string());
+    }
+    let asked = Instant::now();
+    session.respawn();
+    let _ = session.run_until(Instant::now() + SETTLE, |s| !s.game().is_dead());
+    let took = asked.elapsed().as_secs_f64() * 1000.0;
+    let players = server.server.get_all_players();
+    let server_alive = players
+        .first()
+        .is_some_and(|player| !player.living_entity.dead.load(Ordering::Relaxed) && player.living_entity.health.load() > 0.0);
+    let client_alive = !session.game().is_dead();
+    let outcome = match (server_alive, client_alive) {
+        (true, true) => format!("the host lives again on both sides, {took:.0} ms after the press"),
+        (true, false) => "the server brought the host back, but the client still shows it dead".to_string(),
+        (false, true) => "the client shows the host alive, but the server still has it dead".to_string(),
+        (false, false) => format!("the host is still dead on both sides {took:.0} ms after the press"),
+    };
+    Check::new(
+        NAME,
+        client_alive && server_alive,
+        format!("the client saw the host die, Respawn sent the official client's two packets, and {outcome}"),
+    )
+}
+
+/// The checks in the first world: everything but the reload and the respawn. Says whether the
+/// host spawned.
+fn run_checks(
+    session: &mut Session,
+    server: &EmbeddedServer,
+    args: &Args,
+    settings: &Settings,
+    identity: &Identity,
+) -> (Vec<Check>, bool) {
     let spawned = session.run_until(Instant::now() + SPAWN_DEADLINE, |s| {
         s.stage() == Stage::Spawned
     });
@@ -561,9 +816,9 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
     let spawned = match (spawned, session.spawn()) {
         (Ok(()), Some(spawn)) => {
             session.check_gamemode(settings.gamemode);
-            checks.push(walk_and_check(&mut session, server, &spawn));
+            checks.push(walk_and_check(session, server, &spawn));
             checks.push(checks::operator(&server.server, login::host_uuid(&settings.name, identity.xid())));
-            checks.push(teleport_and_check(&mut session, server));
+            checks.push(teleport_and_check(session, server));
             // The server probes once a second, from when the host has loaded.
             let _ = session.run_until(Instant::now() + SETTLE, |_| checks::latency(&server.server).passed());
             checks.push(checks::latency(&server.server));
@@ -577,22 +832,22 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
             }
             // `PlayerSpawn` only means the server has queued enough chunks,
             // not that they've arrived, so wait for them before checking.
-            let join_chunks = wait_for_chunks(&mut session);
-            checks.push(entities_and_check(&mut session, server));
+            let join_chunks = wait_for_chunks(session);
+            checks.push(entities_and_check(session, server));
             if !args.hotbar.is_empty() {
-                checks.push(hotbar_and_check(&mut session, server, &args.hotbar));
+                checks.push(hotbar_and_check(session, server, &args.hotbar));
             }
             if let Some(blocks) = args.edits {
-                checks.push(edits_and_check(&mut session, server, blocks));
+                checks.push(edits_and_check(session, server, blocks));
             }
             if args.inventory {
-                checks.push(inventory_and_check(&mut session, server));
+                checks.push(inventory_and_check(session, server));
             }
             if args.measure {
-                measure(&mut session, server, join_chunks);
+                measure(session, server, join_chunks);
             }
             if let Some(blocks) = args.stream {
-                measure::stream(&mut session, &server.server, blocks, join_chunks);
+                measure::stream(session, &server.server, blocks, join_chunks);
             }
             true
         }
@@ -610,32 +865,17 @@ fn play(server: &EmbeddedServer, args: &Args, settings: &Settings, identity: &Id
         chunks > 4,
         format!("{chunks} LevelChunk packets received (needs more than 4)"),
     ));
-    checks.push(checks::chunks_decoded(&session));
+    checks.push(checks::chunks_decoded(session));
     if spawned {
-        checks.push(check_world(&mut session, server));
-        checks.push(check_light(&mut session, server));
-        linger(&mut session, args.linger);
+        checks.push(check_world(session, server));
+        checks.push(check_light(session, server));
+        linger(session, args.linger);
     } else {
         for name in ["world matches server", "light matches server"] {
             checks.push(Check::new(name, false, "not checked: never spawned".to_string()));
         }
     }
-    session.log_edits();
-    session.log_light();
-    session.log_entities();
-    let mut passed = checks::report(&checks);
-    if let Some(path) = &args.map {
-        passed &= write_map(&session, path);
-    }
-    // Dropping the session closes the connection: the host leaves the game
-    // before the server stops.
-    drop(session);
-
-    if passed {
-        ExitCode::SUCCESS
-    } else {
-        ExitCode::FAILURE
-    }
+    (checks, spawned)
 }
 
 /// Writes the map of the loaded chunks, marking the host. Returns false if it

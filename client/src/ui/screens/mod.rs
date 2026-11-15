@@ -2,4 +2,5 @@
 
 pub mod hud;
 pub mod inventory;
+pub mod overlay;
 pub mod worlds;

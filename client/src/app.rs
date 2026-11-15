@@ -29,7 +29,12 @@
 //! only close it again. Ticks and their input go on as ever.
 //!
 //! **While a menu is up,** the keys and the mouse are the UI's (`ui/mod.rs`): Enter and
-//! Escape, the arrows and typing go to its screen, and a click to its buttons.
+//! Escape, the arrows and typing go to its screen, and a click to its buttons. Over a world,
+//! the pause menu comes up on Escape or when the window loses the focus, and the death screen
+//! while the host is dead; the player stands still under either, as with the inventory.
+//!
+//! **Save & Quit** shows "Saving..." for a frame, then leaves the world: the host leaves and
+//! the server stops, which saves it, and the window goes back to the world list.
 
 use std::{
     collections::HashMap,
@@ -77,10 +82,11 @@ use crate::{
     session::{Session, Stage},
     settings::Settings,
     ui::{
-        self, Clicked, Ui,
+        self, Clicked, Menu, Ui,
         render::UiRenderer,
         screens::{
             inventory::Pressed,
+            overlay::OverlayChoice,
             worlds::{Choice, EditKey, Key, Message},
         },
     },
@@ -197,6 +203,9 @@ struct Play {
     /// Whether the inventory was open at the last look, to free the cursor when it opens
     /// and capture it again when it shuts.
     inventory_open: bool,
+    /// Whether the player paused, and the menu over the world at the last look.
+    paused: bool,
+    menu: Menu,
     /// `--bench`: it flies the camera instead of the keys and the mouse.
     bench: Option<Bench>,
     /// `--debug-world`: where you are in it.
@@ -210,6 +219,8 @@ struct Play {
 enum Pending {
     /// Opening a world from the list.
     Open(WorldEntry),
+    /// Save & Quit: leaving the world, which saves it.
+    Leave,
 }
 
 pub struct App {
@@ -327,6 +338,8 @@ impl App {
             eyes: Eyes::default(),
             ticks: Ticks::new(Instant::now()),
             inventory_open: false,
+            paused: false,
+            menu: Menu::None,
             bench: extras.bench.map(|duration| Bench::new(duration, radius)),
             browser: extras.browser,
             hotbar: extras.hotbar,
@@ -369,6 +382,7 @@ impl App {
         let list = self.worlds.as_ref().map(Worlds::list).unwrap_or_default();
         self.ui.show_worlds(&list, message);
         self.release_cursor();
+        self.input.clear();
     }
 
     /// A message for the list, from the strings, with `detail` put in.
@@ -388,6 +402,23 @@ impl App {
     fn clicked(&mut self, clicked: Clicked) {
         match clicked {
             Clicked::Worlds(choice) => self.choose(choice),
+            Clicked::Overlay(choice) => self.overlay_choice(choice),
+        }
+    }
+
+    /// Does what the pause menu or the death screen asked for.
+    fn overlay_choice(&mut self, choice: OverlayChoice) {
+        let Some(play) = &mut self.play else {
+            return;
+        };
+        match choice {
+            OverlayChoice::Resume => play.paused = false,
+            OverlayChoice::Respawn => play.session.respawn(),
+            OverlayChoice::Quit => {
+                self.ui.show_busy("menu.saving");
+                self.pending = Some(Pending::Leave);
+                self.pending_shown = false;
+            }
         }
     }
 
@@ -462,6 +493,14 @@ impl App {
         }
         match self.pending.take() {
             Some(Pending::Open(entry)) => self.open(entry),
+            Some(Pending::Leave) => {
+                // A world from the list goes back to it; a world of its own ends the run.
+                if self.leave().is_some() {
+                    self.show_list(None);
+                } else {
+                    self.quit = true;
+                }
+            }
             None => {}
         }
     }
@@ -490,7 +529,7 @@ impl App {
             let motion = motion(play, &self.input);
             if play.bench.is_none() {
                 let hit = play.camera.as_ref().and_then(|camera| aim::from_camera(play.session.game(), camera));
-                let playing = !play.inventory_open;
+                let playing = !play.inventory_open && play.menu == Menu::None;
                 let attack = playing && self.input.is_held(Action::Attack);
                 let use_item = playing && self.input.is_held(Action::Use);
                 play.session.edit_tick(attack, use_item, hit.as_ref());
@@ -633,6 +672,49 @@ impl App {
         self.cursor_grabbed = false;
     }
 
+    /// Shows the menu the world needs: the death screen while the host is dead, and the pause
+    /// menu while the player has paused. The cursor is freed while one is up, and captured
+    /// again after, as long as the window has the focus.
+    fn follow_menu(&mut self) {
+        let Some(play) = &mut self.play else {
+            return;
+        };
+        let menu = if play.session.game().is_dead() {
+            Menu::Death
+        } else if play.paused {
+            Menu::Pause
+        } else {
+            Menu::None
+        };
+        if menu == play.menu {
+            return;
+        }
+        play.menu = menu;
+        // Dying ends a pause: after a respawn the game goes on.
+        if menu != Menu::Pause {
+            play.paused = false;
+        }
+        self.ui.set_menu(menu);
+        if menu != Menu::None {
+            self.release_cursor();
+            // The menu has the keys now, so what was held when it came up is let go: a key
+            // that comes up under the menu would otherwise stay held in the game.
+            self.input.clear();
+        } else if !play.inventory_open && self.window.as_ref().is_some_and(|window| window.has_focus()) {
+            self.grab_cursor();
+        }
+    }
+
+    /// Pauses the world being played, unless a bench is flying it.
+    fn pause(&mut self) {
+        if let Some(play) = &mut self.play
+            && play.bench.is_none()
+            && play.camera.is_some()
+        {
+            play.paused = true;
+        }
+    }
+
     /// Frees the cursor when the server opens the inventory, and captures it again when
     /// the screen shuts, as long as the window has the focus.
     fn follow_inventory(&mut self) {
@@ -717,8 +799,7 @@ impl App {
                     }
                 }
                 Action::Pause if play.inventory_open => play.session.close_inventory(),
-                // Until the pause menu (this step's next commit), Esc lets go of the cursor.
-                Action::Pause => self.release_cursor(),
+                Action::Pause => play.paused = true,
                 Action::LogPose => log_pose(play.camera.as_ref()),
                 Action::Hotbar(slot) => play.session.select_slot(slot),
                 Action::HotbarNext => {
@@ -1003,6 +1084,7 @@ impl App {
         self.place_camera();
         self.follow_turns();
         self.follow_inventory();
+        self.follow_menu();
         self.run_ticks();
         let Some(play) = &mut self.play else {
             return false;
@@ -1054,8 +1136,8 @@ fn motion(play: &Play, input: &Input) -> Motion {
     if play.bench.is_some() {
         Motion::To(Pose::from_eyes(camera.position, camera.pitch, camera.yaw))
     } else {
-        // The player stands still while the inventory is open.
-        let keys = if play.inventory_open { Keys::default() } else { input.keys() };
+        // The player stands still while the inventory or a menu is open.
+        let keys = if play.inventory_open || play.menu != Menu::None { Keys::default() } else { input.keys() };
         Motion::Keys {
             keys,
             pitch: camera.pitch,
@@ -1182,6 +1264,7 @@ impl ApplicationHandler for App {
             WindowEvent::Focused(false) => {
                 self.release_cursor();
                 self.input.clear();
+                self.pause();
             }
             WindowEvent::KeyboardInput { event, .. } if self.ui.wants_keys() => self.menu_key(&event),
             WindowEvent::KeyboardInput { event, .. } => {
