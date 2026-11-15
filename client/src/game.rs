@@ -34,7 +34,7 @@ use pumpkin_protocol::{
             update_block::CUpdateBlock,
         },
         client_codecs::CreativeContent,
-        server::container_close::SContainerClose,
+        server::{container_close::SContainerClose, text::SText},
     },
     packet::Packet,
     serial::PacketRead,
@@ -43,6 +43,7 @@ use pumpkin_util::{GameMode, math::vector3::Vector3};
 use tracing::{info, warn};
 
 use crate::{
+    chat::Chat,
     clock::TimeOfDay,
     edit::predict::Predictions,
     entities::Entities,
@@ -65,6 +66,8 @@ pub enum Effect {
     Inventory,
     /// The other entities: mobs, players, items.
     Entities,
+    /// What the server said in words (`chat.rs`).
+    Chat,
     /// Nothing the client keeps yet, or about an entity it doesn't have.
     Ignored,
 }
@@ -98,6 +101,8 @@ pub struct Game {
     /// Everything else that moves.
     entities: Entities,
     time: TimeOfDay,
+    /// What the server has said in words.
+    chat: Chat,
     /// Ticks stepped since `StartGame`.
     ticks: u64,
     /// The world's own gamemode, for a player whose game type is `Default`.
@@ -114,6 +119,7 @@ impl Default for Game {
             predictions: Predictions::default(),
             entities: Entities::default(),
             time: TimeOfDay::default(),
+            chat: Chat::default(),
             ticks: 0,
             world_gamemode: GameType::Default,
         }
@@ -136,6 +142,12 @@ impl Game {
 
     pub const fn player_mut(&mut self) -> Option<&mut Player> {
         self.player.as_mut()
+    }
+
+    /// What the server has said in words.
+    #[must_use]
+    pub const fn chat(&self) -> &Chat {
+        &self.chat
     }
 
     /// Whether the host is dead: its health is gone, until the server gives it back on a
@@ -385,6 +397,12 @@ impl Game {
                     self.inventory.select(hotbar.selected_slot.0 as u8);
                 }
                 Ok(Effect::Inventory)
+            }
+            // The same packet the client sends its own chat in.
+            SText::PACKET_ID => {
+                let text: SText<'static> = read(packet)?;
+                self.chat.receive(&text, Instant::now());
+                Ok(Effect::Chat)
             }
             _ => self.apply_to_player(packet),
         }

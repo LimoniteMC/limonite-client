@@ -1,6 +1,7 @@
 mod app;
 mod bench;
 mod blocks;
+mod chat;
 mod checks;
 mod clock;
 mod debug_world;
@@ -50,7 +51,7 @@ use pumpkin_data::{
     item::{BedrockItem, Item},
     item_stack::ItemStack,
 };
-use pumpkin_protocol::bedrock::network_item::NetworkItemStackDescriptor;
+use pumpkin_protocol::bedrock::{network_item::NetworkItemStackDescriptor, server::text::TextPacketType};
 use pumpkin_util::{
     GameMode,
     math::{position::BlockPos, vector2::Vector2, vector3::Vector3},
@@ -61,6 +62,7 @@ use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
 use crate::{
     app::{Extras, Start},
+    chat::Said,
     checks::Check,
     clock::TICK,
     edit::{
@@ -843,6 +845,7 @@ fn run_checks(
             if args.inventory {
                 checks.push(inventory_and_check(session, server));
             }
+            checks.push(commands_and_check(session, server));
             if args.measure {
                 measure(session, server, join_chunks);
             }
@@ -852,7 +855,7 @@ fn run_checks(
             true
         }
         _ => {
-            for name in ["movement", "operator", "teleport", "latency", "entities"] {
+            for name in ["movement", "operator", "teleport", "latency", "entities", "commands"] {
                 checks.push(Check::new(name, false, "not checked: never spawned".to_string()));
             }
             false
@@ -1205,6 +1208,70 @@ fn edits_and_check(session: &mut Session, server: &EmbeddedServer, blocks: u32) 
             problems.join("; ")
         },
     )
+}
+
+/// What the command line sends, the time it sets, and the chat it says.
+const COMMAND_TIME: i64 = 1234;
+const CHAT_LINE: &str = "hello from the headless run";
+
+/// Sends a command and a line of chat as the command line does, and checks that the server
+/// ran the command and answered it, and passed the chat back with the host's name on it.
+fn commands_and_check(session: &mut Session, server: &EmbeddedServer) -> Check {
+    const NAME: &str = "commands";
+    let before = session.game().chat().received();
+    info!("Sending /time set {COMMAND_TIME} and a line of chat, as the command line does");
+    session.send_command(&format!("/time set {COMMAND_TIME}"));
+    session.send_chat(CHAT_LINE);
+    // What the server has said since, the oldest first.
+    let new_said = |session: &Session| -> Vec<Said> {
+        let new = usize::try_from(session.game().chat().received() - before).unwrap_or(usize::MAX);
+        let mut said: Vec<Said> = session.game().chat().said().rev().take(new).cloned().collect();
+        said.reverse();
+        said
+    };
+    let answered = |said: &[Said]| said.iter().any(|said| said.translate && said.message.contains("time"));
+    let echoed = |said: &[Said]| said.iter().any(|said| said.kind == TextPacketType::Chat && said.message == CHAT_LINE);
+    let time_of_day = |session: &Session| session.game().time().get().map(|time| time.rem_euclid(24_000));
+    let time_set = |session: &Session| time_of_day(session).is_some_and(|time| (COMMAND_TIME..COMMAND_TIME + 400).contains(&time));
+    let _ = session.run_until(Instant::now() + SETTLE, |session| {
+        let said = new_said(session);
+        answered(&said) && echoed(&said) && time_set(session)
+    });
+    let said = new_said(session);
+    for said in &said {
+        debug!("The server said: {said:?}");
+    }
+    let server_time = server.server.worlds.load().first().map(|world| {
+        let time = world.level_time.lock().unwrap_or_else(PoisonError::into_inner).time_of_day;
+        time.rem_euclid(24_000)
+    });
+    let mut problems = Vec::new();
+    if !server_time.is_some_and(|time| (COMMAND_TIME..COMMAND_TIME + 400).contains(&time)) {
+        problems.push(format!("the server's time of day is {server_time:?}, not about {COMMAND_TIME}"));
+    }
+    if !time_set(session) {
+        problems.push(format!("the client's time of day is {:?}, not about {COMMAND_TIME}", time_of_day(session)));
+    }
+    let answer = said.iter().find(|said| said.translate && said.message.contains("time"));
+    if answer.is_none() {
+        problems.push(format!("the server didn't answer the command; it said {said:?}"));
+    }
+    let echo = said.iter().find(|said| said.kind == TextPacketType::Chat && said.message == CHAT_LINE);
+    if echo.is_none() {
+        problems.push("the chat didn't come back".to_string());
+    }
+    let detail = if problems.is_empty() {
+        let answer = answer.map_or(String::new(), |said| format!("{} {:?}", said.message, said.params));
+        let from = echo.map_or("", |said| said.source.as_str());
+        format!(
+            "/time set {COMMAND_TIME} set the server's time of day to {server_time:?} and the client's to {:?}, and \
+             the server answered {answer}; the chat came back from {from}",
+            time_of_day(session)
+        )
+    } else {
+        problems.join("; ")
+    };
+    Check::new(NAME, problems.is_empty(), detail)
 }
 
 /// Opens the inventory with the real packets, makes the capture's survival moves and then

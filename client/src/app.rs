@@ -35,6 +35,9 @@
 //!
 //! **Save & Quit** shows "Saving..." for a frame, then leaves the world: the host leaves and
 //! the server stops, which saves it, and the window goes back to the world list.
+//!
+//! **The command line** (T, or / with the slash typed) is a menu too: the keys type into it,
+//! and Enter sends a command or chat through the session (`ui/screens/command.rs`).
 
 use std::{
     collections::HashMap,
@@ -85,6 +88,7 @@ use crate::{
         self, Clicked, Menu, Ui,
         render::UiRenderer,
         screens::{
+            command::CommandChoice,
             inventory::Pressed,
             overlay::OverlayChoice,
             worlds::{Choice, EditKey, Key, Message},
@@ -206,6 +210,9 @@ struct Play {
     /// Whether the player paused, and the menu over the world at the last look.
     paused: bool,
     menu: Menu,
+    /// Whether the command line is open, and what to open it with, once asked.
+    chatting: bool,
+    chat_opening: Option<&'static str>,
     /// `--bench`: it flies the camera instead of the keys and the mouse.
     bench: Option<Bench>,
     /// `--debug-world`: where you are in it.
@@ -340,6 +347,8 @@ impl App {
             inventory_open: false,
             paused: false,
             menu: Menu::None,
+            chatting: false,
+            chat_opening: None,
             bench: extras.bench.map(|duration| Bench::new(duration, radius)),
             browser: extras.browser,
             hotbar: extras.hotbar,
@@ -403,6 +412,27 @@ impl App {
         match clicked {
             Clicked::Worlds(choice) => self.choose(choice),
             Clicked::Overlay(choice) => self.overlay_choice(choice),
+            Clicked::Command(choice) => self.command_choice(choice),
+        }
+    }
+
+    /// Sends what the command line asked to, and shuts it: a command if it starts with `/`,
+    /// and chat otherwise, unless there's nothing to send.
+    fn command_choice(&mut self, choice: CommandChoice) {
+        let Some(play) = &mut self.play else {
+            return;
+        };
+        play.chatting = false;
+        if let CommandChoice::Send(typed) = choice {
+            let typed = typed.trim();
+            if typed.starts_with('/') {
+                if typed.len() > 1 {
+                    info!("Command: {typed}");
+                    play.session.send_command(typed);
+                }
+            } else if !typed.is_empty() {
+                play.session.send_chat(typed);
+            }
         }
     }
 
@@ -679,10 +709,16 @@ impl App {
         let Some(play) = &mut self.play else {
             return;
         };
+        if let Some(typed) = play.chat_opening.take() {
+            play.chatting = true;
+            self.ui.open_command(typed);
+        }
         let menu = if play.session.game().is_dead() {
             Menu::Death
         } else if play.paused {
             Menu::Pause
+        } else if play.chatting {
+            Menu::Command
         } else {
             Menu::None
         };
@@ -690,9 +726,12 @@ impl App {
             return;
         }
         play.menu = menu;
-        // Dying ends a pause: after a respawn the game goes on.
+        // Dying ends a pause, and shuts the command line: after a respawn the game goes on.
         if menu != Menu::Pause {
             play.paused = false;
+        }
+        if menu == Menu::Death {
+            play.chatting = false;
         }
         self.ui.set_menu(menu);
         if menu != Menu::None {
@@ -800,6 +839,8 @@ impl App {
                 }
                 Action::Pause if play.inventory_open => play.session.close_inventory(),
                 Action::Pause => play.paused = true,
+                Action::Chat => play.chat_opening = Some(""),
+                Action::Command => play.chat_opening = Some("/"),
                 Action::LogPose => log_pose(play.camera.as_ref()),
                 Action::Hotbar(slot) => play.session.select_slot(slot),
                 Action::HotbarNext => {

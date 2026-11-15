@@ -7,6 +7,7 @@
 //! runtime.
 
 use std::{
+    borrow::Cow,
     fmt, thread,
     time::{Duration, Instant},
 };
@@ -28,6 +29,7 @@ use pumpkin_protocol::{
         server::{
             animate::{ActorSwingSource, AnimateAction, SAnimate},
             block_pick_request::SBlockPickRequest,
+            command_request::{CommandOriginData, SCommandRequest},
             container_close::SContainerClose,
             cursor_item_drag::{CURSOR_ITEM_DRAG_START, CURSOR_ITEM_DRAG_STOP, SCursorItemDrag},
             interact::{Action as InteractAction, SInteract},
@@ -40,6 +42,7 @@ use pumpkin_protocol::{
             respawn::{RespawnState, SRespawn},
             set_local_player_as_initialized::SSetLocalPlayerAsInitialized,
             set_player_inventory_options::SSetPlayerInventoryOptions,
+            text::{SText, TextPacketType},
         },
     },
     codec::{var_int::VarInt, var_uint::VarUInt, var_ulong::VarULong},
@@ -52,6 +55,7 @@ use pumpkin_util::{
 };
 use tokio::sync::mpsc::error::{TryRecvError, TrySendError};
 use tracing::{debug, info, warn};
+use uuid::Uuid;
 
 use crate::{
     edit::{self, Aimed, Command, Editor, UseTick, View, aim::Hit},
@@ -158,6 +162,9 @@ enum Source {
 
 pub struct Session {
     client: LocalClientEnd,
+    /// Who the host is, as its chat says.
+    name: String,
+    xid: String,
     stage: Stage,
     spawn: Option<Spawn>,
     /// Everything the server has said about the game.
@@ -212,6 +219,8 @@ impl Session {
         let client = connector.connect()?;
         let session = Self {
             client,
+            name: name.to_string(),
+            xid: xid.to_string(),
             stage: Stage::LoggingIn,
             spawn: None,
             game: Game::default(),
@@ -653,6 +662,18 @@ impl Session {
         self.send(&ready_to_respawn(spawn.runtime_id));
     }
 
+    /// Says `text` in chat, as the official client does: a `Text` of type chat, with the host's
+    /// name and xuid (m5-plan Results, Step 1).
+    pub fn send_chat(&self, text: &str) {
+        self.send(&chat(&self.name, &self.xid, text));
+    }
+
+    /// Runs `command`, which starts with `/`, as the official client does (m5-plan Results,
+    /// Step 1).
+    pub fn send_command(&self, command: &str) {
+        self.send(&command_request(command, Uuid::from_u128(rand::random())));
+    }
+
     fn send_pack_response(&self, response: u8) {
         self.send(&SResourcePackClientResponse {
             response,
@@ -1073,6 +1094,37 @@ fn block_pos(block: IVec3) -> BlockPos {
 }
 
 /// A `PlayerAction` packet.
+/// A line of chat, as the official client writes one.
+fn chat<'a>(name: &'a str, xid: &'a str, text: &'a str) -> SText<'a> {
+    SText {
+        needs_translation: false,
+        r#type: TextPacketType::Chat,
+        source_name: Cow::Borrowed(name),
+        message: Cow::Borrowed(text),
+        parameters: Vec::new(),
+        xuid: Cow::Borrowed(xid),
+        platform_chat_id: Cow::Borrowed(""),
+        filtered_message: None,
+    }
+}
+
+/// A command, as the official client asks for one: from a player, with a request id of its
+/// own each time, no request name, and the latest command syntax. The capture's 22 commands
+/// each had a different id, of 16 random bytes.
+fn command_request(command: &str, id: Uuid) -> SCommandRequest<'_> {
+    SCommandRequest {
+        command: Cow::Borrowed(command),
+        origin: CommandOriginData {
+            r#type: Cow::Borrowed("player"),
+            uuid: id,
+            request_id: Cow::Borrowed(""),
+            player_id: 0,
+        },
+        is_internal: false,
+        version: Cow::Borrowed("latest"),
+    }
+}
+
 /// The client's `Respawn`: ready to respawn, with no position, as the official client sends it.
 fn ready_to_respawn(runtime_id: u64) -> SRespawn {
     SRespawn {
@@ -1146,6 +1198,22 @@ mod tests {
             action,
             include_bytes!("../../pumpkin/crates/pumpkin-protocol/src/bedrock/client_codecs/fixtures/player_action-respawn.bin")
         );
+    }
+
+    #[test]
+    fn chat_and_commands_read_back_as_the_server_reads_them() {
+        use pumpkin_protocol::serial::PacketRead;
+        let line = written(&chat("Steve", "1000000000000001", "hello"));
+        let read = SText::read(&mut line.as_slice()).unwrap();
+        assert_eq!(read.r#type, TextPacketType::Chat);
+        assert_eq!((&*read.source_name, &*read.message, &*read.xuid), ("Steve", "hello", "1000000000000001"));
+
+        let id = Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef);
+        let asked = written(&command_request("/time set noon", id));
+        let read = SCommandRequest::read(&mut asked.as_slice()).unwrap();
+        assert_eq!(read.command, "/time set noon");
+        assert_eq!((&*read.origin.r#type, read.origin.uuid, &*read.version), ("player", id, "latest"));
+        assert!(read.origin.request_id.is_empty() && !read.is_internal);
     }
 
     #[test]

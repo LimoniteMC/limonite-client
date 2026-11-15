@@ -559,5 +559,44 @@ fn menu_sheets() {
     draw(&mut ui, Some("pause"), at(0.0, height / 2.0 - 12.0));
     ui.set_menu(crate::ui::Menu::Death);
     draw(&mut ui, Some("death"), at(0.0, height / 2.0 + 12.0));
+
+    // The command line, open with a command half typed, under what the server said.
+    ui.set_menu(crate::ui::Menu::None);
+    let chat = some_chat();
+    ui.open_command("/time set no");
+    let [width, _] = ui.screen();
+    ui.command.update(&mut ui.tree, &ui.font, &ui.lang, &chat, width, std::time::Instant::now());
+    draw(&mut ui, Some("command"), at(0.0, 0.0));
     println!("Wrote the menus' sheets to {}", out.display());
+}
+
+/// Made-up messages for the command line's sheet: chat, answers from the strings, colours, and
+/// one long enough to wrap.
+fn some_chat() -> crate::chat::Chat {
+    use std::borrow::Cow;
+
+    use pumpkin_protocol::bedrock::server::text::{SText, TextPacketType};
+
+    let text = |kind: TextPacketType, source: &str, message: &str, params: &[&str], translate: bool| SText {
+        needs_translation: translate,
+        r#type: kind,
+        source_name: Cow::Owned(source.to_string()),
+        message: Cow::Owned(message.to_string()),
+        parameters: params.iter().map(|param| Cow::Owned((*param).to_string())).collect(),
+        xuid: Cow::Borrowed(""),
+        platform_chat_id: Cow::Borrowed(""),
+        filtered_message: None,
+    };
+    let mut chat = crate::chat::Chat::default();
+    let now = std::time::Instant::now();
+    for message in [
+        text(TextPacketType::Translation, "", "\u{a7}e%multiplayer.player.joined", &["Limonite"], true),
+        text(TextPacketType::Chat, "Limonite", "hello there", &[], false),
+        text(TextPacketType::Translation, "", "commands.time.set", &["1234"], true),
+        text(TextPacketType::System, "", "A notice with \u{a7}cred\u{a7}r and \u{a7}aits colours\u{a7}r, and long enough that it has to wrap onto a second line", &[], false),
+        text(TextPacketType::Translation, "", "commands.generic.unknown", &["fly"], true),
+    ] {
+        chat.receive(&message, now);
+    }
+    chat
 }

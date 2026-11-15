@@ -206,6 +206,37 @@ impl TextField {
         tree.set_visible(self.caret, focused && blinks.is_multiple_of(2));
         tree.set_offset(self.caret, INSET + font.width(self.editor.before_caret()), 0.0);
     }
+
+    /// Keeps the caret in sight in a field `width` wide, after [`TextField::show`]: if the
+    /// text is wider than that, only a stretch of it shows, which ends at the caret if the
+    /// text after it doesn't fit too, as a long command scrolls in Java's chat. The UI can't
+    /// clip a label, so the stretch is cut from the text.
+    pub fn fit(&self, tree: &mut Tree, font: &Font, width: f32) {
+        let room = width - INSET * 2.0;
+        let text = self.editor.text();
+        if font.width(text) <= room {
+            return;
+        }
+        let before = self.editor.before_caret();
+        // The first character from which the text up to the caret fits.
+        let start = before
+            .char_indices()
+            .map(|(at, _)| at)
+            .find(|&at| font.width(&before[at..]) <= room)
+            .unwrap_or(before.len());
+        let shown = &text[start..];
+        // And as much after it as fits.
+        let mut taken = 0.0;
+        let end = shown
+            .char_indices()
+            .find(|&(_, c)| {
+                taken += font.advance(c);
+                taken > room
+            })
+            .map_or(shown.len(), |(at, _)| at);
+        tree.set_text(self.label, &shown[..end]);
+        tree.set_offset(self.caret, INSET + font.width(&before[start..]), 0.0);
+    }
 }
 
 #[cfg(test)]
@@ -266,6 +297,36 @@ mod tests {
         editor.apply(&Edit::Left);
         editor.apply(&Edit::Delete);
         assert_eq!(editor.text(), "x");
+    }
+
+    #[test]
+    fn a_long_text_shows_the_stretch_round_the_caret() {
+        use crate::ui::{atlas::Atlas, tree::Kind};
+
+        // With no sheets, each character is a space wide: 4 units.
+        let font = Font::default();
+        let mut tree = Tree::new();
+        let atlas = Atlas::pack(Vec::new()).0;
+        let mut field = TextField::add(&mut tree, Tree::ROOT, Layout::default(), 64, &FieldSprites::find(&atlas), false);
+        let label = field.label;
+        let label_text = |tree: &Tree| match &tree.node(label).kind {
+            Kind::Label(label) => label.text.clone(),
+            _ => String::new(),
+        };
+        let now = Instant::now();
+        // Room for (48 - 8) / 4 = 10 characters.
+        field.set("0123456789abcdefghij", now);
+        field.show(&mut tree, &font, &FieldSprites::find(&atlas), false, true, now);
+        field.fit(&mut tree, &font, 48.0);
+        assert_eq!(label_text(&tree), "abcdefghij", "the end, where the caret is");
+        field.apply(&Edit::Home, now);
+        field.show(&mut tree, &font, &FieldSprites::find(&atlas), false, true, now);
+        field.fit(&mut tree, &font, 48.0);
+        assert_eq!(label_text(&tree), "0123456789", "the start, with the caret");
+        field.set("short", now);
+        field.show(&mut tree, &font, &FieldSprites::find(&atlas), false, true, now);
+        field.fit(&mut tree, &font, 48.0);
+        assert_eq!(label_text(&tree), "short", "what fits shows whole");
     }
 
     #[test]

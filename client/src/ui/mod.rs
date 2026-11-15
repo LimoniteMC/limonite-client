@@ -8,8 +8,9 @@
 //!   the GPU, so they're tested without one.
 //! - [`render`] turns the tree into quads and draws them. [`input`] is the pointer.
 //! - [`button`] and [`text_field`] are the widgets the menus are made of.
-//! - [`screens`] are what's built from all that: the HUD, the inventory, the world list, and
-//!   the pause and death screens.
+//! - [`styled`] is text in colours, from the game's formatting codes.
+//! - [`screens`] are what's built from all that: the HUD, the inventory, the world list, the
+//!   pause and death screens, and the command line.
 //!
 //! **The UI reads the game; it never reads packets** (PLAN.md, UI). [`Ui::update`]
 //! is handed the [`Game`], and that's its only way in.
@@ -24,6 +25,7 @@ pub mod render;
 pub mod screens;
 #[cfg(test)]
 pub mod sheet;
+pub mod styled;
 pub mod text_field;
 pub mod tree;
 
@@ -42,6 +44,7 @@ use self::{
     lang::Lang,
     render::{Drawing, Looks},
     screens::{
+        command::{self as command_screen, CommandChoice, CommandScreen},
         hud::{self, Hud, HudState},
         inventory::{self, InventoryScreen, Pressed, View},
         overlay::{self, Overlay, OverlayChoice},
@@ -127,7 +130,8 @@ fn load_with(stack: &PackStack, table: &AppearanceTable, tints: &Tints, extra: &
         .iter()
         .chain(&text_field::SPRITES)
         .chain(&worlds_screen::SPRITES)
-        .chain(&overlay::SPRITES);
+        .chain(&overlay::SPRITES)
+        .chain(&command_screen::SPRITES);
     for path in hud::SPRITES.iter().chain(&inventory::SPRITES).chain(menus).chain(extra) {
         take(path, atlas::read_sprite(stack, path));
     }
@@ -203,6 +207,8 @@ pub enum Menu {
     None,
     Pause,
     Death,
+    /// The command line, open.
+    Command,
 }
 
 /// What a click or a key on a menu asked for.
@@ -211,6 +217,8 @@ pub enum Clicked {
     Worlds(Choice),
     /// On the pause menu or the death screen.
     Overlay(OverlayChoice),
+    /// On the command line.
+    Command(CommandChoice),
 }
 
 /// The UI, on the CPU.
@@ -219,6 +227,7 @@ pub struct Ui {
     hud: Hud,
     inventory: InventoryScreen,
     worlds: WorldsScreen,
+    command: CommandScreen,
     pause: Overlay,
     death: Overlay,
     screen: Screen,
@@ -244,6 +253,7 @@ impl Ui {
         // After the HUD, so it draws over it.
         let inventory = InventoryScreen::build(&mut tree, &atlas);
         let worlds = WorldsScreen::build(&mut tree, &atlas, &lang);
+        let command = CommandScreen::build(&mut tree, &atlas);
         // Over the world's screens, so they're drawn over them.
         let pause = Overlay::pause(&mut tree, &atlas, &lang);
         let death = Overlay::death(&mut tree, &atlas, &lang);
@@ -252,6 +262,7 @@ impl Ui {
             hud,
             inventory,
             worlds,
+            command,
             pause,
             death,
             screen: Screen::Game,
@@ -305,11 +316,13 @@ impl Ui {
     pub fn show_game(&mut self) {
         self.screen = Screen::Game;
         self.worlds.hide(&mut self.tree);
+        self.command.set_visible(&mut self.tree, true);
     }
 
     fn hide_game(&mut self) {
         self.screen = Screen::Worlds;
         self.set_menu(Menu::None);
+        self.command.set_visible(&mut self.tree, false);
         self.hud.update(&mut self.tree, &self.icons, &self.lang, None);
         self.inventory.update(&mut self.tree, &self.icons, &self.lang, None);
         self.hud.set_note(&mut self.tree, None);
@@ -328,18 +341,31 @@ impl Ui {
 
     /// Shows a menu over the world, or none.
     pub fn set_menu(&mut self, menu: Menu) {
+        self.set_menu_typed(menu, "");
+    }
+
+    /// Opens the command line with `typed` in it: nothing to chat, or `/` for a command.
+    pub fn open_command(&mut self, typed: &str) {
+        self.set_menu_typed(Menu::Command, typed);
+    }
+
+    fn set_menu_typed(&mut self, menu: Menu, typed: &str) {
         if self.menu == menu {
             return;
         }
+        let was_command = self.menu == Menu::Command;
         self.menu = menu;
         self.pause.set_visible(&mut self.tree, menu == Menu::Pause);
         self.death.set_visible(&mut self.tree, menu == Menu::Death);
+        if was_command || menu == Menu::Command {
+            self.command.set_open(&mut self.tree, menu == Menu::Command, typed, Instant::now());
+        }
     }
 
     /// The menu over the world, if one is up.
     fn overlay(&self) -> Option<&Overlay> {
         match self.menu {
-            Menu::None => None,
+            Menu::None | Menu::Command => None,
             Menu::Pause => Some(&self.pause),
             Menu::Death => Some(&self.death),
         }
@@ -347,7 +373,7 @@ impl Ui {
 
     fn overlay_mut(&mut self) -> Option<&mut Overlay> {
         match self.menu {
-            Menu::None => None,
+            Menu::None | Menu::Command => None,
             Menu::Pause => Some(&mut self.pause),
             Menu::Death => Some(&mut self.death),
         }
@@ -366,7 +392,7 @@ impl Ui {
             Screen::Game => {
                 let (pause, death) = (&self.pause, &self.death);
                 match self.menu {
-                    Menu::None => {}
+                    Menu::None | Menu::Command => {}
                     Menu::Pause => pause.update(&mut self.tree),
                     Menu::Death => death.update(&mut self.tree),
                 }
@@ -378,14 +404,17 @@ impl Ui {
     pub fn key(&mut self, key: Key) -> Option<Clicked> {
         match self.screen {
             Screen::Worlds => self.worlds.key(&mut self.tree, key, Instant::now()).map(Clicked::Worlds),
+            Screen::Game if self.menu == Menu::Command => self.command.key(key, Instant::now()).map(Clicked::Command),
             Screen::Game => self.overlay().and_then(|overlay| overlay.key(key)).map(Clicked::Overlay),
         }
     }
 
     /// Text was typed while the UI has the keys.
     pub fn typed(&mut self, text: &str) {
-        if self.screen == Screen::Worlds {
-            self.worlds.typed(text, Instant::now());
+        match self.screen {
+            Screen::Worlds => self.worlds.typed(text, Instant::now()),
+            Screen::Game if self.menu == Menu::Command => self.command.typed(text, Instant::now()),
+            Screen::Game => {}
         }
     }
 
@@ -399,6 +428,8 @@ impl Ui {
         let hud = HudState::of(game).filter(|_| view.is_none());
         self.hud.update(&mut self.tree, &self.icons, &self.lang, hud.as_ref());
         self.inventory.update(&mut self.tree, &self.icons, &self.lang, view.as_ref());
+        let width = self.screen()[0];
+        self.command.update(&mut self.tree, &self.font, &self.lang, game.chat(), width, Instant::now());
     }
 
     /// Shows a line above the hotbar, or nothing.
