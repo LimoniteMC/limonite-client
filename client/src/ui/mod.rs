@@ -7,12 +7,14 @@
 //! - [`tree`] and [`layout`] are the widgets and where they go. They know nothing of
 //!   the GPU, so they're tested without one.
 //! - [`render`] turns the tree into quads and draws them. [`input`] is the pointer.
-//! - [`screens`] are what's built from all that: the HUD, and the inventory.
+//! - [`button`] and [`text_field`] are the widgets the menus are made of.
+//! - [`screens`] are what's built from all that: the HUD, the inventory and the world list.
 //!
 //! **The UI reads the game; it never reads packets** (PLAN.md, UI). [`Ui::update`]
 //! is handed the [`Game`], and that's its only way in.
 
 pub mod atlas;
+pub mod button;
 pub mod font;
 pub mod input;
 pub mod lang;
@@ -21,9 +23,12 @@ pub mod render;
 pub mod screens;
 #[cfg(test)]
 pub mod sheet;
+pub mod text_field;
 pub mod tree;
 
 use std::time::Instant;
+
+use pumpkin_util::GameMode;
 
 use image::RgbaImage;
 use limonite_packs::PackStack;
@@ -38,6 +43,7 @@ use self::{
     screens::{
         hud::{self, Hud, HudState},
         inventory::{self, InventoryScreen, Pressed, View},
+        worlds::{self as worlds_screen, Choice, Key, Message, WorldsScreen},
     },
     tree::Tree,
 };
@@ -47,17 +53,35 @@ use crate::{
     inventory::items::{self, ItemIcons},
     render::tint::Tints,
     settings::UiScale,
+    worlds::WorldEntry,
 };
 
 /// The smallest screen the UI is laid out for, in UI units (m5-plan Decision 14).
 const MIN_SCREEN: [u32; 2] = [320, 240];
 
-/// The strings the menus will show, checked at startup so that one a new version of
-/// the game renames is noticed before a menu needs it (m5-plan Finding 16).
-const STRINGS: [&str; 10] = [
+/// The strings the menus show, checked at startup so that one a new version of the game
+/// renames is noticed at once (m5-plan Finding 16).
+const STRINGS: [&str; 27] = [
     "selectWorld.title",
+    "selectWorld.select",
     "selectWorld.create",
     "selectWorld.delete",
+    "selectWorld.deleteButton",
+    "selectWorld.deleteQuestion",
+    "selectWorld.empty",
+    "selectWorld.enterName",
+    "selectWorld.enterSeed",
+    "selectWorld.seedInfo",
+    "selectWorld.gameMode",
+    "selectWorld.gameMode.survival",
+    "selectWorld.gameMode.creative",
+    "createWorldScreen.create",
+    "createWorldScreen.defaultName",
+    "gui.copyWorld",
+    "gui.cancel",
+    "menu.loadingLevel",
+    "menu.generatingTerrain",
+    "menu.saving",
     "menu.quit",
     "menu.returnToGame",
     "container.inventory",
@@ -97,7 +121,8 @@ fn load_with(stack: &PackStack, table: &AppearanceTable, tints: &Tints, extra: &
         Ok(input) => inputs.push(input),
         Err(reason) => missing.push(format!("{path} ({reason})")),
     };
-    for path in hud::SPRITES.iter().chain(&inventory::SPRITES).chain(extra) {
+    let menus = button::SPRITES.iter().chain(&text_field::SPRITES).chain(&worlds_screen::SPRITES);
+    for path in hud::SPRITES.iter().chain(&inventory::SPRITES).chain(menus).chain(extra) {
         take(path, atlas::read_sprite(stack, path));
     }
     for part in hud::PARTS {
@@ -156,11 +181,28 @@ pub fn scale_for(setting: UiScale, width: u32, height: u32) -> u32 {
     }
 }
 
+/// Which screen is up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Screen {
+    /// The world list, or a line saying a world is opening or saving.
+    Worlds,
+    /// A world: the HUD, and the inventory over it.
+    Game,
+}
+
+/// What a click or a key on a menu asked for.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Clicked {
+    Worlds(Choice),
+}
+
 /// The UI, on the CPU.
 pub struct Ui {
     tree: Tree,
     hud: Hud,
     inventory: InventoryScreen,
+    worlds: WorldsScreen,
+    screen: Screen,
     atlas: Atlas,
     font: Font,
     lang: Lang,
@@ -181,10 +223,13 @@ impl Ui {
         let hud = Hud::build(&mut tree, &atlas);
         // After the HUD, so it draws over it.
         let inventory = InventoryScreen::build(&mut tree, &atlas);
+        let worlds = WorldsScreen::build(&mut tree, &atlas, &lang);
         Self {
             tree,
             hud,
             inventory,
+            worlds,
+            screen: Screen::Game,
             atlas,
             font,
             lang,
@@ -218,9 +263,76 @@ impl Ui {
         self.tree.invalidate();
     }
 
+    /// Shows the world list, with these worlds, and `message` over them.
+    pub fn show_worlds(&mut self, worlds: &[WorldEntry], message: Option<&Message>) {
+        self.hide_game();
+        self.worlds.show_list(&mut self.tree, &self.lang, &self.font, worlds, message);
+    }
+
+    /// Shows one line from the strings, such as `menu.loadingLevel`, while it's under way.
+    pub fn show_busy(&mut self, key: &str) {
+        self.hide_game();
+        self.worlds.show_busy(&mut self.tree, self.lang.text(key));
+    }
+
+    /// Shows a world's screens, which [`Ui::update`] then keeps up to date.
+    pub fn show_game(&mut self) {
+        self.screen = Screen::Game;
+        self.worlds.hide(&mut self.tree);
+    }
+
+    fn hide_game(&mut self) {
+        self.screen = Screen::Worlds;
+        self.hud.update(&mut self.tree, &self.icons, &self.lang, None);
+        self.inventory.update(&mut self.tree, &self.icons, &self.lang, None);
+        self.hud.set_note(&mut self.tree, None);
+    }
+
+    /// The gamemode the create page offers first.
+    pub fn set_default_gamemode(&mut self, gamemode: GameMode) {
+        self.worlds.set_default_gamemode(gamemode);
+    }
+
+    /// The strings, for what the window words itself.
+    #[must_use]
+    pub const fn lang(&self) -> &Lang {
+        &self.lang
+    }
+
+    /// Whether the keys are the UI's: a menu is up, rather than the game.
+    #[must_use]
+    pub fn wants_keys(&self) -> bool {
+        self.screen == Screen::Worlds
+    }
+
+    /// Brings the menus' looks up to date: what's under the pointer, and the carets' blink.
+    pub fn update_menus(&mut self, now: Instant) {
+        if self.screen == Screen::Worlds {
+            self.worlds.update(&mut self.tree, &self.font, now);
+        }
+    }
+
+    /// A key went down while the UI has the keys.
+    pub fn key(&mut self, key: Key) -> Option<Clicked> {
+        match self.screen {
+            Screen::Worlds => self.worlds.key(&mut self.tree, key, Instant::now()).map(Clicked::Worlds),
+            Screen::Game => None,
+        }
+    }
+
+    /// Text was typed while the UI has the keys.
+    pub fn typed(&mut self, text: &str) {
+        if self.screen == Screen::Worlds {
+            self.worlds.typed(text, Instant::now());
+        }
+    }
+
     /// Brings the screens up to date with the game. The HUD hides while the inventory is
     /// open, which has a hotbar of its own.
     pub fn update(&mut self, game: &Game) {
+        if self.screen != Screen::Game {
+            return;
+        }
         let view = View::of(game);
         let hud = HudState::of(game).filter(|_| view.is_none());
         self.hud.update(&mut self.tree, &self.icons, &self.lang, hud.as_ref());
@@ -259,7 +371,10 @@ impl Ui {
         let scale = f64::from(self.scale);
         let at = [(x / scale) as f32, (y / scale) as f32];
         self.pointer.moved(at);
-        self.inventory.pointer_moved(&mut self.tree, at);
+        match self.screen {
+            Screen::Worlds => self.worlds.pointer_over(self.tree.hit(at)),
+            Screen::Game => self.inventory.pointer_moved(&mut self.tree, at),
+        }
     }
 
     /// A button went down while the inventory is open: what it pressed on.
@@ -267,20 +382,30 @@ impl Ui {
         self.pointer.at().map_or(Pressed::Nothing, |at| self.inventory.press(&self.tree, at))
     }
 
-    /// The wheel turned while the inventory is open, by `notches`, + away from the player.
+    /// The wheel turned over a menu or the inventory, by `notches`, + away from the player.
     pub fn scroll(&mut self, notches: f64) {
-        self.inventory.scroll(notches);
+        match self.screen {
+            Screen::Worlds => self.worlds.scroll(&mut self.tree, notches),
+            Screen::Game => self.inventory.scroll(notches),
+        }
     }
 
     /// The pointer's button went down. Says whether the UI took it: if not, the game
-    /// can have the click.
+    /// can have the click. A menu takes every click, even between its buttons.
     pub fn pointer_pressed(&mut self) -> bool {
-        self.pointer.press(&self.tree)
+        self.pointer.press(&self.tree) || self.wants_keys()
     }
 
-    /// The pointer's button came up. Nothing acts on a click until Step 12's inventory.
-    pub fn pointer_released(&mut self) {
-        self.pointer.release(&self.tree);
+    /// The pointer's button came up: what that clicked asked for, if anything.
+    pub fn pointer_released(&mut self) -> Option<Clicked> {
+        let clicked = self.pointer.release(&self.tree)?;
+        match self.screen {
+            Screen::Worlds => self
+                .worlds
+                .clicked(&mut self.tree, &self.lang, clicked, Instant::now())
+                .map(Clicked::Worlds),
+            Screen::Game => None,
+        }
     }
 }
 

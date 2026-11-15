@@ -436,3 +436,120 @@ fn inventory_sheets() {
     draw(&mut ui, "creative-carrying", View { creative: true, slots: &held, list: &list }, at(creative, 163.0, 175.0));
     println!("Wrote the inventory's sheets to {}", out.display());
 }
+
+/// Made-up worlds for the world list's sheets.
+fn some_worlds() -> Vec<crate::worlds::WorldEntry> {
+    use crate::worlds::{WorldEntry, WorldMeta};
+    let world = |name: &str, gamemode, played| WorldEntry {
+        id: name.to_string(),
+        dir: PathBuf::from(name),
+        meta: WorldMeta {
+            name: name.to_string(),
+            gamemode,
+            seed: Some(1),
+            created: Some(1_763_000_000),
+            last_played: played,
+        },
+    };
+    vec![
+        world("My World", GameMode::Survival, Some(1_763_300_000)),
+        world("Creative build", GameMode::Creative, Some(1_763_200_000)),
+        world("Never played", GameMode::Survival, None),
+    ]
+}
+
+#[test]
+#[ignore = "needs a GPU and a Bedrock install; set LIMONITE_BEDROCK"]
+fn menu_sheets() {
+    use crate::ui::screens::worlds::{Key, Message};
+
+    let _ = tracing_subscriber::fmt().try_init();
+    let dir = std::env::var_os("LIMONITE_BEDROCK").expect("LIMONITE_BEDROCK is set");
+    let install = install::find(Some(std::path::Path::new(&dir))).unwrap();
+    let vanilla = install::load_vanilla(&install).unwrap();
+    let palette = blocks::load_palette().unwrap();
+    let mut jar = blocks::find_jar(None).unwrap();
+    let looks = blocks::build_appearance(&palette, &vanilla, jar.as_mut());
+    let tints = render::load_tints(&vanilla.stack);
+    let assets = load_with(&vanilla.stack, &looks.table, &tints, &[]);
+    let wanted = crate::ui::button::SPRITES
+        .iter()
+        .chain(&crate::ui::text_field::SPRITES)
+        .chain(&crate::ui::screens::worlds::SPRITES);
+    let missing: Vec<&str> = wanted.copied().filter(|path| assets.atlas.sprite(path).is_none()).collect();
+    assert!(missing.is_empty(), "the install lacks {missing:?}");
+    let out = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../run/sheets");
+    std::fs::create_dir_all(&out).unwrap();
+
+    let needs = Needs {
+        texture_layers: looks.textures.layers,
+        uncapped: false,
+    };
+    let gpu = Gpu::offscreen(WIDTH, HEIGHT, &needs).expect("a GPU");
+    let terrain = Terrain::new(&gpu, &looks.textures);
+    let mut renderer = UiRenderer::new(&gpu, &assets.picture, &terrain.texture_view);
+    let format = gpu.ui_format;
+    let mut sheet = Sheet::new(gpu);
+    // The window clears to the noon sky's colour behind the list, in linear light; the sheet's
+    // bytes are sRGB.
+    let (fog, _) = render::sky::FogSettings::load(&vanilla.stack);
+    let sky = render::sky::frame(&fog, render::sky::NOON_TICKS, render::sky::Medium::Air, 256.0, glam::Vec3::Z).fog;
+    let srgb = |linear: f32| {
+        let encoded = if linear <= 0.003_130_8 { linear * 12.92 } else { 1.055 * linear.powf(1.0 / 2.4) - 0.055 };
+        (encoded * 255.0).round() as u8
+    };
+    sheet.background = RgbaImage::from_pixel(WIDTH, HEIGHT, Rgba([srgb(sky[0]), srgb(sky[1]), srgb(sky[2]), 255]));
+    let mut ui = Ui::new(assets.atlas, assets.font, assets.lang, assets.icons, UiScale::Auto);
+    ui.resize(WIDTH, HEIGHT);
+    let scale = f64::from(ui.scale);
+    let [width, _] = ui.screen();
+    // A point on the screen, from its top middle, in UI units.
+    let at = |x: f32, y: f32| (f64::from(width / 2.0 + x) * scale, f64::from(y) * scale);
+
+    // Laid out once, so that the pointer has something to land on, then drawn with the
+    // pointer there, and saved if it has a name.
+    let mut draw = |ui: &mut Ui, name: Option<&str>, pointer: (f64, f64)| {
+        ui.update_menus(std::time::Instant::now());
+        sheet.draw(ui, &mut renderer, format);
+        ui.pointer_moved(pointer.0, pointer.1);
+        ui.update_menus(std::time::Instant::now());
+        let picture = sheet.draw(ui, &mut renderer, format);
+        if let Some(name) = name {
+            picture.save(out.join(format!("menu-{name}.png"))).unwrap();
+        }
+    };
+
+    let worlds = some_worlds();
+    let crashed = Message {
+        text: ui.lang.format("limonite.crashed", &["exit code: 0xc0000005"]),
+        error: true,
+    };
+    ui.show_worlds(&worlds, Some(&crashed));
+    // The pointer over the second row, then over Create New World.
+    draw(&mut ui, Some("worlds"), at(0.0, 37.0 + 4.0 + 22.0 + 10.0));
+    draw(&mut ui, Some("worlds-hover-create"), at(76.0, 37.0 + 118.0 + 16.0));
+    ui.show_worlds(&[], None);
+    draw(&mut ui, Some("worlds-empty"), at(0.0, 0.0));
+
+    // Create New World, with a seed typed.
+    ui.show_worlds(&worlds, None);
+    let create = at(76.0, 37.0 + 118.0 + 16.0);
+    draw(&mut ui, None, create);
+    assert!(ui.pointer_pressed());
+    assert_eq!(ui.pointer_released(), None, "the create page opens, and nothing is chosen yet");
+    ui.key(Key::Tab);
+    ui.typed("glacier");
+    draw(&mut ui, Some("create"), at(0.0, 78.0));
+
+    // Delete's question.
+    ui.show_worlds(&worlds, None);
+    let delete = at(76.0, 37.0 + 118.0 + 6.0 + 24.0 + 10.0);
+    draw(&mut ui, None, delete);
+    assert!(ui.pointer_pressed());
+    assert_eq!(ui.pointer_released(), None, "delete asks first");
+    draw(&mut ui, Some("delete"), at(-51.0, 128.0));
+
+    ui.show_busy("menu.loadingLevel");
+    draw(&mut ui, Some("busy"), at(0.0, 0.0));
+    println!("Wrote the menus' sheets to {}", out.display());
+}

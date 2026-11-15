@@ -268,6 +268,17 @@ impl Tree {
         }
     }
 
+    /// Changes a label's colour.
+    pub fn set_color(&mut self, id: NodeId, color: [u8; 4]) {
+        let node = self.node_mut(id);
+        if let Kind::Label(label) = &mut node.kind
+            && label.color != color
+        {
+            label.color = color;
+            self.changed = true;
+        }
+    }
+
     /// Moves a node from its anchor, in UI units.
     pub fn set_offset(&mut self, id: NodeId, x: f32, y: f32) {
         let node = self.node_mut(id);

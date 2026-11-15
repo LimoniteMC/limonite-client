@@ -50,6 +50,9 @@ pollster = "1.0.1"
 bytemuck = { version = "1.25.2", features = ["derive"] }
 # The entities' ECS (M5, m5-plan Decision 13): no scheduler, which suits the client's own loop.
 hecs = "0.11.2"
+# The world list's dates, in the player's own time zone (M5). pumpkin/Cargo.toml's spec, with the
+# `local-offset` feature pumpkin-core already turns on, so it adds no package.
+time = { version = "0.3", default-features = false, features = ["std", "local-offset"] }
 # The map's PNG writer, and the block textures' PNG and TGA decoders. `png` is exactly
 # pumpkin-core's spec; `tga` is built into `image` and adds no package.
 image = { version = "0.25.10", default-features = false, features = ["png", "tga"] }

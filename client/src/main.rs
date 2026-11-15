@@ -23,14 +23,15 @@ mod session;
 mod settings;
 #[cfg(test)]
 mod shots;
+mod supervisor;
 #[cfg(test)]
 mod test_util;
 mod ui;
 mod world;
+mod worlds;
 
 use std::{
     collections::HashSet,
-    io,
     path::{Path, PathBuf},
     process::ExitCode,
     sync::PoisonError,
@@ -56,13 +57,14 @@ use tracing::{debug, error, info, warn};
 use tracing_subscriber::{EnvFilter, filter::LevelFilter};
 
 use crate::{
+    app::{Extras, Start},
     checks::Check,
     clock::TICK,
     edit::{
         UsePlan,
         aim::{self, Hit},
     },
-    embedded::{EmbeddedServer, HostOperator},
+    embedded::EmbeddedServer,
     home::Home,
     identity::Identity,
     inventory::{items, requests::Button as ClickButton, slots::SlotRef},
@@ -70,6 +72,7 @@ use crate::{
     session::{Session, Stage},
     settings::{MAX_RADIUS, MIN_RADIUS, Overrides, Settings},
     world::{BlockTable, World},
+    worlds::Worlds,
 };
 
 const USAGE: &str = "usage: limonite-client [--home <path>] [--bedrock <path>] [--java-jar <path>] [--data-dir <path>] \
@@ -127,10 +130,19 @@ struct Args {
     debug_world: bool,
     /// Where to start in it.
     goto: Option<String>,
-    /// The home folder: the settings and this install's identity.
+    /// The home folder: the settings, this install's identity, and the world list's worlds.
     home: PathBuf,
-    /// Where the embedded server keeps its world and data files.
+    /// Where the embedded server keeps its world and data files, when the run opens a world
+    /// of its own: `--data-dir`, the debug world, the bench and the scripted session.
     data_dir: PathBuf,
+    /// Whether the window opens on the world list: it does unless the run has a world of its
+    /// own (m5-plan Decision 17).
+    list: bool,
+    /// `--supervised <file>`: this process is the supervisor's child, and creates the file
+    /// once it's up (`supervisor.rs`). The supervisor adds it; it isn't for typing.
+    supervised: Option<PathBuf>,
+    /// `--crashed <how>`: the last child crashed so, which the world list says.
+    crashed: Option<String>,
     /// What `--name`, `--radius` and `--gamemode` change in the settings for
     /// this run.
     overrides: Overrides,
@@ -178,6 +190,8 @@ impl Args {
         let mut edits = None;
         let mut inventory = false;
         let mut bench = None;
+        let mut supervised = None;
+        let mut crashed = None;
         // The scripted session's flags, which mean nothing to the window.
         let mut headless_only = Vec::new();
         while let Some(arg) = args.next() {
@@ -263,6 +277,10 @@ impl Args {
                     );
                 }
                 "--inventory" => inventory = true,
+                supervisor::SUPERVISED => {
+                    supervised = Some(PathBuf::from(args.next().ok_or("--supervised needs a path")?));
+                }
+                supervisor::CRASHED => crashed = Some(args.next().ok_or("--crashed needs how")?),
                 "--bench" => {
                     let secs = args.next().ok_or("--bench needs a number of seconds")?;
                     let secs = secs
@@ -289,6 +307,8 @@ impl Args {
         let absolute = |path: &Path| {
             std::path::absolute(path).map_err(|err| format!("can't resolve {}: {err}", path.display()))
         };
+        // The window opens on the list unless the run has a world of its own.
+        let list = !headless && data_dir.is_none() && !debug_world && bench.is_none();
         // A debug world has a folder of its own, so a normal one isn't flattened, and
         // it always opens in creative, to fly around it.
         let default_data_dir = if debug_world { "run/debug-world" } else { "run/client" };
@@ -304,6 +324,9 @@ impl Args {
             goto,
             home: absolute(&home)?,
             data_dir: absolute(&data_dir)?,
+            list,
+            supervised: supervised.as_deref().map(absolute).transpose()?,
+            crashed,
             overrides,
             hotbar,
             time,
@@ -333,7 +356,8 @@ fn main() -> ExitCode {
         env!("CARGO_PKG_VERSION"),
     );
 
-    let args = match Args::parse(std::env::args().skip(1)) {
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    let args = match Args::parse(raw.iter().cloned()) {
         Ok(args) => args,
         Err(err) => {
             error!("{err}\n{USAGE}");
@@ -341,7 +365,14 @@ fn main() -> ExitCode {
         }
     };
 
-    let (settings, identity) = match open_home(&args) {
+    // The world list's window runs as a child of a small supervisor, which starts it again
+    // after a crash (`supervisor.rs`). The supervisor opens nothing itself.
+    if args.list && args.supervised.is_none() {
+        info!("Supervising the client, which starts it again on the world list if it crashes");
+        return supervisor::run(&raw);
+    }
+
+    let (home, settings, identity) = match open_home(&args) {
         Ok(home) => home,
         Err(err) => {
             error!("{err}");
@@ -358,27 +389,27 @@ fn main() -> ExitCode {
         }
         headless(&args, &settings, &identity)
     } else {
-        windowed(&args, settings, &identity)
+        windowed(&args, &home, settings, &identity)
     }
 }
 
 /// Opens the home folder, and reads the settings, with this run's flags
 /// applied, and this install's identity.
-fn open_home(args: &Args) -> Result<(Settings, Identity), String> {
+fn open_home(args: &Args) -> Result<(Home, Settings, Identity), String> {
     let home = Home::open(args.home.clone())
         .map_err(|err| format!("Can't use the home folder {}: {err}", args.home.display()))?;
     info!("Home folder: {}", home.root().display());
     let mut settings = Settings::load(&home.settings());
     settings.apply(&args.overrides);
     let identity = Identity::load_or_create(&home.identity())?;
-    Ok((settings, identity))
+    Ok((home, settings, identity))
 }
 
-/// The default path: the window.
+/// The default path: the window, on the world list or a world of its own.
 ///
-/// The assets load first, before the server starts, so a missing install
+/// The assets load first, before any server starts, so a missing install
 /// fails at once.
-fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
+fn windowed(args: &Args, home: &Home, settings: Settings, identity: &Identity) -> ExitCode {
     let install = match install::find(args.bedrock.as_deref()) {
         Ok(install) => install,
         Err(err) => {
@@ -412,10 +443,6 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
     let tints = render::load_tints(&vanilla.stack);
     let ui_assets = ui::load(&vanilla.stack, &looks.table, &tints);
 
-    let server = match start_server(args, &settings, identity) {
-        Ok(server) => server,
-        Err(code) => return code,
-    };
     if args.bench.is_some() && cfg!(debug_assertions) {
         warn!("This is a debug build: the bench's frame times mean little. Use --release");
     }
@@ -436,19 +463,35 @@ fn windowed(args: &Args, settings: Settings, identity: &Identity) -> ExitCode {
         ui: ui_assets,
         fog,
     };
-    let browser = args.debug_world.then(|| {
-        let layout = debug_world::Layout::build(&BlockTable::build());
-        debug_world::place(&server, &layout);
-        debug_world::Browser::new(layout, args.goto.as_deref())
-    });
-    let extras = app::Extras {
-        bench: args.bench,
-        browser,
-        hotbar: args.hotbar.clone(),
+    let start = if args.list {
+        match Worlds::open(home) {
+            Ok(worlds) => Start::List {
+                worlds,
+                crashed: args.crashed.clone(),
+            },
+            Err(err) => {
+                error!("Can't use the worlds folder in {}: {err}", home.root().display());
+                return ExitCode::FAILURE;
+            }
+        }
+    } else {
+        let server = match start_server(args, &settings, identity) {
+            Ok(server) => server,
+            Err(code) => return code,
+        };
+        let browser = args.debug_world.then(|| {
+            let layout = debug_world::Layout::build(&BlockTable::build());
+            debug_world::place(&server, &layout);
+            debug_world::Browser::new(layout, args.goto.as_deref())
+        });
+        let extras = Extras {
+            bench: args.bench,
+            browser,
+            hotbar: args.hotbar.clone(),
+        };
+        Start::World { server, extras }
     };
-    let result = app::run(&server, settings, identity.xid(), needs, assets, extras);
-    server.stop();
-    result
+    app::run(start, settings, identity.xid(), needs, assets, args.supervised.clone())
 }
 
 /// The scripted session (`--headless`): the M2 and M3 acceptance run, which
@@ -463,37 +506,25 @@ fn headless(args: &Args, settings: &Settings, identity: &Identity) -> ExitCode {
     result
 }
 
-/// Sets up the process, changes into the data directory, makes the host an
-/// operator of its world, and starts the embedded server.
+/// Opens the run's own world, `--data-dir`'s, and starts its server: the scripted session's,
+/// the bench's and the debug world's.
 fn start_server(args: &Args, settings: &Settings, identity: &Identity) -> Result<EmbeddedServer, ExitCode> {
-    set_up_process();
-    if let Err(err) = enter_data_dir(&args.data_dir) {
-        error!(
-            "Can't use the data directory {}: {err}",
-            args.data_dir.display()
-        );
-        return Err(ExitCode::FAILURE);
-    }
-    info!("Data directory: {}", args.data_dir.display());
     info!(
         "New players get gamemode {} (the settings, or --gamemode)",
         settings.gamemode.name()
     );
     let config = embedded::config(settings);
-    match embedded::make_host_operator(&args.data_dir, &config, &settings.name, identity.xid()) {
-        Ok(HostOperator::Added) => info!("The host is now an operator of this world, at level 4"),
-        Ok(HostOperator::Listed(level)) => {
-            info!("The host is an operator of this world at level {}, left as it is", level as u8);
+    if args.debug_world {
+        // The debug world's level is written before its server first reads it.
+        let prepared = embedded::enter_data_dir(&args.data_dir)
+            .map_err(|err| format!("Can't use the data directory {}: {err}", args.data_dir.display()))
+            .and_then(|()| debug_world::prepare(&config.basic.get_world_path(), config.basic.seed));
+        if let Err(err) = prepared {
+            error!("{err}");
+            return Err(ExitCode::FAILURE);
         }
-        Err(err) => warn!("Couldn't make the host an operator, so it has no commands: {err}"),
     }
-    if args.debug_world
-        && let Err(err) = debug_world::prepare(&config.basic.get_world_path(), config.basic.seed)
-    {
-        error!("{err}");
-        return Err(ExitCode::FAILURE);
-    }
-    let server = EmbeddedServer::start(config).map_err(|err| {
+    let server = embedded::open_world(&args.data_dir, config, &settings.name, identity.xid()).map_err(|err| {
         error!("{err}");
         ExitCode::FAILURE
     })?;
@@ -1377,39 +1408,30 @@ fn linger(session: &mut Session, duration: Duration) {
     }
 }
 
-/// Process-wide setup that Pumpkin's own `main` does before anything else.
-fn set_up_process() {
-    // Pumpkin's HTTP client is built without a TLS crypto provider, so the
-    // process picks one before any client can be created.
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    // Pumpkin reads saved chunks on Rayon's global pool, and the client makes
-    // item icons on it: the tick, worldgen and chunk encoding have pools of their
-    // own. Naming its threads makes them recognisable in a debugger or profiler.
-    if let Err(err) = rayon::ThreadPoolBuilder::new()
-        .thread_name(|i| format!("Rayon-Worker-{i}"))
-        .build_global()
-    {
-        warn!("Couldn't configure the Rayon pool: {err}");
-    }
-}
-
-/// Creates `dir` and makes it the process's working directory.
-///
-/// Pumpkin reads and writes its world and data files relative to the working
-/// directory. That directory belongs to the whole process, which is why every
-/// path the client holds was made absolute before this runs.
-fn enter_data_dir(dir: &Path) -> io::Result<()> {
-    std::fs::create_dir_all(dir)?;
-    std::env::set_current_dir(dir)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     fn parse(flags: &[&str]) -> Result<Args, String> {
         Args::parse(flags.iter().map(|flag| (*flag).to_string()))
+    }
+
+    #[test]
+    fn the_window_opens_on_the_list_unless_the_run_has_a_world_of_its_own() {
+        assert!(parse(&[]).unwrap().list);
+        assert!(parse(&["--home", "elsewhere", "--name", "Steve"]).unwrap().list);
+        for own in [&["--data-dir", "w"][..], &["--debug-world"], &["--bench", "5"], &["--headless"]] {
+            assert!(!parse(own).unwrap().list, "{own:?}");
+        }
+    }
+
+    #[test]
+    fn the_supervisors_flags_are_read_back() {
+        let args = parse(&["--supervised", "up", "--crashed", "exit code: 101"]).unwrap();
+        assert!(args.supervised.is_some_and(|path| path.is_absolute() && path.ends_with("up")));
+        assert_eq!(args.crashed.as_deref(), Some("exit code: 101"));
+        assert!(args.list, "a supervised child opens the list too");
+        assert!(parse(&["--supervised"]).is_err());
     }
 
     #[test]

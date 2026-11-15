@@ -1,0 +1,9 @@
+## The client's own strings: the few its screens need that vanilla's texts/en_US.lang lacks
+## (m5-plan Decision 14). They're read before every pack's, under the same lookup.
+limonite.crashed=Limonite stopped unexpectedly (%s). What went wrong is in the log, in the terminal it was started from.
+limonite.worldFailed=The world couldn't be opened: %s
+limonite.worldClosed=The world closed: %s
+limonite.copied=Copied to %s
+limonite.deleted=Moved to %s
+limonite.deleteMoves=It goes into the deleted folder in the home folder, until you empty that.
+limonite.fileError=That didn't work: %s

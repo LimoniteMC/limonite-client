@@ -208,6 +208,43 @@ impl Font {
     pub fn width(&self, text: &str) -> f32 {
         shown(text).map(|c| self.advance(c)).sum()
     }
+
+    /// `text` broken into lines no wider than `width`: at spaces where it can be, and inside
+    /// a word only when the word alone is wider, as a long folder path is. Never no lines.
+    #[must_use]
+    pub fn wrap(&self, text: &str, width: f32) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut line = String::new();
+        for word in text.split(' ') {
+            let joined = if line.is_empty() { word.to_string() } else { format!("{line} {word}") };
+            if self.width(&joined) <= width {
+                line = joined;
+                continue;
+            }
+            if !line.is_empty() {
+                lines.push(std::mem::take(&mut line));
+            }
+            // The word alone, cut where it stops fitting, a character at least each time.
+            let mut rest = word;
+            while self.width(rest) > width {
+                let mut taken = 0.0;
+                let cut = rest
+                    .char_indices()
+                    .find(|&(at, c)| {
+                        taken += self.advance(c);
+                        at > 0 && taken > width
+                    })
+                    .map_or(rest.len(), |(at, _)| at);
+                lines.push(rest[..cut].to_string());
+                rest = &rest[cut..];
+            }
+            line = rest.to_string();
+        }
+        if !line.is_empty() || lines.is_empty() {
+            lines.push(line);
+        }
+        lines
+    }
 }
 
 /// The characters of `text` that show: all but its formatting codes, `§` and the
@@ -227,6 +264,17 @@ pub mod tests {
 
     use super::*;
     use crate::ui::atlas::Input;
+
+    #[test]
+    fn text_wraps_at_spaces_and_inside_a_word_only_if_it_must() {
+        // With no sheets, every character is a space wide: 4 units.
+        let font = Font::default();
+        assert_eq!(font.wrap("one two three", 40.0), ["one two", "three"]);
+        assert_eq!(font.wrap("fits", 40.0), ["fits"]);
+        assert_eq!(font.wrap("", 40.0), [""], "never no lines");
+        assert_eq!(font.wrap("C:/a/very/long/path ok", 24.0), ["C:/a/v", "ery/lo", "ng/pat", "h ok"]);
+        assert_eq!(font.wrap("wide", 1.0), ["w", "i", "d", "e"], "a character at least each time");
+    }
 
     /// A sheet 16 cells across, and `rows` down, with `glyphs`: each a cell's index, and
     /// its first and last inked column.

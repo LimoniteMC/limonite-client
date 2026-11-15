@@ -12,6 +12,8 @@ use limonite_packs::PackStack;
 
 /// The strings the client shows. Other languages wait for the settings screen.
 const FILE: &str = "texts/en_US.lang";
+/// The client's own strings, which vanilla lacks: the only lang file in the repo.
+const OWN: &str = include_str!("limonite.lang");
 
 /// The strings, by key.
 #[derive(Debug, Default)]
@@ -24,6 +26,7 @@ impl Lang {
     /// and comes back as a problem to log.
     pub fn load(stack: &PackStack) -> (Self, Vec<String>) {
         let mut lang = Self::default();
+        lang.add(OWN);
         let mut problems = Vec::new();
         for (pack, read) in stack.layers(FILE) {
             match read {
@@ -54,6 +57,27 @@ impl Lang {
         self.strings.get(key).map(String::as_str)
     }
 
+    /// `key`'s string, or the key itself if there's none, which is how a missing string
+    /// shows.
+    pub fn text<'a>(&'a self, key: &'a str) -> &'a str {
+        self.get(key).unwrap_or(key)
+    }
+
+    /// `key`'s string with `params` put in (see [`fill`]). A parameter that's `%` and a key is
+    /// that key's string, as the server sends an entity's name. A missing key comes back as
+    /// itself, with its parameters after it, so nothing the server said is lost.
+    pub fn format(&self, key: &str, params: &[&str]) -> String {
+        let params: Vec<&str> = params
+            .iter()
+            .map(|param| param.strip_prefix('%').and_then(|key| self.get(key)).unwrap_or(param))
+            .collect();
+        match self.get(key) {
+            Some(pattern) => fill(pattern, &params),
+            None if params.is_empty() => key.to_string(),
+            None => format!("{key} {}", params.join(" ")),
+        }
+    }
+
     pub fn len(&self) -> usize {
         self.strings.len()
     }
@@ -66,9 +90,81 @@ impl Lang {
     }
 }
 
+/// Puts `params` into a string as the game's own strings expect (worth teaching): `%s` and `%d`
+/// take them in turn, `%1$s`, `%1$d` and Bedrock's bare `%1` take one by its number from 1, and
+/// `%%` is a `%`. A parameter that isn't there is left out, rather than panicking over a string
+/// a pack got wrong.
+#[must_use]
+pub fn fill(pattern: &str, params: &[&str]) -> String {
+    let mut out = String::with_capacity(pattern.len());
+    let mut next = 0;
+    let mut chars = pattern.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c != '%' {
+            out.push(c);
+            continue;
+        }
+        match chars.peek().copied() {
+            Some('%') => {
+                chars.next();
+                out.push('%');
+            }
+            Some('s' | 'd') => {
+                chars.next();
+                out.push_str(params.get(next).copied().unwrap_or_default());
+                next += 1;
+            }
+            Some(digit) if digit.is_ascii_digit() => {
+                let mut number = 0_usize;
+                while let Some(digit) = chars.peek().and_then(|c| c.to_digit(10)) {
+                    number = number * 10 + digit as usize;
+                    chars.next();
+                }
+                if chars.peek() == Some(&'$') {
+                    chars.next();
+                    if matches!(chars.peek(), Some('s' | 'd')) {
+                        chars.next();
+                    }
+                }
+                let param = number.checked_sub(1).and_then(|index| params.get(index));
+                out.push_str(param.copied().unwrap_or_default());
+            }
+            _ => out.push('%'),
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parameters_go_in_in_turn_or_by_number() {
+        assert_eq!(fill("<%s> %s", &["Steve", "hi"]), "<Steve> hi");
+        assert_eq!(fill("Set the time to %1$d", &["6000"]), "Set the time to 6000");
+        assert_eq!(fill("%2$s before %1$s", &["a", "b"]), "b before a");
+        assert_eq!(fill("bare %1 and %2", &["x", "y"]), "bare x and y");
+        assert_eq!(fill("100%% sure, %s", &["yes"]), "100% sure, yes");
+        assert_eq!(fill("missing %s and %3$s", &[]), "missing  and ");
+        assert_eq!(fill("a lone % stays", &[]), "a lone % stays");
+    }
+
+    #[test]
+    fn a_formatted_string_translates_what_the_server_names() {
+        let lang = lang("commands.kill.successful=Killed %1$s\nentity.cow.name=Cow");
+        assert_eq!(lang.format("commands.kill.successful", &["%entity.cow.name"]), "Killed Cow");
+        assert_eq!(lang.format("commands.kill.successful", &["Steve"]), "Killed Steve");
+        assert_eq!(lang.format("no.such.key", &["a", "b"]), "no.such.key a b", "nothing is lost");
+        assert_eq!(lang.text("no.such.key"), "no.such.key");
+    }
+
+    #[test]
+    fn the_clients_own_strings_are_read_before_any_packs() {
+        let mut lang = Lang::default();
+        lang.add(OWN);
+        assert!(lang.get("limonite.crashed").is_some_and(|text| text.contains("%s")));
+    }
 
     fn lang(text: &str) -> Lang {
         let mut lang = Lang::default();

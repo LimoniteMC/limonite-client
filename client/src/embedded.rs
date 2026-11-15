@@ -22,7 +22,7 @@ use pumpkin_data::{entity::EntityType, item::Item, item_stack::ItemStack};
 use pumpkin_util::{PermissionLvl, math::vector3::Vector3};
 use uuid::Uuid;
 use tokio::runtime::{Handle, Runtime};
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::{home::save_atomically, inventory::HOTBAR, login, settings::Settings};
 
@@ -63,6 +63,62 @@ pub fn config(settings: &Settings) -> PumpkinConfig {
     config.advanced.commands.use_console = false;
     config.advanced.commands.use_tty = false;
     config
+}
+
+/// Process-wide setup that Pumpkin's own `main` does before anything else. Safe to do again:
+/// the next world's server in the same process finds it done (m5-plan Deviation 63).
+pub fn set_up_process() {
+    // Pumpkin's HTTP client is built without a TLS crypto provider, so the
+    // process picks one before any client can be created.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
+    // Pumpkin reads saved chunks on Rayon's global pool, and the client makes
+    // item icons on it: the tick, worldgen and chunk encoding have pools of their
+    // own. Naming its threads makes them recognisable in a debugger or profiler.
+    // Only the first call builds it; a later one is told it exists, which is fine.
+    static BUILT: std::sync::Once = std::sync::Once::new();
+    BUILT.call_once(|| {
+        if let Err(err) = rayon::ThreadPoolBuilder::new()
+            .thread_name(|i| format!("Rayon-Worker-{i}"))
+            .build_global()
+        {
+            warn!("Couldn't configure the Rayon pool: {err}");
+        }
+    });
+}
+
+/// Creates `dir` and makes it the process's working directory.
+///
+/// Pumpkin reads and writes its world and data files relative to the working
+/// directory. That directory belongs to the whole process, which is why every
+/// path the client holds was made absolute before this runs.
+///
+/// # Errors
+/// If the folder can't be created or entered.
+pub fn enter_data_dir(dir: &Path) -> io::Result<()> {
+    fs::create_dir_all(dir)?;
+    std::env::set_current_dir(dir)
+}
+
+/// Opens the world in `dir` for the host named `name`: makes it the working directory, makes
+/// the host an operator of it, and starts its server. A world from the list and a `--data-dir`
+/// world open the same way.
+///
+/// # Errors
+/// If the folder can't be used, or the server doesn't start. Failing to make the host an
+/// operator is only logged: the world still opens, without commands.
+pub fn open_world(dir: &Path, config: PumpkinConfig, name: &str, xid: &str) -> Result<EmbeddedServer, String> {
+    set_up_process();
+    enter_data_dir(dir).map_err(|err| format!("Can't use the world's folder {}: {err}", dir.display()))?;
+    info!("World folder: {}", dir.display());
+    match make_host_operator(dir, &config, name, xid) {
+        Ok(HostOperator::Added) => info!("The host is now an operator of this world, at level 4"),
+        Ok(HostOperator::Listed(level)) => {
+            info!("The host is an operator of this world at level {}, left as it is", level as u8);
+        }
+        Err(err) => warn!("Couldn't make the host an operator, so it has no commands: {err}"),
+    }
+    EmbeddedServer::start(config)
 }
 
 /// Whether the host had to be added to the operators.

@@ -5,6 +5,13 @@
 //! arrived. The embedded server stays on its own thread, and the
 //! `LocalChannel` is still the only thing between them.
 //!
+//! **One window, world after world** (m5-plan Deviation 63). The window, the GPU and all
+//! that was read from the install last as long as the process. A world's server, the host's
+//! session with it and the world's meshes last as long as it's played: they're a [`Play`],
+//! made when a world opens and dropped when it's left, which saves it. Between worlds the
+//! window shows the world list. A world of its own (`--data-dir`) has no list to go back
+//! to, so leaving it closes the window.
+//!
 //! **Ticks don't depend on frames** (worth teaching). The host sends one
 //! `PlayerAuthInput` every 50 ms, as the official client does, and the
 //! server drops a client it hasn't heard from in 10 s. Frames come at the
@@ -20,9 +27,13 @@
 //! **While the inventory is open** (m5-plan Step 12), the cursor is free and the mouse
 //! is the screen's: the player stands still, nothing is broken or placed, and the keys
 //! only close it again. Ticks and their input go on as ever.
+//!
+//! **While a menu is up,** the keys and the mouse are the UI's (`ui/mod.rs`): Enter and
+//! Escape, the arrows and typing go to its screen, and a click to its buttons.
 
 use std::{
     collections::HashMap,
+    path::PathBuf,
     process::ExitCode,
     sync::Arc,
     time::{Duration, Instant},
@@ -35,9 +46,9 @@ use tracing::{debug, error, info, warn};
 use winit::{
     application::ApplicationHandler,
     dpi::PhysicalSize,
-    event::{DeviceEvent, DeviceId, ElementState, MouseButton, MouseScrollDelta, WindowEvent},
+    event::{DeviceEvent, DeviceId, ElementState, KeyEvent, MouseButton, MouseScrollDelta, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
+    keyboard::{Key as Logical, KeyCode, NamedKey, PhysicalKey},
     window::{CursorGrabMode, Window, WindowId},
 };
 
@@ -47,7 +58,7 @@ use crate::{
     clock::Ticks,
     debug_world::Browser,
     edit::aim::{self, Hit},
-    embedded::EmbeddedServer,
+    embedded::{self, EmbeddedServer},
     input::{Action, Button, Input, PIXELS_PER_NOTCH},
     inventory::requests::Button as ClickButton,
     player::{EYE_HEIGHT, Motion, Pose, movement::Keys},
@@ -65,11 +76,19 @@ use crate::{
     },
     session::{Session, Stage},
     settings::Settings,
-    ui::{self, Ui, render::UiRenderer, screens::inventory::Pressed},
+    ui::{
+        self, Clicked, Ui,
+        render::UiRenderer,
+        screens::{
+            inventory::Pressed,
+            worlds::{Choice, EditKey, Key, Message},
+        },
+    },
     world::{
         World,
         light::{self, Kind},
     },
+    worlds::{self, WorldEntry, Worlds},
 };
 
 /// What the window draws with, prepared before it opens.
@@ -90,8 +109,11 @@ pub struct Assets {
 /// The longest step the bench's camera takes in one frame, so a hitch doesn't
 /// fling it far away.
 const MAX_FRAME_SECONDS: f64 = 0.25;
+/// How often a menu is drawn while nothing happens: often enough for a caret to blink.
+const MENU_FRAME: Duration = Duration::from_millis(50);
 
-/// What a run does besides playing, from the command line.
+/// What a world of its own does besides playing, from the command line.
+#[derive(Default)]
 pub struct Extras {
     /// `--bench`: fly for this long, log the frame times, and leave.
     pub bench: Option<Duration>,
@@ -101,47 +123,53 @@ pub struct Extras {
     pub hotbar: Vec<(&'static Item, u8)>,
 }
 
-/// Opens the window, joins the embedded server as the host with this
-/// install's `xid`, and runs until the window closes, the server ends the
-/// connection, or a bench is done.
-pub fn run(
-    server: &EmbeddedServer,
-    settings: Settings,
-    xid: &str,
-    needs: Needs,
-    assets: Assets,
-    extras: Extras,
-) -> ExitCode {
-    let radius = settings.radius;
-    let mut session = match Session::connect(&server.connector, &settings.name, xid, radius) {
-        Ok(session) => session,
-        Err(err) => {
-            error!("Couldn't connect to the embedded server: {err}");
-            return ExitCode::FAILURE;
-        }
-    };
-    // Before any chunk arrives, so the meshes hear about every one.
-    session.world_mut().track_changes();
+/// What the window opens on.
+pub enum Start {
+    /// The world list, saying how the last child crashed, if one did (`supervisor.rs`).
+    List { worlds: Worlds, crashed: Option<String> },
+    /// A world of its own (`--data-dir`), already started. Leaving it closes the window.
+    World { server: EmbeddedServer, extras: Extras },
+}
+
+/// Opens the window on `start`, as the host with this install's `xid`, and runs until the
+/// window closes, a world of its own is left, or a bench is done. A world still open then is
+/// left, which saves it.
+///
+/// `ready` is the supervisor's file, created once a frame has been drawn (`supervisor.rs`).
+pub fn run(start: Start, settings: Settings, xid: &str, needs: Needs, assets: Assets, ready: Option<PathBuf>) -> ExitCode {
     let event_loop = match EventLoop::new() {
         Ok(event_loop) => event_loop,
         Err(err) => {
             error!("Couldn't start the window system: {err}");
+            if let Start::World { server, .. } = start {
+                server.stop();
+            }
             return ExitCode::FAILURE;
         }
     };
-    let mut app = App::new(server, session, settings, needs, assets);
-    app.bench = extras.bench.map(|duration| Bench::new(duration, radius));
-    app.browser = extras.browser;
-    app.hotbar = extras.hotbar;
+    let mut app = App::new(settings, xid, needs, assets, ready);
+    match start {
+        Start::List { worlds, crashed } => {
+            let message = crashed.map(|how| Message {
+                text: app.ui.lang().format("limonite.crashed", &[&how]),
+                error: true,
+            });
+            app.worlds = Some(worlds);
+            app.show_list(message.as_ref());
+        }
+        Start::World { server, extras } => {
+            if let Err(err) = app.join(server, None, extras) {
+                error!("{err}");
+                return ExitCode::FAILURE;
+            }
+        }
+    }
     if let Err(err) = event_loop.run_app(&mut app) {
         error!("The window's event loop failed: {err}");
-        return ExitCode::FAILURE;
+        app.failure.get_or_insert_with(|| "the event loop failed".to_string());
     }
-    app.session.log_edits();
-    app.session.log_light();
-    app.session.log_entities();
-    // Dropping the app drops the session, so the host leaves before the
-    // caller stops the server.
+    // The window has closed. A world still open is left now, before the process ends.
+    app.leave();
     match app.failure {
         Some(err) => {
             error!("{err}");
@@ -151,10 +179,42 @@ pub fn run(
     }
 }
 
-pub struct App<'a> {
-    server: &'a EmbeddedServer,
+/// A world being played, and all that lasts only as long as it does.
+struct Play {
+    server: EmbeddedServer,
     session: Session,
+    /// Its place in the world list, or `None` for a world of its own.
+    entry: Option<WorldEntry>,
+    meshes: Meshes,
+    /// Placed where `StartGame` put the host, once it has spawned. It draws
+    /// the player's eyes, except during the bench, which flies it.
+    camera: Option<Camera>,
+    /// What the camera was aimed at, the last frame.
+    aimed: Option<Hit>,
+    /// What the camera's eyes are in.
+    eyes: Eyes,
+    ticks: Ticks,
+    /// Whether the inventory was open at the last look, to free the cursor when it opens
+    /// and capture it again when it shuts.
+    inventory_open: bool,
+    /// `--bench`: it flies the camera instead of the keys and the mouse.
+    bench: Option<Bench>,
+    /// `--debug-world`: where you are in it.
+    browser: Option<Browser>,
+    /// `--hotbar`: what the host gets once it has spawned.
+    hotbar: Vec<(&'static Item, u8)>,
+}
+
+/// Work that waits until a frame has shown it's under way, since it holds the window still
+/// while it runs.
+enum Pending {
+    /// Opening a world from the list.
+    Open(WorldEntry),
+}
+
+pub struct App {
     settings: Settings,
+    xid: String,
     needs: Needs,
     window: Option<Arc<Window>>,
     gpu: Option<Gpu>,
@@ -166,65 +226,49 @@ pub struct App<'a> {
     animation_tick: u64,
     animated_tick: Option<u64>,
     tints: Tints,
-    /// Until the census is logged.
+    /// Until the census is logged, once, after the first world's join settles.
     approximate: Option<HashMap<u32, String>>,
-    meshes: Meshes,
     terrain: Option<Terrain>,
     fog: FogSettings,
-    /// What the camera's eyes are in.
-    eyes: Eyes,
     ui: Ui,
     /// The CPU copy of the UI's atlas, until it's uploaded.
     ui_picture: Option<image::RgbaImage>,
     ui_renderer: Option<UiRenderer>,
-    /// Placed where `StartGame` put the host, once it has spawned. It draws
-    /// the player's eyes, except during the bench, which flies it.
-    camera: Option<Camera>,
-    /// What the camera was aimed at, the last frame.
-    aimed: Option<Hit>,
     input: Input,
     cursor_grabbed: bool,
     /// Whether shift is held, for a shift-click.
     shift: bool,
-    /// Whether the inventory was open at the last look, to free the cursor when it opens
-    /// and capture it again when it shuts.
-    inventory_open: bool,
     /// Whether frames can be seen: not minimised or covered.
     visible: bool,
-    ticks: Ticks,
     last_frame: Instant,
     /// Counting frames for the title, which updates once a second.
     second_started: Instant,
     frames_this_second: u32,
     fps: f64,
-    /// `--bench`: it flies the camera instead of the keys and the mouse.
-    bench: Option<Bench>,
-    /// `--debug-world`: where you are in it.
-    browser: Option<Browser>,
-    /// `--hotbar`: what the host gets once it has spawned.
-    hotbar: Vec<(&'static Item, u8)>,
-    /// Set when the bench is done: the loop ends at its next pass.
+    /// The world list's worlds, when the run has a list.
+    worlds: Option<Worlds>,
+    /// The world being played, if one is.
+    play: Option<Play>,
+    /// Work to do once a frame has shown it's under way, and whether that frame was drawn.
+    pending: Option<Pending>,
+    pending_shown: bool,
+    /// The supervisor's file, until a frame is drawn (`supervisor.rs`).
+    ready: Option<PathBuf>,
+    /// Set when the run is over: the loop ends at its next pass.
     quit: bool,
     /// Why the loop ended early, if it did.
     failure: Option<String>,
 }
 
-impl<'a> App<'a> {
-    fn new(
-        server: &'a EmbeddedServer,
-        session: Session,
-        settings: Settings,
-        needs: Needs,
-        assets: Assets,
-    ) -> Self {
+impl App {
+    fn new(settings: Settings, xid: &str, needs: Needs, assets: Assets, ready: Option<PathBuf>) -> Self {
         let now = Instant::now();
         let input = Input::new(settings.keymap.clone());
-        let ui = Ui::new(assets.ui.atlas, assets.ui.font, assets.ui.lang, assets.ui.icons, settings.ui_scale);
-        let flat_lighting = !settings.smooth_lighting;
+        let mut ui = Ui::new(assets.ui.atlas, assets.ui.font, assets.ui.lang, assets.ui.icons, settings.ui_scale);
+        ui.set_default_gamemode(settings.gamemode);
         Self {
-            server,
-            session,
             settings,
+            xid: xid.to_string(),
             needs,
             window: None,
             gpu: None,
@@ -235,125 +279,291 @@ impl<'a> App<'a> {
             animated_tick: None,
             tints: assets.tints,
             approximate: Some(assets.approximate),
-            meshes: Meshes::new(flat_lighting),
             terrain: None,
             fog: assets.fog,
-            eyes: Eyes::default(),
             ui,
             ui_picture: Some(assets.ui.picture),
             ui_renderer: None,
-            camera: None,
-            aimed: None,
             input,
             cursor_grabbed: false,
             shift: false,
-            inventory_open: false,
             visible: true,
-            ticks: Ticks::new(now),
             last_frame: now,
             second_started: now,
             frames_this_second: 0,
             fps: 0.0,
-            bench: None,
-            browser: None,
-            hotbar: Vec::new(),
+            worlds: None,
+            play: None,
+            pending: None,
+            pending_shown: false,
+            ready,
             quit: false,
             failure: None,
+        }
+    }
+
+    /// Joins `server`'s world as the host, and shows it. A world of its own has no `entry`.
+    ///
+    /// # Errors
+    /// If the session can't connect, after which the server has been stopped.
+    fn join(&mut self, server: EmbeddedServer, entry: Option<WorldEntry>, extras: Extras) -> Result<(), String> {
+        let radius = self.settings.radius;
+        let mut session = match Session::connect(&server.connector, &self.settings.name, &self.xid, radius) {
+            Ok(session) => session,
+            Err(err) => {
+                server.stop();
+                return Err(format!("Couldn't connect to the embedded server: {err}"));
+            }
+        };
+        // Before any chunk arrives, so the meshes hear about every one.
+        session.world_mut().track_changes();
+        self.play = Some(Play {
+            server,
+            session,
+            entry,
+            meshes: Meshes::new(!self.settings.smooth_lighting),
+            camera: None,
+            aimed: None,
+            eyes: Eyes::default(),
+            ticks: Ticks::new(Instant::now()),
+            inventory_open: false,
+            bench: extras.bench.map(|duration| Bench::new(duration, radius)),
+            browser: extras.browser,
+            hotbar: extras.hotbar,
+        });
+        // Until the host spawns, there's nothing to see but this.
+        self.ui.show_busy("menu.generatingTerrain");
+        Ok(())
+    }
+
+    /// Leaves the world being played, if one is: the host leaves, then its server stops,
+    /// which saves the world. Says which world it was, if it came from the list.
+    fn leave(&mut self) -> Option<WorldEntry> {
+        let Play {
+            server,
+            session,
+            entry,
+            ..
+        } = self.play.take()?;
+        session.log_edits();
+        session.log_light();
+        session.log_entities();
+        // The host leaves before the server stops, as a player would.
+        drop(session);
+        server.stop();
+        info!("Left the world, and its server saved it");
+        self.release_cursor();
+        // Nothing of that world is drawn again.
+        if let (Some(gpu), Some(terrain)) = (&self.gpu, &mut self.terrain) {
+            terrain.outline.show(gpu, glam::DVec3::ZERO, &[]);
+            terrain.crack.show(gpu, &self.table, &self.tints, None);
+            if let Some(renderer) = &mut terrain.entities {
+                renderer.upload(gpu, &[]);
+            }
+        }
+        entry
+    }
+
+    /// Shows the world list, as the files have it now, with `message` over it.
+    fn show_list(&mut self, message: Option<&Message>) {
+        let list = self.worlds.as_ref().map(Worlds::list).unwrap_or_default();
+        self.ui.show_worlds(&list, message);
+        self.release_cursor();
+    }
+
+    /// A message for the list, from the strings, with `detail` put in.
+    fn message(&self, key: &str, detail: &str, error: bool) -> Message {
+        Message {
+            text: self.ui.lang().format(key, &[detail]),
+            error,
+        }
+    }
+
+    /// The world in the list with this id, as the files have it now.
+    fn entry(&self, id: &str) -> Option<WorldEntry> {
+        self.worlds.as_ref()?.list().into_iter().find(|entry| entry.id == id)
+    }
+
+    /// Does what a menu asked for.
+    fn clicked(&mut self, clicked: Clicked) {
+        match clicked {
+            Clicked::Worlds(choice) => self.choose(choice),
+        }
+    }
+
+    /// Does what the world list asked for, and shows the list again with what came of it,
+    /// unless a world is opening.
+    fn choose(&mut self, choice: Choice) {
+        let Some(worlds) = &self.worlds else {
+            return;
+        };
+        let now = worlds::now();
+        let message = match choice {
+            Choice::Play(id) => match self.entry(&id) {
+                Some(entry) => return self.start_opening(entry),
+                None => None,
+            },
+            Choice::Create { name, gamemode, seed } => match worlds.create(&name, gamemode, &seed, now) {
+                Ok(entry) => {
+                    info!("Created the world {:?} in {}", entry.meta.name, entry.dir.display());
+                    return self.start_opening(entry);
+                }
+                Err(err) => Some(self.message("limonite.fileError", &err.to_string(), true)),
+            },
+            Choice::Copy(id) => self.entry(&id).map(|entry| match worlds.back_up(&entry, now) {
+                Ok(copy) => {
+                    info!("Copied the world {:?} to {}", entry.meta.name, copy.display());
+                    self.message("limonite.copied", &copy.display().to_string(), false)
+                }
+                Err(err) => self.message("limonite.fileError", &err.to_string(), true),
+            }),
+            Choice::Delete(id) => self.entry(&id).map(|entry| match worlds.delete(&entry, now) {
+                Ok(moved) => {
+                    info!("Moved the world {:?} to {}", entry.meta.name, moved.display());
+                    self.message("limonite.deleted", &moved.display().to_string(), false)
+                }
+                Err(err) => self.message("limonite.fileError", &err.to_string(), true),
+            }),
+        };
+        self.show_list(message.as_ref());
+    }
+
+    /// Says a world is loading, and opens it once a frame has said so.
+    fn start_opening(&mut self, entry: WorldEntry) {
+        self.ui.show_busy("menu.loadingLevel");
+        self.pending = Some(Pending::Open(entry));
+        self.pending_shown = false;
+    }
+
+    /// Opens a world from the list: notes that it's being played, starts its server, and
+    /// joins it. If that fails, the list says why.
+    fn open(&mut self, mut entry: WorldEntry) {
+        if let Some(worlds) = &self.worlds
+            && let Err(err) = worlds.played(&mut entry, worlds::now())
+        {
+            warn!("Couldn't note when {} was played: {err}", entry.dir.display());
+        }
+        info!("Opening the world {:?}", entry.meta.name);
+        let config = entry.config(&self.settings);
+        let opened = embedded::open_world(&entry.dir, config, &self.settings.name, &self.xid)
+            .and_then(|server| self.join(server, Some(entry), Extras::default()));
+        if let Err(err) = opened {
+            error!("{err}");
+            let message = self.message("limonite.worldFailed", &err, true);
+            self.show_list(Some(&message));
+        }
+    }
+
+    /// Runs the pending work, once a frame has shown it's under way, or at once if no frame
+    /// can be seen.
+    fn run_pending(&mut self) {
+        if !self.pending_shown && self.visible {
+            return;
+        }
+        match self.pending.take() {
+            Some(Pending::Open(entry)) => self.open(entry),
+            None => {}
+        }
+    }
+
+    /// The world was lost: its server ended the connection. A world from the list goes back
+    /// to the list, saying so; a world of its own ends the run.
+    fn lost_world(&mut self, reason: &str) {
+        let from_list = self.play.as_ref().is_some_and(|play| play.entry.is_some());
+        self.leave();
+        if from_list {
+            let message = self.message("limonite.worldClosed", reason, true);
+            self.show_list(Some(&message));
+        } else {
+            self.failure = Some(format!("The embedded server ended the connection: {reason}"));
+            self.quit = true;
         }
     }
 
     /// Runs the ticks that are due: each moves the player once and sends one
     /// `PlayerAuthInput`.
     fn run_ticks(&mut self) {
-        for _ in 0..self.ticks.due(Instant::now()) {
-            let motion = self.motion();
-            if self.bench.is_none() {
-                let hit = self.camera.as_ref().and_then(|camera| aim::from_camera(self.session.game(), camera));
-                let playing = !self.inventory_open;
+        let Some(play) = &mut self.play else {
+            return;
+        };
+        for _ in 0..play.ticks.due(Instant::now()) {
+            let motion = motion(play, &self.input);
+            if play.bench.is_none() {
+                let hit = play.camera.as_ref().and_then(|camera| aim::from_camera(play.session.game(), camera));
+                let playing = !play.inventory_open;
                 let attack = playing && self.input.is_held(Action::Attack);
                 let use_item = playing && self.input.is_held(Action::Use);
-                self.session.edit_tick(attack, use_item, hit.as_ref());
+                play.session.edit_tick(attack, use_item, hit.as_ref());
             }
-            self.session.step(motion);
+            play.session.step(motion);
             self.animation_tick += 1;
-        }
-    }
-
-    /// What moves the player this tick: the keys, under physics, facing the
-    /// camera's way. The bench flies the camera itself, frame by frame as in
-    /// M4, so its numbers compare with M4's, and the player just follows it.
-    fn motion(&self) -> Motion {
-        let Some(camera) = &self.camera else {
-            return Motion::Still;
-        };
-        if self.bench.is_some() {
-            Motion::To(Pose::from_eyes(camera.position, camera.pitch, camera.yaw))
-        } else {
-            // The player stands still while the inventory is open.
-            let keys = if self.inventory_open { Keys::default() } else { self.input.keys() };
-            Motion::Keys {
-                keys,
-                pitch: camera.pitch,
-                yaw: camera.yaw,
-            }
         }
     }
 
     /// When the server turns the player (a teleport), the camera turns with
     /// it, before the next tick reads the camera's angles.
     fn follow_turns(&mut self) {
-        let turned = self.session.game_mut().player_mut().and_then(|player| player.take_turned());
-        if let (Some((pitch, yaw)), Some(camera)) = (turned, &mut self.camera) {
+        let Some(play) = &mut self.play else {
+            return;
+        };
+        let turned = play.session.game_mut().player_mut().and_then(|player| player.take_turned());
+        if let (Some((pitch, yaw)), Some(camera)) = (turned, &mut play.camera) {
             camera.pitch = pitch;
             camera.yaw = yaw;
         }
     }
 
-    /// Places the camera where the host spawned, once.
+    /// Places the camera where the host spawned, once, and captures the cursor.
     fn place_camera(&mut self) {
-        if self.camera.is_some() || self.session.stage() != Stage::Spawned {
+        let Some(play) = &mut self.play else {
+            return;
+        };
+        if play.camera.is_some() || play.session.stage() != Stage::Spawned {
             return;
         }
-        let Some(player) = self.session.game().player() else {
+        let Some(player) = play.session.game().player() else {
             return;
         };
         let pose = player.pose();
         let mut camera = Camera::new(pose.eyes(), pose.pitch, pose.yaw);
         if let Some(window) = &self.window {
-            let size = window.inner_size();
-            camera.aspect = aspect(size);
+            camera.aspect = aspect(window.inner_size());
         }
         // The bench keeps M4's view, so its numbers compare with the
         // baseline whatever the settings say.
-        camera.fov_y = if self.bench.is_some() {
-            FOV_Y
-        } else {
-            self.settings.fov as f32
-        };
-        self.camera = Some(camera);
-        info!("The camera is at the host's spawn; click in the window to look around");
-        self.session.check_gamemode(self.settings.gamemode);
-        if !self.hotbar.is_empty() {
-            self.server.fill_hotbar(&self.hotbar);
+        camera.fov_y = if play.bench.is_some() { FOV_Y } else { self.settings.fov as f32 };
+        play.camera = Some(camera);
+        self.ui.show_game();
+        info!("The camera is at the host's spawn");
+        play.session.check_gamemode(self.settings.gamemode);
+        if !play.hotbar.is_empty() {
+            play.server.fill_hotbar(&play.hotbar);
         }
-        if self.browser.is_some() {
+        let bench = play.bench.is_some();
+        if play.browser.is_some() {
             info!(
                 "Debug world: ] and [ go to the next and last block, . and , to the next and last state, \
                  and typing in this terminal goes to what matches"
             );
             self.jump_to_browser();
         }
+        if !bench && self.window.as_ref().is_some_and(|window| window.has_focus()) {
+            self.grab_cursor();
+        }
     }
 
     /// Moves the host to what the debug world's browser is at, hovering to look at
     /// it, and says what that is.
     fn jump_to_browser(&mut self) {
-        let Some(browser) = &self.browser else {
+        let Some(play) = &self.play else {
+            return;
+        };
+        let Some(browser) = &play.browser else {
             return;
         };
         let (feet, yaw, pitch) = browser.pose();
         let label = browser.label();
-        let players = self.server.server.get_all_players();
+        let players = play.server.server.get_all_players();
         let Some(player) = players.first() else {
             return;
         };
@@ -366,7 +576,7 @@ impl<'a> App<'a> {
 
     /// A key the debug world answers to. The keymap has no say: these only exist here.
     fn debug_key(&mut self, key: KeyCode) {
-        let Some(browser) = &mut self.browser else {
+        let Some(browser) = self.play.as_mut().and_then(|play| play.browser.as_mut()) else {
             return;
         };
         match key {
@@ -381,7 +591,7 @@ impl<'a> App<'a> {
 
     /// Goes to what was typed in the terminal, if anything was.
     fn debug_typed(&mut self) {
-        let Some(browser) = &mut self.browser else {
+        let Some(browser) = self.play.as_mut().and_then(|play| play.browser.as_mut()) else {
             return;
         };
         let Some(line) = browser.take_typed() else {
@@ -426,11 +636,14 @@ impl<'a> App<'a> {
     /// Frees the cursor when the server opens the inventory, and captures it again when
     /// the screen shuts, as long as the window has the focus.
     fn follow_inventory(&mut self) {
-        let open = self.session.game().inventory().is_open();
-        if open == self.inventory_open {
+        let Some(play) = &mut self.play else {
+            return;
+        };
+        let open = play.session.game().inventory().is_open();
+        if open == play.inventory_open {
             return;
         }
-        self.inventory_open = open;
+        play.inventory_open = open;
         if open {
             self.release_cursor();
         } else if self.window.as_ref().is_some_and(|window| window.has_focus()) {
@@ -438,20 +651,14 @@ impl<'a> App<'a> {
         }
     }
 
-    /// E: the inventory opens, once the server says so, or shuts.
-    fn toggle_inventory(&mut self) {
-        if self.session.game().inventory().is_open() {
-            self.session.close_inventory();
-        } else {
-            self.session.open_inventory();
-        }
-    }
-
     /// A mouse button while the inventory is open: a press on what's under the pointer,
     /// which acts at once, and a release, which ends a drag.
     fn inventory_click(&mut self, state: ElementState, button: MouseButton) {
+        let Some(play) = &mut self.play else {
+            return;
+        };
         if state == ElementState::Released {
-            self.session.pointer_released();
+            play.session.pointer_released();
             return;
         }
         let button = match button {
@@ -460,38 +667,78 @@ impl<'a> App<'a> {
             _ => return,
         };
         match self.ui.inventory_pressed() {
-            Pressed::Slot(slot) => self.session.click_slot(slot, button, self.shift),
-            Pressed::Creative(entry) => self.session.click_creative(entry),
-            Pressed::Tab(tab) => self.session.creative_tab(tab),
+            Pressed::Slot(slot) => play.session.click_slot(slot, button, self.shift),
+            Pressed::Creative(entry) => play.session.click_creative(entry),
+            Pressed::Tab(tab) => play.session.creative_tab(tab),
             Pressed::Nothing => {}
         }
     }
 
-    /// Logs the camera's pose as a command to type into the official client,
-    /// to look from the same place.
-    fn log_pose(&self) {
-        if let Some(camera) = &self.camera {
-            let p = camera.position;
-            info!(
-                "Pose: /tp @s {:.2} {:.2} {:.2} {:.1} {:.1}",
-                p.x,
-                p.y - EYE_HEIGHT,
-                p.z,
-                camera.yaw,
-                camera.pitch
-            );
+    /// A key while a menu has the keys: one the menu answers to, or typing.
+    fn menu_key(&mut self, event: &KeyEvent) {
+        if event.state != ElementState::Pressed {
+            return;
+        }
+        match menu_key(&event.logical_key) {
+            // Holding an editing key repeats it; holding Enter doesn't.
+            Some(key) if !event.repeat || matches!(key, Key::Edit(_)) => {
+                if let Some(clicked) = self.ui.key(key) {
+                    self.clicked(clicked);
+                }
+            }
+            Some(_) => {}
+            None => {
+                if let Some(text) = &event.text {
+                    self.ui.typed(text);
+                }
+            }
         }
     }
 
-    /// Shows the player's edits in this very frame, lit.
-    fn mesh_edits(&mut self) {
-        // A zero budget: only the changed blocks, before their sub-chunks are meshed.
-        self.session.world_mut().update_light(Duration::ZERO, (0, 0));
-        let changes = self.session.world_mut().take_changes();
-        self.meshes.apply(changes, self.session.world());
-        if let Some(gpu) = &self.gpu {
-            self.meshes.build_urgent(&gpu.device, self.session.world(), &self.table, &self.tints);
+    /// The keys pressed since the last frame, while playing.
+    fn play_keys(&mut self) -> (bool, bool) {
+        let (mut attack_pressed, mut use_pressed) = (false, false);
+        for action in self.input.take_pressed() {
+            let Some(play) = &mut self.play else {
+                break;
+            };
+            // With the inventory open, the keys only shut it.
+            if play.inventory_open && !matches!(action, Action::Inventory | Action::Pause | Action::LogPose) {
+                continue;
+            }
+            match action {
+                Action::Attack => attack_pressed = true,
+                Action::Use => use_pressed = true,
+                Action::Inventory => {
+                    if play.session.game().inventory().is_open() {
+                        play.session.close_inventory();
+                    } else {
+                        play.session.open_inventory();
+                    }
+                }
+                Action::Pause if play.inventory_open => play.session.close_inventory(),
+                // Until the pause menu (this step's next commit), Esc lets go of the cursor.
+                Action::Pause => self.release_cursor(),
+                Action::LogPose => log_pose(play.camera.as_ref()),
+                Action::Hotbar(slot) => play.session.select_slot(slot),
+                Action::HotbarNext => {
+                    let slot = play.session.game().inventory().next_slot();
+                    play.session.select_slot(slot);
+                }
+                Action::HotbarPrevious => {
+                    let slot = play.session.game().inventory().previous_slot();
+                    play.session.select_slot(slot);
+                }
+                Action::Drop => play.session.drop_held(),
+                Action::Pick => {
+                    if let Some(hit) = &play.aimed {
+                        play.session.pick_block(hit.block);
+                    }
+                }
+                _ => {}
+            }
         }
+        (attack_pressed, use_pressed)
     }
 
     fn redraw(&mut self) {
@@ -500,44 +747,54 @@ impl<'a> App<'a> {
         let frame_time = now - self.last_frame;
         let seconds = frame_time.as_secs_f64().min(MAX_FRAME_SECONDS);
         self.last_frame = now;
-
-        let (mut attack_pressed, mut use_pressed) = (false, false);
-        for action in self.input.take_pressed() {
-            // With the inventory open, the keys only shut it.
-            if self.inventory_open && !matches!(action, Action::Inventory | Action::Pause | Action::LogPose) {
-                continue;
-            }
-            match action {
-                Action::Attack => attack_pressed = true,
-                Action::Use => use_pressed = true,
-                Action::Inventory => self.toggle_inventory(),
-                // Until the pause menu (Step 16), Esc lets go of the cursor.
-                Action::Pause if self.inventory_open => self.session.close_inventory(),
-                Action::Pause => self.release_cursor(),
-                Action::LogPose => self.log_pose(),
-                Action::Hotbar(slot) => self.session.select_slot(slot),
-                Action::HotbarNext => {
-                    let slot = self.session.game().inventory().next_slot();
-                    self.session.select_slot(slot);
-                }
-                Action::HotbarPrevious => {
-                    let slot = self.session.game().inventory().previous_slot();
-                    self.session.select_slot(slot);
-                }
-                Action::Drop => self.session.drop_held(),
-                Action::Pick => {
-                    if let Some(hit) = &self.aimed {
-                        self.session.pick_block(hit.block);
-                    }
-                }
-                _ => {}
+        self.ui.update_menus(now);
+        let drawn = if self.play.is_some() {
+            self.redraw_world(now, frame_time, seconds)
+        } else {
+            self.redraw_menu()
+        };
+        if drawn == Frame::Drawn {
+            self.frames_this_second += 1;
+            self.pending_shown = self.pending.is_some();
+            if let Some(ready) = self.ready.take()
+                && let Err(err) = std::fs::write(&ready, b"")
+            {
+                warn!("Couldn't tell the supervisor the window is up ({}): {err}", ready.display());
             }
         }
+        self.once_a_second(now);
+    }
+
+    /// A frame of the world list: the sky's clear colour, and the UI over it.
+    fn redraw_menu(&mut self) -> Frame {
+        let sky_frame = sky::frame(&self.fog, sky::NOON_TICKS, Medium::Air, self.view_depth(), Vec3::Z);
+        let (Some(gpu), Some(terrain), Some(ui_renderer)) = (&mut self.gpu, &mut self.terrain, &mut self.ui_renderer)
+        else {
+            return Frame::Skipped;
+        };
+        if let Some(drawing) = self.ui.drawing() {
+            ui_renderer.upload(gpu, drawing);
+        }
+        let ui_renderer = &*ui_renderer;
+        let nothing = Meshes::new(false);
+        gpu.frame(|gpu, views, encoder| {
+            terrain.draw(gpu, &views.world, encoder, None, &nothing, &sky_frame);
+            ui_renderer.draw(&views.ui, encoder);
+        })
+    }
+
+    /// A frame of the world being played.
+    fn redraw_world(&mut self, now: Instant, frame_time: Duration, seconds: f64) -> Frame {
+        let (attack_pressed, use_pressed) = self.play_keys();
         let (dx, dy) = self.input.take_mouse();
         let sensitivity = self.settings.mouse_sensitivity;
-        let alpha = self.ticks.alpha(now);
-        if let Some(camera) = &mut self.camera {
-            match &self.bench {
+        let view = self.view_depth();
+        let Some(play) = &mut self.play else {
+            return Frame::Skipped;
+        };
+        let alpha = play.ticks.alpha(now);
+        if let Some(camera) = &mut play.camera {
+            match &play.bench {
                 Some(bench) => camera.fly(bench.movement(), seconds),
                 None => {
                     // Looking around turns the camera every frame; moving
@@ -545,7 +802,7 @@ impl<'a> App<'a> {
                     if self.cursor_grabbed {
                         camera.turn(dx * sensitivity, dy * sensitivity);
                     }
-                    if let Some(player) = self.session.game().player() {
+                    if let Some(player) = play.session.game().player() {
                         camera.position = player.eyes_at(alpha);
                     }
                 }
@@ -553,27 +810,33 @@ impl<'a> App<'a> {
         }
 
         // The bench keeps M4's picture, so its numbers compare with the baseline.
-        self.aimed = self
+        play.aimed = play
             .camera
             .as_ref()
-            .filter(|_| self.bench.is_none())
-            .and_then(|camera| aim::from_camera(self.session.game(), camera));
+            .filter(|_| play.bench.is_none())
+            .and_then(|camera| aim::from_camera(play.session.game(), camera));
         if attack_pressed {
-            self.session.attack_pressed(self.aimed.as_ref());
+            play.session.attack_pressed(play.aimed.as_ref());
         }
         if use_pressed {
-            self.session.use_pressed(self.aimed.as_ref());
+            play.session.use_pressed(play.aimed.as_ref());
         }
-        self.mesh_edits();
+        // Shows the player's edits in this very frame, lit: a zero budget, only the changed
+        // blocks, before their sub-chunks are meshed.
+        play.session.world_mut().update_light(Duration::ZERO, (0, 0));
+        let changes = play.session.world_mut().take_changes();
+        play.meshes.apply(changes, play.session.world());
+        if let Some(gpu) = &self.gpu {
+            play.meshes.build_urgent(&gpu.device, play.session.world(), &self.table, &self.tints);
+        }
 
-        self.ui.update(self.session.game());
+        self.ui.update(play.session.game());
 
         // The sky and fog: the time of day, what the eyes are in, and where they look.
-        let time = self.session.game().time().get().unwrap_or(sky::NOON_TICKS);
-        let view = self.view_depth();
-        let sky_frame = match &self.camera {
+        let time = play.session.game().time().get().unwrap_or(sky::NOON_TICKS);
+        let sky_frame = match &play.camera {
             Some(camera) => {
-                let medium = self.eyes.medium(self.session.world(), &self.table, camera.position, now);
+                let medium = play.eyes.medium(play.session.world(), &self.table, camera.position, now);
                 sky::frame(&self.fog, time, medium, view, camera.forward())
             }
             None => sky::frame(&self.fog, time, Medium::Air, view, Vec3::Z),
@@ -583,25 +846,25 @@ impl<'a> App<'a> {
         // mutably while the terrain and meshes are read.
         let (Some(gpu), Some(terrain), Some(ui_renderer)) = (&mut self.gpu, &mut self.terrain, &mut self.ui_renderer)
         else {
-            return;
+            return Frame::Skipped;
         };
         if let Some(drawing) = self.ui.drawing() {
             ui_renderer.upload(gpu, drawing);
         }
-        if let Some(camera) = &self.camera {
-            let boxes = self.aimed.as_ref().map_or(&[][..], |hit| &hit.boxes);
+        if let Some(camera) = &play.camera {
+            let boxes = play.aimed.as_ref().map_or(&[][..], |hit| &hit.boxes);
             terrain.outline.show(gpu, camera.position, boxes);
         }
-        let cracked = self.session.crack().and_then(|(block, stage)| {
-            let id = self.session.world().block(block.x, block.y, block.z, 0)?;
+        let cracked = play.session.crack().and_then(|(block, stage)| {
+            let id = play.session.world().block(block.x, block.y, block.z, 0)?;
             Some(Cracked { block, id, stage })
         });
         terrain.crack.show(gpu, &self.table, &self.tints, cracked);
         // The entities, as they were a moment ago (`entities/track.rs`). The bench keeps
         // M4's picture, which had none.
-        if let (Some(camera), Some(renderer)) = (&self.camera, &mut terrain.entities) {
-            let drawn = if self.bench.is_none() { self.session.game().entities().drawn(now) } else { Vec::new() };
-            let world = self.session.world();
+        if let (Some(camera), Some(renderer)) = (&play.camera, &mut terrain.entities) {
+            let drawn = if play.bench.is_none() { play.session.game().entities().drawn(now) } else { Vec::new() };
+            let world = play.session.world();
             let looks = Looks {
                 icons: self.ui.icons(),
                 atlas: self.ui.atlas(),
@@ -614,16 +877,15 @@ impl<'a> App<'a> {
             terrain.animate(gpu, &mut self.animator, self.animation_tick);
         }
         terrain.set_daylight(gpu, sky::daylight(time));
-        let (camera, meshes) = (self.camera.as_ref(), &self.meshes);
+        let (camera, meshes) = (play.camera.as_ref(), &play.meshes);
         let ui_renderer = &*ui_renderer;
         let drawn = gpu.frame(|gpu, views, encoder| {
             terrain.draw(gpu, &views.world, encoder, camera, meshes, &sky_frame);
             ui_renderer.draw(&views.ui, encoder);
         });
         if drawn == Frame::Drawn {
-            self.session.frame_drawn();
-            self.frames_this_second += 1;
-            if let Some(bench) = &mut self.bench {
+            play.session.frame_drawn();
+            if let Some(bench) = &mut play.bench {
                 let sample = Sample {
                     time: frame_time,
                     draws: terrain.draws,
@@ -631,12 +893,12 @@ impl<'a> App<'a> {
                     meshes: meshes.len(),
                     quads: meshes.stats.gpu_quads,
                     gpu_bytes: meshes.stats.gpu_bytes,
-                    chunks: self.session.world().chunk_count(),
+                    chunks: play.session.world().chunk_count(),
                 };
                 self.quit |= bench.record(sample, &meshes.stats);
             }
         }
-        self.once_a_second(now);
+        drawn
     }
 
     /// How far the view reaches, in blocks: what the fog ends at.
@@ -645,16 +907,23 @@ impl<'a> App<'a> {
     }
 
     fn set_title(&self) {
-        let (Some(window), Some(camera)) = (&self.window, &self.camera) else {
+        let Some(window) = &self.window else {
+            return;
+        };
+        let Some(play) = &self.play else {
+            window.set_title("Limonite");
+            return;
+        };
+        let Some(camera) = &play.camera else {
             return;
         };
         let p = camera.position;
         let fps = self.fps;
         let (draws, visible) = self.terrain.as_ref().map_or((0, 0), |t| (t.draws, t.visible));
-        let debug = self.browser.as_ref().map_or(String::new(), |browser| format!("{}; ", browser.label()));
-        // The light in the block at the player's feet, as Java's debug screen shows it, until
-        // Step 14 draws it.
-        let light = self.session.world().light();
+        let debug = play.browser.as_ref().map_or(String::new(), |browser| format!("{}; ", browser.label()));
+        // The light in the block at the player's feet, as Java's debug screen shows it.
+        let world = play.session.world();
+        let light = world.light();
         let (x, y, z) = (p.x.floor() as i32, (p.y - EYE_HEIGHT).floor() as i32, p.z.floor() as i32);
         let here = match (light.level(Kind::Sky, x, y, z), light.level(Kind::Block, x, y, z)) {
             (Some(sky), Some(block)) => format!("; light {sky} sky, {block} block"),
@@ -664,11 +933,11 @@ impl<'a> App<'a> {
             "Limonite: {debug}{fps:.0} fps, {:.1} ms; {} chunks ({} unlit), {} meshes ({} waiting), {visible} \
              visible, {draws} draws; {} entities; at {:.1}, {:.1}, {:.1}{here}",
             1000.0 / fps.max(0.001),
-            self.session.world().chunk_count(),
+            world.chunk_count(),
             light.waiting(),
-            self.meshes.len(),
-            self.meshes.waiting(),
-            self.session.game().entities().len(),
+            play.meshes.len(),
+            play.meshes.waiting(),
+            play.session.game().entities().len(),
             p.x,
             p.y,
             p.z
@@ -685,22 +954,25 @@ impl<'a> App<'a> {
         self.fps = f64::from(self.frames_this_second) / elapsed.as_secs_f64();
         self.second_started = now;
         self.frames_this_second = 0;
-        let Some(camera) = &self.camera else {
+        self.set_title();
+        let Some(play) = &self.play else {
+            return;
+        };
+        let Some(camera) = &play.camera else {
             return;
         };
         let p = camera.position;
-        self.set_title();
-        let stats = &self.meshes.stats;
+        let stats = &play.meshes.stats;
         debug!(
             "Meshes: {} on the GPU, {:.1} MB, {} waiting; {} meshed so far at {:.0} µs each, {} quads",
-            self.meshes.len(),
+            play.meshes.len(),
             stats.gpu_bytes as f64 / 1e6,
-            self.meshes.waiting(),
+            play.meshes.waiting(),
             stats.meshed,
             stats.micros_each(),
             stats.quads_built,
         );
-        if let Some(player) = self.server.server.get_all_players().first() {
+        if let Some(player) = play.server.server.get_all_players().first() {
             let server = player.position();
             debug!(
                 "Camera eyes at ({:.2}, {:.2}, {:.2}); the server's player feet at ({:.2}, {:.2}, {:.2}); \
@@ -711,11 +983,123 @@ impl<'a> App<'a> {
                 server.x,
                 server.y,
                 server.z,
-                self.session.level_chunks(),
-                self.session.game().time().get(),
+                play.session.level_chunks(),
+                play.session.game().time().get(),
             );
         }
     }
+
+    /// The world's work between frames: what arrived, the ticks that are due, and light and
+    /// meshing within their budgets. Says whether a world is still being played.
+    fn step_world(&mut self) -> bool {
+        let Some(play) = &mut self.play else {
+            return false;
+        };
+        play.session.drain();
+        if play.session.stage() == Stage::Disconnected {
+            self.lost_world("the server ended the connection");
+            return self.play.is_some();
+        }
+        self.place_camera();
+        self.follow_turns();
+        self.follow_inventory();
+        self.run_ticks();
+        let Some(play) = &mut self.play else {
+            return false;
+        };
+
+        // Light, then meshing, each within its budget: what changed in the
+        // world, nearest the camera first.
+        let around = play.camera.as_ref().map_or((0, 0), |camera| {
+            let p = camera.position;
+            ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
+        });
+        play.session.world_mut().update_light(light::BUDGET, around);
+        let changes = play.session.world_mut().take_changes();
+        play.meshes.apply(changes, play.session.world());
+        if let (Some(gpu), Some(camera)) = (&self.gpu, &play.camera) {
+            play.meshes.build(
+                &gpu.device,
+                play.session.world(),
+                &self.table,
+                &self.tints,
+                camera.position,
+                meshes::BUDGET,
+            );
+        }
+        // Once, when the first join's meshing has settled: the approximate shapes it loaded.
+        if play.meshes.settled()
+            && let Some(approximate) = self.approximate.take()
+        {
+            blocks::log_approximate_census(play.session.world().chunks(), &approximate);
+        }
+        if let (Some(bench), Some(camera), Some(gpu)) = (&mut play.bench, &mut play.camera, &self.gpu)
+            && bench.waiting()
+            && play.meshes.settled()
+        {
+            let chunks = play.session.world().chunk_count();
+            bench.start(camera, chunks, &play.meshes.stats, gpu.config.present_mode);
+        }
+        true
+    }
+}
+
+/// What moves the player this tick: the keys, under physics, facing the
+/// camera's way. The bench flies the camera itself, frame by frame as in
+/// M4, so its numbers compare with M4's, and the player just follows it.
+fn motion(play: &Play, input: &Input) -> Motion {
+    let Some(camera) = &play.camera else {
+        return Motion::Still;
+    };
+    if play.bench.is_some() {
+        Motion::To(Pose::from_eyes(camera.position, camera.pitch, camera.yaw))
+    } else {
+        // The player stands still while the inventory is open.
+        let keys = if play.inventory_open { Keys::default() } else { input.keys() };
+        Motion::Keys {
+            keys,
+            pitch: camera.pitch,
+            yaw: camera.yaw,
+        }
+    }
+}
+
+/// Logs the camera's pose as a command to type into the official client,
+/// to look from the same place.
+fn log_pose(camera: Option<&Camera>) {
+    if let Some(camera) = camera {
+        let p = camera.position;
+        info!(
+            "Pose: /tp @s {:.2} {:.2} {:.2} {:.1} {:.1}",
+            p.x,
+            p.y - EYE_HEIGHT,
+            p.z,
+            camera.yaw,
+            camera.pitch
+        );
+    }
+}
+
+/// The key a menu answers to, if it's one: Enter, Escape, Tab, the arrows, and the keys
+/// that edit a field. Anything else may be typing.
+fn menu_key(key: &Logical) -> Option<Key> {
+    let Logical::Named(named) = key else {
+        return None;
+    };
+    Some(match named {
+        NamedKey::Enter => Key::Enter,
+        NamedKey::Escape => Key::Escape,
+        NamedKey::Tab => Key::Tab,
+        NamedKey::ArrowUp => Key::Up,
+        NamedKey::ArrowDown => Key::Down,
+        NamedKey::ArrowLeft => Key::Edit(EditKey::Left),
+        NamedKey::ArrowRight => Key::Edit(EditKey::Right),
+        NamedKey::Home => Key::Edit(EditKey::Home),
+        NamedKey::End => Key::Edit(EditKey::End),
+        NamedKey::Backspace => Key::Edit(EditKey::Backspace),
+        NamedKey::Delete => Key::Edit(EditKey::Delete),
+        _ => return None,
+    })
 }
 
 /// Width over height, never dividing by zero.
@@ -723,7 +1107,7 @@ fn aspect(size: PhysicalSize<u32>) -> f32 {
     size.width.max(1) as f32 / size.height.max(1) as f32
 }
 
-impl ApplicationHandler for App<'_> {
+impl ApplicationHandler for App {
     /// The window and the GPU come up here, once: some platforms only allow
     /// creating windows after the loop has started.
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
@@ -774,7 +1158,12 @@ impl ApplicationHandler for App<'_> {
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => {
-                if self.bench.as_ref().is_some_and(|bench| !bench.is_done()) {
+                let bench_unfinished = self
+                    .play
+                    .as_ref()
+                    .and_then(|play| play.bench.as_ref())
+                    .is_some_and(|bench| !bench.is_done());
+                if bench_unfinished {
                     self.failure = Some("The bench didn't finish: the window was closed first".to_string());
                 }
                 event_loop.exit();
@@ -785,7 +1174,7 @@ impl ApplicationHandler for App<'_> {
                     gpu.resize(size.width, size.height);
                 }
                 self.ui.resize(size.width, size.height);
-                if let Some(camera) = &mut self.camera {
+                if let Some(camera) = self.play.as_mut().and_then(|play| play.camera.as_mut()) {
                     camera.aspect = aspect(size);
                 }
             }
@@ -794,6 +1183,7 @@ impl ApplicationHandler for App<'_> {
                 self.release_cursor();
                 self.input.clear();
             }
+            WindowEvent::KeyboardInput { event, .. } if self.ui.wants_keys() => self.menu_key(&event),
             WindowEvent::KeyboardInput { event, .. } => {
                 if let PhysicalKey::Code(key) = event.physical_key {
                     self.input.button(Button::Key(key), event.state);
@@ -804,7 +1194,21 @@ impl ApplicationHandler for App<'_> {
             }
             WindowEvent::CursorMoved { position, .. } => self.ui.pointer_moved(position.x, position.y),
             WindowEvent::ModifiersChanged(modifiers) => self.shift = modifiers.state().shift_key(),
-            WindowEvent::MouseInput { state, button, .. } if self.inventory_open => self.inventory_click(state, button),
+            // A menu's buttons act when the button comes up over what it went down on.
+            WindowEvent::MouseInput { state, button, .. } if self.ui.wants_keys() => {
+                if button == MouseButton::Left {
+                    if state == ElementState::Pressed {
+                        self.ui.pointer_pressed();
+                    } else if let Some(clicked) = self.ui.pointer_released() {
+                        self.clicked(clicked);
+                    }
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. }
+                if self.play.as_ref().is_some_and(|play| play.inventory_open) =>
+            {
+                self.inventory_click(state, button);
+            }
             // While the cursor is free, a left click goes to the UI, and if the UI
             // doesn't want it, it captures the cursor. A release always counts, so a
             // button held when the cursor was let go isn't left held.
@@ -818,14 +1222,15 @@ impl ApplicationHandler for App<'_> {
                     self.grab_cursor();
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } if self.cursor_grabbed || self.inventory_open => {
+            WindowEvent::MouseWheel { delta, .. } => {
                 let notches = match delta {
                     MouseScrollDelta::LineDelta(_, y) => f64::from(y),
                     MouseScrollDelta::PixelDelta(position) => position.y / PIXELS_PER_NOTCH,
                 };
-                if self.inventory_open {
+                let inventory_open = self.play.as_ref().is_some_and(|play| play.inventory_open);
+                if self.ui.wants_keys() || inventory_open {
                     self.ui.scroll(notches);
-                } else {
+                } else if self.cursor_grabbed {
                     self.input.wheel(notches);
                 }
             }
@@ -849,56 +1254,22 @@ impl ApplicationHandler for App<'_> {
             event_loop.exit();
             return;
         }
-        self.session.drain();
-        if self.session.stage() == Stage::Disconnected {
-            self.failure = Some("The embedded server ended the connection".to_string());
+        self.run_pending();
+        let playing = self.step_world();
+        if self.quit {
             event_loop.exit();
             return;
         }
-        self.place_camera();
-        self.follow_turns();
-        self.follow_inventory();
-        self.run_ticks();
-
-        // Light, then meshing, each within its budget: what changed in the
-        // world, nearest the camera first.
-        let around = self.camera.as_ref().map_or((0, 0), |camera| {
-            let p = camera.position;
-            ((p.x.floor() as i32) >> 4, (p.z.floor() as i32) >> 4)
-        });
-        self.session.world_mut().update_light(light::BUDGET, around);
-        let changes = self.session.world_mut().take_changes();
-        self.meshes.apply(changes, self.session.world());
-        if let (Some(gpu), Some(camera)) = (&self.gpu, &self.camera) {
-            self.meshes.build(
-                &gpu.device,
-                self.session.world(),
-                &self.table,
-                &self.tints,
-                camera.position,
-                meshes::BUDGET,
-            );
-        }
-        // Once, when the join's meshing has settled: the approximate shapes it loaded.
-        if self.meshes.settled()
-            && let Some(approximate) = self.approximate.take()
-        {
-            blocks::log_approximate_census(self.session.world().chunks(), &approximate);
-        }
-        if let (Some(bench), Some(camera), Some(gpu)) = (&mut self.bench, &mut self.camera, &self.gpu)
-            && bench.waiting()
-            && self.meshes.settled()
-        {
-            let chunks = self.session.world().chunk_count();
-            bench.start(camera, chunks, &self.meshes.stats, gpu.config.present_mode);
-        }
-
         if self.visible
             && let Some(window) = &self.window
         {
             window.request_redraw();
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.ticks.next()));
+        let wake = match &self.play {
+            Some(play) if playing => play.ticks.next(),
+            _ => Instant::now() + MENU_FRAME,
+        };
+        event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
     }
 }
 

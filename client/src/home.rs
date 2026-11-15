@@ -1,6 +1,6 @@
 //! The client's home folder (m5-plan Decision 16): the player's settings and
-//! this install's identity. M5's world list adds `worlds/` here, with
-//! `backups/` and `deleted/` beside it.
+//! this install's identity, and the world list's `worlds/`, with `backups/` and
+//! `deleted/` beside it (`worlds.rs`).
 //!
 //! `--home <dir>` picks it, `run/home` by default.
 
@@ -40,6 +40,24 @@ impl Home {
     #[must_use]
     pub fn identity(&self) -> PathBuf {
         self.root.join("identity.toml")
+    }
+
+    /// `worlds/`: a folder for each world in the list (`worlds.rs`).
+    #[must_use]
+    pub fn worlds(&self) -> PathBuf {
+        self.root.join("worlds")
+    }
+
+    /// `backups/`: what Copy World makes.
+    #[must_use]
+    pub fn backups(&self) -> PathBuf {
+        self.root.join("backups")
+    }
+
+    /// `deleted/`: where Delete moves a world. Emptying it is up to the player.
+    #[must_use]
+    pub fn deleted(&self) -> PathBuf {
+        self.root.join("deleted")
     }
 }
 

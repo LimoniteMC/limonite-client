@@ -48,6 +48,7 @@ glam.workspace = true
 pollster.workspace = true
 bytemuck.workspace = true
 hecs.workspace = true
+time.workspace = true
 
 [dev-dependencies]
 # Parses and validates the WGSL shaders in tests, with no GPU. The version wgpu uses, so it adds

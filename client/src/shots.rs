@@ -399,7 +399,7 @@ fn screenshots() {
     let out = std::path::absolute(std::env::var("LIMONITE_SHOTS_OUT").unwrap_or_else(|_| "run/screenshots".to_string())).unwrap();
     std::fs::create_dir_all(&out).unwrap();
 
-    let (settings, identity) = open_home(&args).unwrap();
+    let (_, settings, identity) = open_home(&args).unwrap();
     let install = install::find(args.bedrock.as_deref()).unwrap();
     let vanilla = install::load_vanilla(&install).unwrap();
     let palette = blocks::load_palette().unwrap();
