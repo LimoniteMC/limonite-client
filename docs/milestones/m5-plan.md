@@ -1460,6 +1460,38 @@ The questions as they were asked:
     model, the world's own mesh of it, kept alongside its icon when the icons are built, at a quarter size with its middle
     a quarter of a block up, as Java's ground transform has it. An item with a picture, and a block the inventory shows
     flat, such as a flower, stay pictures on a card, as the game draws them.
+63. **Worlds switch in one process, and the supervisor stays only as a crash net** (Step 16; the owner left the
+    choice to us, 2026-11-16). Decision 17 gave each world a fresh process, because one process could run only one
+    server (Finding 13). Upstream fixed that (Deviation 7), so it was measured again before Step 16:
+    - **One process, server after server:** 8 in a row, alternating two worlds. Each came back where the host left
+      it, within 0.01 blocks; the threads stayed at 18; a rejoin took about 0.5 s; memory grew about 10 MB a world.
+    - **A fresh process per world** would load the window's assets again, 1.2 to 2.7 s in a release build, and
+      close the window and open another.
+
+    So Save & Quit stops the server, which saves, and the same window goes back to the world list. Playing a world
+    starts its server in the same process. The supervisor stays for what the owner asked of it at approval, and only
+    that: after a crash, a new child opens on the world list with an error, and two deaths at startup in a row stop
+    it. The changes that follow:
+    - **No "back to the world list" exit code,** since a child no longer leaves to switch worlds: 0 is a quit, and
+      anything else a crash.
+    - **A child is up once it has drawn a frame,** not once its window exists, so a child that dies as its window
+      opens counts as a death at startup and can't loop.
+    - **The reload check runs in one process too** (Step 16's `--check-edits`): the edits, Save & Quit, the same world
+      opened again by a new server, and the checks. That's the path the window's Save & Quit takes.
+    - **What's left:** the 10 MB a world played, to find among Pumpkin's statics.
+64. **The pause and death screens are one file, and the supervisor another** (Step 16). The plan names `pause.rs`,
+    `death.rs`, and the supervisor in `main.rs`. The two screens are one screen built twice, a few buttons over the
+    world dimmed, so they're `ui/screens/overlay.rs`; the supervisor is `supervisor.rs`, which `main.rs` only starts.
+65. **The death screen has Main menu too** (Step 16). The plan has "You died!" and Respawn. Bedrock's death screen has
+    a second button, `deathScreen.quit`, "Main menu", and here it goes back to the world list as Save & Quit does:
+    without it, the only way out of a world while dead was to respawn first.
+66. **Two headless checks beyond the plan's reload check** (Step 16): "commands" sends `/time set` and a line of chat as
+    the command line does, and checks that the server ran the command and answered it, and passed the chat back;
+    "respawn" kills the host through the server, as `/kill` does, presses Respawn, and checks that it lives again on
+    both sides. Both run in every headless run; the reload needs `--edits` and `--check-edits`.
+67. **`time` is a new dependency of the client** (Step 16; Decision 22). The world list shows when each world was last
+    played in the player's own time zone, and a copy's or a deleted world's folder is named by that moment. `time` 0.3
+    is pumpkin-core's, already built with the same `local-offset` feature, so the lockfile gains no package.
 
 ## Results (filled in during execution)
 
@@ -1776,6 +1808,86 @@ by Pumpkin's own reader with no bytes left over.
 - **The owner's walk (checkpoint 1, 2026-10-30):** the physics felt right. The special models were
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
+
+### Step 16: Worlds, pausing, death and commands (2026-11-16)
+
+- **Commits:** `76c918a` (the world list, the supervisor, and one window for world after world), `4d63e50` (pause, Save
+  & Quit, death and respawn, and the reload and respawn checks) and `82cada1` (the command line, and the server's
+  replies in colour).
+- **One process, world after world** (Deviation 63, the owner's "you pick"): the window, the GPU and everything read
+  from the install last as long as the process; a world's server, the host's session and the world's meshes last as
+  long as it's played (`app.rs`'s `Play`). Opening a world shows "Loading world" for a frame, starts its server in
+  this process and joins it; "Building terrain" shows until the host spawns. Save & Quit shows "Saving..." for a
+  frame, then the host leaves and the server stops, which saves, and the same window shows the list.
+- **The world list** (`worlds.rs`, `ui/screens/worlds.rs`): five rows at a time, the most recently played first, each
+  with the world's name, its gamemode and when it was last played; the wheel, Up and Down scroll it, and a second
+  click, or Enter, plays the selected world. Create New World asks for a name, the gamemode on one button that
+  switches between survival and creative, as Java's create screen does, and a seed, which Pumpkin reads as Java does:
+  a number as it is, other text by its hash, and nothing as random. Copy World copies the folder into `backups/`, and
+  Delete moves it into `deleted/` after a question; a line over the list says where it went, or what went wrong, and
+  after a crash, how the last child ended.
+  - **A world is a folder** in `<home>/worlds/`, named after the world, made safe for every file system and numbered
+    if taken, with `limonite-world.toml` beside the server's own files. A folder without that file, such as a world
+    copied in by hand, is listed under its folder's name.
+  - **A row shows only whether it's selected:** Bedrock's light button is green both under the pointer and when
+    pressed, so a hovered row would look selected. The buttons light up under the pointer.
+  - **The look is the vanilla UI's:** its light buttons and their text colours, `$light_button_*_text_color`, its edit
+    boxes, its plain dialog panel, and its strings. The seven strings vanilla lacks are the client's own,
+    `client/src/ui/limonite.lang`, read before every pack's.
+- **The supervisor** (Decision 17, as Deviation 63 left it; `supervisor.rs`): without a world of its own, the first
+  process runs the window as a child. Run with a Bedrock path that isn't an install, the child died before its window
+  was up, the supervisor started another with the error, that died too, and the supervisor stopped with its message
+  and exit code 1. A child that crashes with its window up goes back to the list with "Limonite stopped unexpectedly
+  (exit code ...)". Nobody has crashed one in a window yet.
+- **Pause and death** (`ui/screens/overlay.rs`): Escape, or the window losing the focus, pauses, over the world dimmed
+  by half; Escape resumes. While the host is dead, "You died!" shows over the world tinted red, with Respawn and Main
+  menu (Deviation 65). Under either the player stands still and the cursor is free, as with the inventory, and what
+  was held when it came up is let go. The world goes on while paused, since Pumpkin has no pause.
+- **Dying and respawning, as the official client does it** (Results, Step 1): when the server says the host died, the
+  client says its inventory no longer matches, the four bytes of the capture's; Respawn sends `Respawn`, ready, and
+  when the server answers that it's ready too, the `Respawn` player action. Both match the capture's fixtures byte for
+  byte.
+- **The command line** (`ui/screens/command.rs`): T opens it, / with the slash typed. Enter sends a command as the
+  capture's `CommandRequest` (from a player, a new random id each time, no request name, the latest syntax) or chat as
+  its `Text`; Escape shuts it, and Up and Down go back through what was sent. A long line scrolls to keep the caret in
+  sight.
+- **The server's words** (`chat.rs`): kept as they came, the latest hundred, and worded by the UI from the install's
+  strings: chat as `<name> text`, a translation from its key, a `%` before a key and parameters that are keys
+  included, a JSON message from its `rawtext`. They show at the bottom left over the hotbar, ten lines for ten seconds
+  each, and the last ten while the command line is open, in the colours their codes give, Bedrock's material colours
+  included (`ui/styled.rs`), wrapped between words. A colour code inside a word doesn't break it.
+- **Checked against the real server,** in a fresh world each time, all passing: `--headless --edits 5 --check-edits`
+  gives 14 PASS lines:
+  - **reload:** a block left placed, then Save & Quit, and a new server in this process gave back all 484 blocks round
+    the edits, the host within 0.000 blocks of where it left and its two stacks, spawned 0.5 to 0.9 s after the reopen
+    began;
+  - **respawn:** the client saw the host die, and the host lived again on both sides 157 and 175 ms after the press;
+  - **commands:** `/time set 1234` set the server's and the client's time of day, the server answered, and the chat
+    came back with the host's name.
+- **Found:** Pumpkin answers `/time set` with Java's two parameters, the world and the time, but Bedrock's
+  `commands.time.set` takes one, "Set the time to %1$d". So the answer reads "Set the time to minecraft:overworld",
+  here and, from the same packet, presumably in the official client. An upstream candidate.
+- **Sheets** (`run/sheets/menu-*.png`, gitignored), from `ui/sheet.rs`'s `menu_sheets`: the list with a crash's error,
+  the list empty, a button under the pointer, the create page with a seed typed, the delete question, the busy line,
+  the pause menu, the death screen, and the command line over some chat in colour.
+- **Tests** (about 50 more): folder ids, safe names, reserved names and numbering; the file's round trip; a world
+  without its file; the list's order; creating, copying and deleting; the supervisor's choice and its arguments; the
+  editor's caret, in characters; a long line's stretch; wrapping, in colours too; the strings' parameters; the list's
+  clicks, double clicks, keys, scrolling and selection; the create page; the delete question; pause and death; the
+  respawn packets and the mismatch against the capture; chat and commands read back as the server reads them; what
+  the server said, kept and worded; the command line's lines, keys and history.
+- **Checks:** 490 client tests, clippy with the same 2 warnings, and the headless run's 12 PASS lines, 13 with
+  `--edits`, 14 with `--check-edits`, and 15 with `--inventory` as well.
+- **Not verified:**
+  - nobody has used the window: the list, the menus and the command line are drawn on sheets and their logic tested,
+    but not clicked through. That's the owner's checkpoint 4;
+  - a crash with the window up, which the supervisor should take back to the list;
+  - any of it beside the official client's screens.
+- **Left:**
+  - the 10 MB that each world played leaves behind (Deviation 63);
+  - the list has no scroll bar, only the wheel and the keys; no Rename, and no world settings;
+  - no clipboard: pasting into the command line waits for a crate that reads it;
+  - what was sent isn't kept from one run to the next, and the command line has no completion.
 
 ### Step 15: Entities (2026-11-10)
 

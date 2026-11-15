@@ -34,9 +34,9 @@
 
 > [!WARNING]
 > **Limonite is under heavy construction, so expect little to no functionality.** Today you can
-> walk and fly around a singleplayer world drawn with vanilla textures, lit as the day goes by, with a
-> HUD, break and place blocks, move things about in your inventory, and watch mobs wander about as plain
-> boxes, and that's it.
+> pick or create a world from a world list, walk and fly around it, drawn with vanilla textures and lit
+> as the day goes by, with a HUD, break and place blocks, move things about in your inventory, watch
+> mobs wander about as plain boxes, die and respawn, and type commands, and that's it.
 
 > [!IMPORTANT]
 > **Current phase of development: [Milestone 5, playable singleplayer](docs/milestones/m5-plan.md).**
@@ -251,9 +251,10 @@ git -C pumpkin config core.longpaths true
 cargo run -p limonite-client
 ```
 
-The first build takes a few minutes. Then a window opens on a singleplayer world, run by the
-embedded server, and you walk around it as the host (in creative, a double tap on Space
-flies). Closing the window saves the world.
+The first build takes a few minutes. Then a window opens on the world list: create a world, or
+pick one, and it opens, run by the embedded server, and you walk around it as the host (in
+creative, a double tap on Space flies). <kbd>Esc</kbd> pauses, and Save & Quit takes you back to
+the list. Closing the window saves the world too.
 
 > [!TIP]
 > For the best frame rates, use a release build: `cargo run --release -p limonite-client`. Its
@@ -276,7 +277,9 @@ flies). Closing the window saves the world.
 | <kbd>Left click</kbd> | Breaks the block you aim at. Hold it to keep going |
 | <kbd>Right click</kbd> | Places the held block, or uses what you click. Hold it to keep placing |
 | <kbd>Middle click</kbd> | Picks the block you aim at, once [Pumpkin stops ignoring it](https://github.com/Pumpkin-MC/Pumpkin/issues/4321) |
-| <kbd>Esc</kbd> | Releases the mouse |
+| <kbd>T</kbd> | Opens the command line, to chat. <kbd>Enter</kbd> sends, <kbd>Esc</kbd> shuts it, and <kbd>Up</kbd> and <kbd>Down</kbd> go back through what you sent |
+| <kbd>/</kbd> | Opens the command line with a `/` typed, for a command such as `/time set noon` or `/gamemode survival` |
+| <kbd>Esc</kbd> | Pauses: Resume Game, or Save & Quit back to the world list |
 | <kbd>P</kbd> | Logs where you are as a `/tp` command |
 
 The title bar shows the frame rate and frame time, the chunk and mesh counts, the draw calls,
@@ -291,7 +294,7 @@ file (below).
 | --- | --- |
 | `--home <path>` | Where your settings and identity are kept (default `run/home`) |
 | `--bedrock <path>` | Where Bedrock is, if it isn't in the usual place: the folder that holds `data/resource_packs` |
-| `--data-dir <path>` | Where the world is kept (default `run/client`) |
+| `--data-dir <path>` | Opens the world in that folder, skipping the world list |
 | `--name <name>` | The host's display name, for this run |
 | `--gamemode <mode>` | The host's gamemode in a new world, for this run: `survival`, `creative`, `adventure` or `spectator` |
 | `--radius <chunks>` | The view distance to ask for, 2 to 32, for this run |
@@ -308,9 +311,10 @@ file (below).
 <br>
 
 `--headless` runs the older scripted session instead, with no window, no GPU and no Bedrock install
-needed. The client joins as the host, walks 8 blocks east, checks that the world it decoded equals
-the server's own, block for block, and its light the server's light, and exits. Each check prints
-one `PASS` or `FAIL` line, and the exit code is non-zero if any of them fails.
+needed. The client joins as the host, walks 8 blocks east, sends a command and a line of chat,
+checks that the world it decoded equals the server's own, block for block, and its light the
+server's light, dies and respawns, and exits. Each check prints one `PASS` or `FAIL` line, and the
+exit code is non-zero if any of them fails. Without `--data-dir`, it plays in `run/client`.
 
 ```bash
 cargo run -p limonite-client -- --headless --map run/m3/map.png
@@ -323,6 +327,7 @@ cargo run -p limonite-client -- --headless --map run/m3/map.png
 | `--measure` | Logs what the in-process channel costs, chunk encode and decode split into phases, and how fast a block change reaches the client; only meaningful in a release build |
 | `--stream <blocks>` | After joining, flies that many blocks east at creative flying speed and logs how fast new chunks arrive |
 | `--edits <blocks>` | Places and breaks that many blocks with the real packets, on a stone floor it builds for itself, and checks that the server applied each |
+| `--check-edits` | With `--edits`: then saves and quits, opens the same world again, and checks that the edits, where you stood and what you held all came back |
 | `--inventory` | Opens the inventory in survival and in creative, moves things about with the real packets, and checks that the server agreed to each move and holds what the client shows |
 
 `--home`, `--data-dir`, `--name`, `--gamemode`, `--radius` and `--hotbar` work here too.
@@ -331,8 +336,10 @@ cargo run -p limonite-client -- --headless --map run/m3/map.png
 
 **Good to know**
 
-- **Your world carries over.** Each run starts where the last one ended. Delete `run/client/` for a
-  fresh world.
+- **Your worlds** are folders in `run/home/worlds/`. Copy World puts a copy in `run/home/backups/`,
+  and Delete moves a world into `run/home/deleted/`, which you empty yourself.
+- **If the client crashes,** it opens again on the world list, saying so, and the log in the
+  terminal says what went wrong.
 - **Your settings** are in `run/home/settings.toml`: your name, the view distance, the field of
   view, the mouse sensitivity, the UI scale, smooth lighting, the gamemode for new worlds, and every
   key. The first run writes it with comments. Edit it while the client is closed; a setting that's

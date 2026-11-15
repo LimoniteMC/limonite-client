@@ -4,7 +4,7 @@ A living page: where the project is, how to build and run it, and what bites. Up
 milestone step lands. Architecture decisions live in `docs/PLAN.md`; this page is about progress
 and environment.
 
-_Last updated: 2026-11-10._
+_Last updated: 2026-11-16._
 
 ## Where we are
 
@@ -88,7 +88,15 @@ _Last updated: 2026-11-10._
     turning and bobbing, and an item its picture on a turning card (`client/src/render/entities.rs`; the blocks were
     the owner's fix, m5-plan Deviation 62). `--headless` checks them against the server's:
     the same ones, of the same types, and nearly all exactly where the server has them, the rest mid-move.
-  - **Next:** Step 16, worlds, pausing, death and commands, and then the owner's checkpoint 4.
+  - **Step 16 is done (2026-11-16):** the window opens on a world list (`client/src/worlds.rs`,
+    `ui/screens/worlds.rs`): play, create, copy and delete, each world a folder in `run/home/worlds/`. Worlds switch
+    in one process, and a small supervisor starts the client again on the list after a crash (`supervisor.rs`; the
+    owner left the choice to us, m5-plan Deviation 63). Esc pauses, with Save & Quit back to the list; death shows
+    "You died!" and Respawn, with the official client's packets; T and / open a command line, and the server's
+    replies show over the hotbar in their colours (`ui/screens/command.rs`). Commits `76c918a`, `4d63e50` and
+    `82cada1`. `--headless` checks commands and respawning against the real server, and with `--edits --check-edits`
+    the reload: Save & Quit, the same world in a new server, and everything back.
+  - **Next:** the owner's checkpoint 4, the world list (about 5 minutes; m5-plan Step 16).
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -268,23 +276,33 @@ cargo run -p limonite-client
 
 - **What it does:** finds the Bedrock install, then loads the vanilla packs, the block palette,
   the appearance table and the textures. Each step logs one line, with counts and problems.
-  Then it starts the embedded server, joins as the host, and opens the window.
+  Then it opens the window on the world list (m5-plan Step 16).
+  - **The world list:** Play Selected World (or a double click, or Enter), Create New World (a name, survival or
+    creative, and a seed, random if empty), Copy World (into `backups/`) and Delete (into `deleted/`, after a
+    question). Each world is a folder in the home's `worlds/`, with `limonite-world.toml` beside the server's files.
+  - **A world of its own skips the list:** `--data-dir <path>` opens that folder, as before, and so do
+    `--debug-world` and `--bench`. The old dev world is `--data-dir run/client`.
+  - **The supervisor:** without a world of its own, the first process only runs the window as a child, and starts it
+    again on the list, with an error, if it crashes. Two deaths in a row before the window is up stop it, with a
+    message (`client/src/supervisor.rs`).
   - **The install:** the GDK default, `<drive>:\XboxGames\Minecraft for Windows\Content`, or
     `--bedrock <path>` to the folder that holds `data/resource_packs`. Vanilla files are read at
     runtime and never copied.
 - **Controls:** click in the window to capture the mouse, and move the mouse to look. W, A, S and
   D walk, Space jumps, Left Shift sneaks, and Left Ctrl sprints. In creative, a double tap on
-  Space flies, Space and Shift rise and sink, and another double tap lands. Esc releases the mouse
-  (until the pause menu, Step 16). P logs the pose as a `/tp` command for the official client.
+  Space flies, Space and Shift rise and sink, and another double tap lands. Esc pauses: Resume Game,
+  and Save & Quit, which saves and goes back to the list. Losing the focus pauses too. T opens the
+  command line to chat, and / opens it with the slash typed: Enter sends, Escape shuts, and Up and
+  Down go back through what was sent. P logs the pose as a `/tp` command for the official client.
   Every binding is in the settings file (below).
 - **The title bar** shows the frame rate and frame time, chunks and those still waiting for light,
   meshes and the queue, visible meshes and draws, the entities, the position, and the sky and block light
   in the block at the player's feet. Closing the window saves the world and exits, and logs how far apart
-  entities' moves came (m5-plan Step 15).
+  entities' moves came (m5-plan Step 15). On the world list the title is just "Limonite".
 - **Window flags:**
-  - `--time <ticks>`: sets the world's time of day through the server as it starts, for looking at sunset or night
-    until the command line can (m5-plan Step 16): 0 is sunrise, 6000 noon, 12000 sunset, 18000 midnight. The world
-    keeps it. It works with `--headless` too.
+  - `--time <ticks>`: sets the world's time of day through the server as it starts, with `--data-dir`, for looking
+    at sunset or night: 0 is sunrise, 6000 noon, 12000 sunset, 18000 midnight. The world keeps it. It works with
+    `--headless` too. In a world from the list, `/time set` does the same.
   - `--bench <seconds>`: the M6 baseline flight ("Notes for M6"). Use a release build. It keeps
     M4's 70-degree field of view, whatever the settings say.
 - **Dev builds** compile the client crate at `opt-level = 1` (root `Cargo.toml`), so meshing keeps
@@ -365,18 +383,22 @@ RUST_LOG=info,limonite_client=debug cargo run -p limonite-client -- --headless -
 ```
 
 Add `--edits 4` to place and break blocks with the real packets, on a stone floor it builds for itself at y 200, and
-`--gamemode survival` for the server's times. Add `--inventory` to open the inventory in survival and in creative and
-make the capture's moves (m5-plan Step 12). A new world's spawn is random, so a check has to go the same in any.
+`--gamemode survival` for the server's times. Add `--check-edits` to it for the reload (m5-plan Step 16): it leaves a
+block placed, saves and quits, opens the same world in a new server in the same process, and checks the edits, where
+the host stood and what it held. Add `--inventory` to open the inventory in survival and in creative and make the
+capture's moves (m5-plan Step 12). A new world's spawn is random, so a check has to go the same in any.
 
 - **What it does:**
   1. Starts the embedded server and joins as the host.
   2. Walks 8 blocks east, has the server teleport it 5 blocks up, then waits for the join's
      chunks.
   3. Summons a cow, a pig and a chicken where the host stands, through the server.
-  4. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, teleport, latency, entities,
-     chunks, chunks decoded, world matches server, and light matches server. The flags below add
-     edits, the hotbar and the inventory.
-  5. Writes the map, if asked.
+  4. Sends `/time set` and a line of chat, as the command line does.
+  5. Kills the host through the server, as `/kill` does, and presses Respawn, last of all.
+  6. Logs one `PASS`/`FAIL` line each for spawn, movement, operator, teleport, latency, entities,
+     commands, chunks, chunks decoded, world matches server, light matches server and respawn. The
+     flags below add edits, the reload, the hotbar and the inventory.
+  7. Writes the map, if asked.
 
   The exit code is non-zero on any failure.
 - **Debug logging:** `limonite_client=debug` logs every packet name received, and the world
@@ -399,6 +421,8 @@ make the capture's moves (m5-plan Step 12). A new world's spawn is random, so a 
   - `identity.toml`: this install's random 16-digit `xid`. The server derives the host's UUID from
     it, so worlds remember the player by it. A damaged file stops the client instead of quietly
     becoming a new player.
+  - `worlds/`, `backups/` and `deleted/`: the world list's worlds, what Copy World made, and what
+    Delete moved away. Emptying `deleted/` is up to the player.
   - **The gamemode** applies to a host the world hasn't saved. A saved host keeps its own mode,
     with a warning.
 - **The host is an operator:** before the server starts, the world's `data/ops.json` gets the host
@@ -691,8 +715,9 @@ Found earlier:
   - **M5 revisits the default together with collision,** once the client has physics.
   - **Saved worlds:** the setting only applies to players without saved data. A saved host keeps
     its own mode (m4-plan Finding 11).
-- **One server per process:** `SHOULD_STOP` and `STOP_INTERRUPT` are process globals, never
-  reset. Switching worlds from a world list needs a process restart, or an upstream reset.
+- **One server per process:** `SHOULD_STOP` and `STOP_INTERRUPT` were process globals, never
+  reset. Upstream fixed that (Pumpkin-MC/Pumpkin#3771), and since Step 16 the client runs world
+  after world in one process (m5-plan Deviation 63).
 - **Host identity:** replace `login::DEV_XID` with a per-install identity saved with the
   settings. The player's UUID comes from the `xid`, so dev-world player data (inventory,
   position) won't carry over when it changes.
