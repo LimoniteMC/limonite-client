@@ -1809,6 +1809,42 @@ by Pumpkin's own reader with no bytes left over.
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
 
+### Step 17: The M6 bench again (2026-11-16)
+
+- **Run as M4 ran it** (m4-plan Results, Step 11): a release build with the env vars, on the owner's RTX 5070, on
+  Vulkan, in Immediate present mode and the default 1280×720 window, `--bench 30 --radius R` on a fresh copy of
+  `run/m4-template` each time. The logs are in `run/m17-bench` (gitignored).
+- **The same flight:** M4's template saved its host under the fixed identity the client had then, so the bench's home
+  logs in with that identity (`run/m17-bench/home`). The host is then the template's own player, and every run flew
+  from (0.5, 107.6, 0.5), east for 30 s, as M4's did. The chunk counts came out the same as M4's at every radius.
+- **What M5's frames do that M4's didn't:** the terrain is lit through the light map, with smooth lighting and shaded
+  corners, under the sky's pass and in the fog; textures animate; the HUD is a pass of its own; and between frames,
+  light and meshing run within their budgets. The bench draws no entities, to keep M4's picture.
+
+  | | Radius 8 | Radius 16 | Radius 32 |
+  | --- | --- | --- | --- |
+  | Frames in 30 s, M4 | 83,835 (2,794 fps) | 30,479 (1,016 fps) | 4,983 (166 fps) |
+  | Frames in 30 s, M5 | 50,306 (1,677 fps) | 22,945 (765 fps) | 3,456 (115 fps) |
+  | Frame time, average | 0.36 → 0.60 ms | 0.98 → 1.31 ms | 6.02 → 8.69 ms |
+  | p50 | 0.31 → 0.45 ms | 0.88 → 1.15 ms | 5.22 → 7.40 ms |
+  | p95 | 0.57 → 1.01 ms | 1.34 → 1.95 ms | 13.24 → 15.96 ms |
+  | p99 | 0.79 → 4.27 ms | 2.59 → 7.02 ms | 15.58 → 19.90 ms |
+  | Max | 10.27 → 39.07 ms | 12.96 → 17.88 ms | 22.39 → 33.41 ms |
+  | Draw calls a frame: average (most) | 580 (737) → 526 (687) | 2,864 (3,228) → 2,722 (3,087) | 10,689 (11,093) → 10,440 (10,764) |
+  | Meshes in view, average | 498 → 457 | 2,424 → 2,315 | 9,015 → 8,800 |
+  | Meshes on the GPU at the end (most) | 2,633 → 2,578 | 8,833 → 8,682 | 30,086 (30,482) → 29,798 (30,208) |
+  | Faces on the GPU at the end (most) | 1.60 M → 1.57 M | 5.40 M → 5.31 M | 18.12 M (18.65 M) → 17.92 M (18.48 M) |
+  | Vertex buffers at the end (most) | 102 → 100.5 MB | 346 → 340 MB | 1,160 (1,194) → 1,147 (1,183) MB |
+  | Sub-chunks meshed in flight, each | 3,382, 136 µs → 3,390, 365 µs | 6,705, 145 µs → 6,680, 299 µs | 12,668, 158 µs → 12,642, 281 µs |
+  | Chunks after the join, most in flight | 329, 343 (both) | 1,057, 1,079 (both) | 3,725, 3,771 (both) |
+
+- **What it says:** a frame costs 1.3 to 1.7 times M4's, 0.24 ms more at radius 8 and 2.7 ms more at radius 32, and the
+  long tail grew most: radius 8's p99 is five times M4's. The geometry didn't grow: slightly fewer draws, meshes and
+  faces, so the time is in what each frame does now, not in more of it. Meshing a sub-chunk takes 2 to 2.7 times as
+  long, with its light, shaded corners and Java's models.
+- **Not broken down:** which part of a frame costs what. The bench's own breakdown waits on the `issue-1` branch, to
+  come in once M5 is accepted, and M6's plan starts from these numbers.
+
 ### Step 16: Worlds, pausing, death and commands (2026-11-16)
 
 - **Commits:** `76c918a` (the world list, the supervisor, and one window for world after world), `4d63e50` (pause, Save

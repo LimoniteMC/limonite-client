@@ -97,7 +97,10 @@ _Last updated: 2026-11-16._
     `82cada1`. `--headless` checks commands and respawning against the real server, and with `--edits --check-edits`
     the reload: Save & Quit, the same world in a new server, and everything back.
   - **Checkpoint 4 (2026-11-16): go.**
-  - **Next:** Step 17, the M6 bench again, and then Step 18, the owner's acceptance session.
+  - **Step 17 is done (2026-11-16):** the M6 bench again, M4's flight on fresh copies of its template. M5's frames
+    cost 1.3 to 1.7 times M4's: 1,677, 765 and 115 fps at radius 8, 16 and 32, against M4's 2,794, 1,016 and 166
+    ("Notes for M6", and m5-plan Results, Step 17).
+  - **Next:** Step 18: the checks, and the owner's acceptance session (about 30 minutes).
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -742,8 +745,16 @@ Found earlier:
 - **The baseline M6 must beat** is in m4-plan Results, Step 11: frame times, draw calls and GPU
   totals at radius 8, 16 and 32. At radius 32 that's 166 fps, p99 15.6 ms, about 10,700 draw
   calls a frame, and 1.16 GB of vertex buffers.
+  - **M5's frames, on the same flight** (m5-plan Results, Step 17): 1,677, 765 and 115 fps at radius
+    8, 16 and 32, against M4's 2,794, 1,016 and 166. With the same geometry, a frame that's now
+    lit, fogged and animated, with a HUD, costs 1.3 to 1.7 times as much; which part costs what isn't
+    broken down yet. Meshing a sub-chunk costs 2 to 2.7 times as much. M6 starts from these.
+  - **The same flight needs the same host:** the template saved its host under the fixed identity
+    M4 had, `1000000000000001`, so a bench home with that `xid` in its `identity.toml` starts where
+    M4 did. With any other identity the host is a new player, and may spawn elsewhere.
   - **To compare,** run the same flight the same way: a release build with the env vars under
-    Dev environment, and `--data-dir <a fresh copy of run/m4-template> --radius R --bench 30`.
+    Dev environment, and `--home run/m17-bench/home --data-dir <a fresh copy of run/m4-template>
+    --radius R --bench 30`.
   - **Keep `run/m4-template`.** It's gitignored, so it exists only on the owner's machine, and a
     new template gets a new seed, whose numbers won't compare.
   - **The flight leaves the template's area** at radius 16 and 32, so the server generates chunks
