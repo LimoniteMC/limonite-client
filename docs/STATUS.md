@@ -100,7 +100,10 @@ _Last updated: 2026-11-16._
   - **Step 17 is done (2026-11-16):** the M6 bench again, M4's flight on fresh copies of its template. M5's frames
     cost 1.3 to 1.7 times M4's: 1,677, 765 and 115 fps at radius 8, 16 and 32, against M4's 2,794, 1,016 and 166
     ("Notes for M6", and m5-plan Results, Step 17).
-  - **Next:** Step 18: the checks, and the owner's acceptance session (about 30 minutes).
+  - **Step 18's checks pass (2026-11-16):** the fork's, the client's, the files', and every headless check, five runs
+    in a row, after a fix to the checks themselves (`47ddc14`; m5-plan Results, Step 18).
+  - **Next:** the owner's acceptance session (about 30 minutes) and the official-client comparison (about 15), then
+    the tick.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
@@ -900,5 +903,11 @@ upstream fixes it and a weekly sync brings the fix in:
 - **Experience from a save with no level:** `Player::read_nbt` calls `progress_in_level(level, points)`, which takes
   the points first (`pumpkin-util/src/math/experience.rs:86`). Only a save with `XpTotal` and no `XpLevel` goes that
   way (found 2026-11-03).
+- **`/time set`'s answer has Java's parameters:** the world and then the time, but Bedrock's `commands.time.set`
+  takes one, so a Bedrock player reads "Set the time to minecraft:overworld" (found 2026-11-16, m5-plan Results,
+  Step 16).
+- **A Bedrock player in adventure is told it may build:** the abilities `Player::send_abilities_update` sends give
+  `Build` and `Mine` to all but spectators (`entity/player.rs`, near `:3825`), and the server then refuses each
+  block. The client draws a block it then takes back (found 2026-11-16, m5-plan Results, Step 18).
 
 Notes for M2 (found while planning M1) were all handled; see `docs/milestones/m2-plan.md`.

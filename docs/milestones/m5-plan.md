@@ -1809,6 +1809,32 @@ by Pumpkin's own reader with no bytes left over.
   broken, which became Step 7b (Deviation 23). The owner hasn't yet confirmed the shape exceptions
   above.
 
+### Step 18: Verify, accept, tick (checks 2026-11-16; acceptance to come)
+
+- **18.1, the fork:** Step 2's checks pass: clippy on `pumpkin-protocol`, plain and with `client`, and on `pumpkin-core`
+  with `pumpkin-protocol/client`; `cargo test -p pumpkin-protocol --features client`, 227 passed and 3 ignored; and
+  the two private golden tests, the command and the chat, against the capture. M5's own fork commits touch 80 files,
+  all in `pumpkin-protocol` (Deviation 7's form of the check). The fork hasn't changed since the sync of 2026-11-10.
+- **18.2, the client:** `cargo test --workspace` and `cargo clippy --workspace --all-targets` pass, clippy with the
+  same 2 warnings; 490 client tests. No `.tga` or `.brarchive` file is tracked, and the only `.lang` file is the
+  client's own (`client/src/ui/limonite.lang`). The tracked images are `docs/readme/title.png`, the social preview's
+  copy of it, our own render, and the four README screenshots the owner picked, which CLAUDE.md has allowed since
+  2026-10-25. So the plan's "the only tracked image" is out of date, not broken.
+- **18.3, headless:** with `--edits 5 --check-edits --inventory`, all 15 checks pass, five runs in a row in fresh
+  worlds, after a fix to the checks themselves (`47ddc14`):
+  - **What failed:** the reload, about one run in three, with every place it tried refused. The host was still in
+    adventure. The edits check puts it there for its refused click, and back after, but it waited for the client's
+    right to build, which never went: Pumpkin tells a Bedrock player in adventure that it may build, and refuses each
+    block. So the inventory check sometimes started before the client heard, and took adventure for the mode to go
+    back to.
+  - **The fix:** the edits check waits for the gamemode itself, and the inventory check asks the server which mode to
+    go back to, and waits until the client has it. The reload check also gives itself a stack to place, passes over a
+    place an entity stands in, tries up to three places, and says what both sides hold if the server refuses them all.
+  - **Found:** Pumpkin's abilities give `Build` and `Mine` to every Bedrock player but a spectator. The official
+    client, told the same, would also show a block in adventure and then lose it (STATUS.md, Upstream PR
+    candidates).
+- **18.4 and 18.5, the acceptance session and the official-client comparison:** the owner's, to come.
+
 ### Step 17: The M6 bench again (2026-11-16)
 
 - **Run as M4 ran it** (m4-plan Results, Step 11): a release build with the env vars, on the owner's RTX 5070, on
