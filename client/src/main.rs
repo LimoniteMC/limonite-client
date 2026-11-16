@@ -643,21 +643,104 @@ fn held(session: &Session) -> Vec<Option<(i16, u16)>> {
     (0..inventory::MAIN).map(|slot| slots.item(SlotRef::Main(slot as u8)).map(|item| (item.id, item.count))).collect()
 }
 
-/// Places one more block with the real packets, and leaves it, for the reload to find.
-fn keep_a_block(session: &mut Session, world: &ServerWorld) -> Result<IVec3, String> {
-    session.select_slot(0);
-    let hit = clicks_in_reach(session)
-        .into_iter()
-        .find(|hit| plan_for(session, hit).is_ok())
-        .ok_or("nothing in reach to place a block on")?;
-    let (plan, item) = plan_for(session, &hit)?;
-    let at = plan.result;
-    let pos = BlockPos::new(at.x, at.y, at.z);
-    session.use_pressed(Some(&hit));
-    if !edit_ticks(session, 40, |_| world.get_block(&pos).id == item.id) {
-        return Err(format!("the server didn't place the kept block at {at}"));
+/// Whether the client knows of an entity whose box reaches into the block at `at`. The server
+/// refuses a block put there, and the client's placing doesn't know about entities yet (m5-plan
+/// Results, Step 15), so a mob that has spawned on the edits' floor would take the block back.
+fn occupied(session: &Session, at: IVec3) -> bool {
+    let low = at.as_dvec3();
+    let high = low + DVec3::ONE;
+    session.game().entities().latest().iter().any(|(_, entity_type, pose)| {
+        let [width, height] = entities::kinds::size(*entity_type, false, 1.0);
+        let half = width / 2.0;
+        let (feet, top) = (pose.feet, pose.feet.y + height);
+        feet.x - half < high.x
+            && feet.x + half > low.x
+            && feet.y < high.y
+            && top > low.y
+            && feet.z - half < high.z
+            && feet.z + half > low.z
+    })
+}
+
+/// How many places the reload check tries for its block, if the server refuses one.
+const KEEP_TRIES: usize = 3;
+
+/// Places one more block with the real packets, and leaves it, for the reload to find. The
+/// checks before may have moved the hotbar about (`--inventory` does), so a stack of dirt goes
+/// into the first slot first, through the server, as the edits' stacks went in. A place an
+/// entity stands in is passed over, and a place the server refuses all the same is followed by
+/// another, up to [`KEEP_TRIES`].
+fn keep_a_block(session: &mut Session, server: &EmbeddedServer, player: &ServerPlayer) -> Result<IVec3, String> {
+    {
+        let _runtime = server.runtime.enter();
+        player.inventory().set_slot(0, ItemStack::new(64, &Item::DIRT));
+        player.sync_inventory_to_client();
     }
-    Ok(at)
+    session.select_slot(0);
+    // The whole new stack, not just dirt: the inventory check can leave some dirt in that slot,
+    // and a click that names the old stack is one the server refuses.
+    let dirt = BedrockItem::DIRT.id;
+    let arrived = |session: &Session| session.game().inventory().hotbar()[0].is_some_and(|item| item.id == dirt && item.count == 64);
+    let _ = session.run_until(Instant::now() + SETTLE, arrived);
+    if !arrived(session) {
+        return Err("the stack of dirt to place never reached the client's hotbar".to_string());
+    }
+    let world = player.world().clone();
+    let places: Vec<Hit> = clicks_in_reach(session)
+        .into_iter()
+        .filter(|hit| plan_for(session, hit).is_ok_and(|(plan, _)| !occupied(session, plan.result)))
+        .take(KEEP_TRIES)
+        .collect();
+    if places.is_empty() {
+        return Err("nothing in reach that takes a block, and no entity stands in".to_string());
+    }
+    let mut refused = Vec::new();
+    for hit in places {
+        let (plan, item) = plan_for(session, &hit)?;
+        let at = plan.result;
+        let pos = BlockPos::new(at.x, at.y, at.z);
+        session.use_pressed(Some(&hit));
+        if edit_ticks(session, 40, |_| world.get_block(&pos).id == item.id) {
+            if !refused.is_empty() {
+                info!("The kept block went in at {at}, after the server refused {refused:?}");
+            }
+            return Ok(at);
+        }
+        let entity_now = if occupied(session, at) { ", where an entity stands now" } else { "" };
+        info!("The server didn't place the kept block at {at}{entity_now}; trying another place");
+        refused.push(at);
+    }
+    // Both sides' view, to tell why.
+    let server_side = {
+        let feet = player.position();
+        let held = player.inventory().held_item();
+        format!(
+            "the server has the host's feet at ({:.2}, {:.2}, {:.2}), in {:?}, slot {} selected, holding {} {}",
+            feet.x,
+            feet.y,
+            feet.z,
+            player.gamemode.load(),
+            player.inventory().get_selected_slot(),
+            held.item_count,
+            held.item.registry_key
+        )
+    };
+    let client_side = session.game().player().map_or(String::new(), |host| {
+        let held = session.game().inventory().held();
+        format!(
+            "the client has them at ({:.2}, {:.2}, {:.2}), in {:?}, may build {}, slot {} selected, holding item {} x{}, inventory open {}",
+            host.pose().feet.x,
+            host.pose().feet.y,
+            host.pose().feet.z,
+            host.gamemode,
+            host.abilities.build,
+            session.game().inventory().selected(),
+            held.id,
+            held.stack_size,
+            session.game().inventory().is_open()
+        )
+    });
+    Err(format!("the server placed the kept block at none of {refused:?}: {server_side}; {client_side}"))
 }
 
 /// Save & Quit, and the same world opened again (m5-plan Step 16, `--check-edits`). Leaves a
@@ -674,10 +757,10 @@ fn reload_and_check(
 ) -> (Check, Option<(Session, EmbeddedServer)>) {
     const NAME: &str = "reload";
     let fail = |detail: String| Check::new(NAME, false, detail);
-    let Some(world) = server.server.get_all_players().first().map(|player| player.world().clone()) else {
+    let Some(player) = server.server.get_all_players().first().cloned() else {
         return (fail("the server has no player".to_string()), Some((session, server)));
     };
-    let kept = match keep_a_block(&mut session, &world) {
+    let kept = match keep_a_block(&mut session, &server, &player) {
         Ok(kept) => kept,
         Err(err) => return (fail(err), Some((session, server))),
     };
@@ -1182,8 +1265,14 @@ fn edits_and_check(session: &mut Session, server: &EmbeddedServer, blocks: u32) 
             session.use_pressed(Some(&hit));
             let predicted = shown(session);
             let settled = edit_ticks(session, 40, |session| shown(session) == before);
-            player.set_gamemode(gamemode.unwrap_or(GameMode::Creative));
-            let _ = session.run_until(Instant::now() + SETTLE, |session| session.game().player().is_some_and(|player| player.abilities.build));
+            // Back as it was, and the client has to have heard. Its right to build is no sign:
+            // Pumpkin tells a Bedrock player in adventure that it may build, and refuses each
+            // block all the same, so the gamemode itself is what's waited for.
+            let restored = gamemode.unwrap_or(GameMode::Creative);
+            player.set_gamemode(restored);
+            let _ = session.run_until(Instant::now() + SETTLE, |session| {
+                session.game().player().is_some_and(|player| player.gamemode == restored)
+            });
             if predicted == before {
                 problems.push(format!("the refused click at {at} showed nothing"));
             }
@@ -1284,7 +1373,9 @@ fn inventory_and_check(session: &mut Session, server: &EmbeddedServer) -> Check 
         return Check::new(NAME, false, "the server has no player".to_string());
     };
     let _runtime = server.runtime.enter();
-    let gamemode = session.game().player().map_or(GameMode::Creative, |player| player.gamemode);
+    // The server's word for the mode to go back to: the client's may not have caught up with
+    // a check before.
+    let gamemode = player.gamemode.load();
     let mut problems = Vec::new();
     let mut requests = 0;
 
@@ -1351,6 +1442,9 @@ fn inventory_and_check(session: &mut Session, server: &EmbeddedServer) -> Check 
         }
     }
     player.set_gamemode(gamemode);
+    let _ = session.run_until(Instant::now() + SETTLE, |session| {
+        session.game().player().is_some_and(|player| player.gamemode == gamemode)
+    });
     let refused = session.game().inventory().refused();
     if refused > 0 {
         problems.push(format!("the server refused {refused} of the {requests} requests"));
