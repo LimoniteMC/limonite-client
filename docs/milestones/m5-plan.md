@@ -1888,6 +1888,7 @@ by Pumpkin's own reader with no bytes left over.
   - the list has no scroll bar, only the wheel and the keys; no Rename, and no world settings;
   - no clipboard: pasting into the command line waits for a crate that reads it;
   - what was sent isn't kept from one run to the next, and the command line has no completion.
+- **Checkpoint 4 (owner, 2026-11-16): go.**
 
 ### Step 15: Entities (2026-11-10)
 

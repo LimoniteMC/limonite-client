@@ -96,7 +96,8 @@ _Last updated: 2026-11-16._
     replies show over the hotbar in their colours (`ui/screens/command.rs`). Commits `76c918a`, `4d63e50` and
     `82cada1`. `--headless` checks commands and respawning against the real server, and with `--edits --check-edits`
     the reload: Save & Quit, the same world in a new server, and everything back.
-  - **Next:** the owner's checkpoint 4, the world list (about 5 minutes; m5-plan Step 16).
+  - **Checkpoint 4 (2026-11-16): go.**
+  - **Next:** Step 17, the M6 bench again, and then Step 18, the owner's acceptance session.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
     They're reported upstream ("Upstream PR candidates").
   - **Checkpoints** after Steps 7, 11, 14 and 16 are go/no-go points: if a phase overruns, the
