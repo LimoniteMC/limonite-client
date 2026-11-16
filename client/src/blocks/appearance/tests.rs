@@ -1,7 +1,7 @@
 //! The appearance table on synthetic packs, and its name tables against the
 //! real palette.
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, io::Write, sync::Arc};
 
 use image::{Rgba, RgbaImage};
 use limonite_packs::{
@@ -9,11 +9,12 @@ use limonite_packs::{
     registry::{BlocksJson, Face, Flipbooks, TerrainTextures},
 };
 use pumpkin_data::{Block, BlockState as JavaState, BlockStateId};
+use zip::{ZipWriter, write::SimpleFileOptions};
 
 use super::*;
 use crate::{
     blocks::{
-        jar::Jar,
+        jar::{FoundBy, Jar},
         palette::{BedrockState, Palette, StateValue},
         palette_source,
     },
@@ -308,6 +309,120 @@ fn bamboo_keeps_its_stem_and_leaves_from_the_bag_of_slots() {
 fn liquid_amounts_follow_java_heights() {
     let amounts: Vec<u8> = (0..=9).map(liquid_amount).collect();
     assert_eq!(amounts, [8, 7, 6, 5, 4, 3, 2, 1, 8, 8], "a fall stands as high as a source");
+}
+
+/// How many times the next two tests build the table. Each build's maps are new, so
+/// each walks in an order of its own, as a new run of the client would (`preferred`
+/// says why): one build can't show an answer that changes from run to run. Before
+/// the fix, a build had about an even chance of either answer, so 32 builds agreeing
+/// by luck was a chance of about one in two billion.
+const RUNS: usize = 32;
+
+/// A jar made up for a test: these files, and the block state file `Jar::open`
+/// looks for to tell Minecraft's jar from any other zip.
+fn made_up_jar(dir: &TempDir, files: &[(&str, &[u8])]) -> Jar {
+    let path = dir.path().join("made-up.jar");
+    let mut zip = ZipWriter::new(std::fs::File::create(&path).unwrap());
+    let stone: (&str, &[u8]) = ("assets/minecraft/blockstates/stone.json", b"{}");
+    for (name, bytes) in std::iter::once(&stone).chain(files) {
+        zip.start_file(*name, SimpleFileOptions::default()).unwrap();
+        zip.write_all(bytes).unwrap();
+    }
+    zip.finish().unwrap();
+    Jar::open(&path, FoundBy::Flag).unwrap()
+}
+
+/// The first texel of the layer in one of a look's slots.
+fn texel(built: &Built, id: u32, slot: usize) -> [u8; 4] {
+    let size = built.textures.size as usize;
+    let at = usize::from(built.table.get(id).faces[slot].layer) * size * size * 4;
+    built.textures.mips[0][at..at + 4].try_into().unwrap()
+}
+
+#[test]
+fn a_name_with_two_paths_finds_the_blocks_texture_every_run() {
+    // As in the install: `terrain_texture.json` names the leaf litter item's icon
+    // too, by the same file name as the block's texture. Both are see-through
+    // where Java's texture is, so either would pass for it on the jar's model.
+    let dir = TempDir::new("two_paths");
+    dir.write("blocks.json", br#"{ "leaf_litter": { "textures": "leaf_litter" } }"#);
+    dir.write(
+        "textures/terrain_texture.json",
+        br#"{ "texture_data": {
+            "leaf_litter": { "textures": "textures/blocks/leaf_litter" },
+            "leaf_litter_carried": { "textures": "textures/items/leaf_litter" }
+        } }"#,
+    );
+    let litter = |[r, g, b]: [u8; 3]| {
+        let mut image = solid([r, g, b, 255]);
+        image.put_pixel(3, 3, Rgba([0, 0, 0, 0]));
+        image
+    };
+    let (block, icon, java) = ([20, 20, 20], [21, 21, 21], [22, 22, 22]);
+    dir.write("textures/misc/missing_texture.png", &png(&solid([255, 0, 255, 255])));
+    dir.write("textures/blocks/leaf_litter.png", &png(&litter(block)));
+    dir.write("textures/items/leaf_litter.png", &png(&litter(icon)));
+    let mut jar = made_up_jar(
+        &dir,
+        &[
+            (
+                "assets/minecraft/blockstates/leaf_litter.json",
+                br#"{"variants": {"": {"model": "minecraft:block/litter"}}}"#,
+            ),
+            (
+                "assets/minecraft/models/block/litter.json",
+                br##"{
+                    "textures": {"all": "minecraft:block/leaf_litter"},
+                    "elements": [{"from": [0, 0, 0], "to": [16, 1, 16], "faces": {"up": {"texture": "#all"}}}]
+                }"##,
+            ),
+            ("assets/minecraft/textures/block/leaf_litter.png", &png(&litter(java))),
+        ],
+    );
+    // A state the jar draws, and one Pumpkin never sends, as Java hasn't got it.
+    // Bedrock's leaf litter has 16 of those. Drawn from `blocks.json`, it loads the
+    // block's texture whatever the model is given.
+    let drawn = JavaState::to_be_network_id(Block::LEAF_LITTER.default_state.id);
+    let bedrock_only = 1;
+    let palette = Palette::new(HashMap::from([
+        (drawn, state("leaf_litter", &[])),
+        (bedrock_only, state("leaf_litter", &[("growth", StateValue::Int(7))])),
+    ]));
+    let stack = PackStack::new(vec![Pack::new(dir.path().to_path_buf())]);
+    let (blocks, problems) = BlocksJson::load(&stack);
+    assert!(problems.is_empty(), "{problems:?}");
+
+    for run in 0..RUNS {
+        let (terrain, problems) = TerrainTextures::load(&stack);
+        assert!(problems.is_empty(), "{problems:?}");
+        let built = build(&palette, &blocks, &terrain, &Flipbooks::default(), &stack, Some(&mut jar));
+        assert!(matches!(built.table.get(drawn).shape, Shape::Model { .. }), "the jar draws it");
+        // Given the icon, the model had a layer of its own: the wobble in the log.
+        assert_eq!(
+            built.textures.layers, 2,
+            "run {run}: the missing texture, and the block's, which both states show"
+        );
+        assert_eq!(texel(&built, drawn, 0)[..3], block, "run {run}: the model shows the block's texture");
+        assert_eq!(texel(&built, bedrock_only, Face::Up as usize)[..3], block);
+        assert_eq!(
+            bedrock_textures_by_name(&terrain)["leaf_litter"],
+            "textures/blocks/leaf_litter",
+            "run {run}: the name keeps the block's texture, not the item's icon"
+        );
+    }
+}
+
+#[test]
+fn the_texture_array_comes_out_the_same_every_run() {
+    // Each fixture's palette is a new `HashMap`, so it hands its states over in an
+    // order of its own, and textures get their layers in the order they're asked for.
+    let layers = |f: &Fixture| (1..=BAMBOO).map(|id| f.look(id).faces.map(|face| face.layer)).collect::<Vec<_>>();
+    let first = fixture();
+    for run in 1..RUNS {
+        let again = fixture();
+        assert_eq!(layers(&again), layers(&first), "run {run}: every face on the same layer");
+        assert!(again.built.textures.mips == first.built.textures.mips, "run {run}: the same array, byte for byte");
+    }
 }
 
 /// The real palette, through Pumpkin's Java-to-Bedrock table.
