@@ -508,10 +508,15 @@ pub fn build(
 ) -> Built {
     // The same Java states physics collides with.
     let java = BlockTable::build();
-    let states: Vec<(u32, &BedrockState, Option<JavaBlock>)> = palette
+    let mut states: Vec<(u32, &BedrockState, Option<JavaBlock>)> = palette
         .iter()
         .map(|(id, state)| (id, state, java.shape_state(id).map(JavaBlock::of)))
         .collect();
+    // The palette is a `HashMap` too, so it hands its states over in another order
+    // each run (`preferred` says why). Textures get their layers in the order they're
+    // asked for, so in id order the array comes out the same every run, layer for
+    // layer, and so does which problem the report gives for a name.
+    states.sort_unstable_by_key(|&(id, ..)| id);
     let compiled = jar.as_deref_mut().map(|jar| {
         java_models::compile(
             |entry| jar.read(entry),
@@ -663,15 +668,44 @@ pub fn build(
 }
 
 /// Every texture `terrain_texture.json` knows, by the last part of its path.
+///
+/// **Two paths can end in the same name:** the file lists some items' icons too,
+/// such as `textures/items/lantern` beside `textures/blocks/lantern`, and each
+/// candle's. [`preferred`] says which one a name keeps.
 fn bedrock_textures_by_name(terrain: &TerrainTextures) -> HashMap<&str, &str> {
-    let mut names = HashMap::new();
+    let mut names: HashMap<&str, &str> = HashMap::new();
     for entry in terrain.textures.values() {
         for texture in entry.textures.as_slice() {
             let path = texture.path.as_str();
-            names.entry(path.rsplit('/').next().unwrap_or(path)).or_insert(path);
+            // A name's first path goes in, and a later one takes its place only if
+            // it's preferred. `kept` is the `&mut &str` in the map, written over;
+            // the map's type is spelt out above so that the compiler knows that.
+            names
+                .entry(path.rsplit('/').next().unwrap_or(path))
+                .and_modify(|kept| *kept = preferred(kept, path))
+                .or_insert(path);
         }
     }
     names
+}
+
+/// Where the packs keep block textures.
+const BLOCK_TEXTURES: &str = "textures/blocks/";
+
+/// Of two paths that end in the same name, the one to keep: one in
+/// [`BLOCK_TEXTURES`] before any other, such as an item's icon, since the models
+/// asking are blocks', and otherwise the first in alphabetical order.
+///
+/// **It mustn't matter which one comes first** (worth teaching). The loop above
+/// walks a `HashMap`, and Rust seeds each `HashMap`'s hasher at random, so that
+/// nobody can choose keys that all land in one bucket and slow it to a crawl. So
+/// the order it walks in changes from run to run. Keeping the first path met made a
+/// different choice each run: candles and lanterns swapped between Bedrock's
+/// picture and Java's, and the leaf litter block's model was sometimes given the
+/// item's icon, which was one layer more in the texture array. Comparing the two
+/// paths gives the same answer in any order, so the same answer every run.
+fn preferred<'a>(a: &'a str, b: &'a str) -> &'a str {
+    std::cmp::min_by_key(a, b, |path| (!path.starts_with(BLOCK_TEXTURES), *path))
 }
 
 /// Whether two textures are laid out for the same shape: they're see-through in
