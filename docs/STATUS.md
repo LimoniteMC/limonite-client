@@ -102,6 +102,9 @@ _Last updated: 2026-11-16._
     ("Notes for M6", and m5-plan Results, Step 17).
   - **Step 18's checks pass (2026-11-16):** the fork's, the client's, the files', and every headless check, five runs
     in a row, after a fix to the checks themselves (`47ddc14`; m5-plan Results, Step 18).
+  - **Fixed (2026-11-16):** the texture array came out at 1,200 layers or 1,201, in a different order each run. Two
+    HashMap walks, whose order Rust makes random, decided which picture a name meant and which layer each texture got
+    (`b8c73fc`, merged in `3f2df86`).
   - **Next:** the owner's acceptance session (about 30 minutes) and the official-client comparison (about 15), then
     the tick.
   - **Found by the capture:** three Pumpkin bugs that hit every Bedrock player, the host included.
@@ -137,7 +140,8 @@ _Last updated: 2026-11-16._
   2026-10-24, the README and the wiki on 2026-10-25, the first upstream sync and M5 through Step 10
   on 2026-11-01, the second sync and Step 11 on 2026-11-02, Step 11's checkpoint on 2026-11-03, the move to
   Bedrock 1.26.60 on 2026-11-05, Step 12 on 2026-11-06, Step 13 on 2026-11-07, Step 14 on 2026-11-09, the sync of
-  2026-11-10, checkpoint 3 and Step 15 on 2026-11-10, and Step 16 on 2026-11-16):
+  2026-11-10, checkpoint 3 and Step 15 on 2026-11-10, and Step 16, checkpoint 4, Step 17, Step 18's checks and the
+  texture fix on 2026-11-16):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
   - the fork's `limonite` branch, at `d9cc703`, with the M1 to M4 fork commits, the upstream syncs
