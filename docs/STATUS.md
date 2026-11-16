@@ -129,8 +129,8 @@ _Last updated: 2026-11-16._
 - **Pushed, all public, with the owner's OK** (M1 and M2 on 2026-10-20, M3 on 2026-10-22, M4 on
   2026-10-24, the README and the wiki on 2026-10-25, the first upstream sync and M5 through Step 10
   on 2026-11-01, the second sync and Step 11 on 2026-11-02, Step 11's checkpoint on 2026-11-03, the move to
-  Bedrock 1.26.60 on 2026-11-05, Step 12 on 2026-11-06, Step 13 on 2026-11-07, Step 14 on 2026-11-09, and the sync of
-  2026-11-10, checkpoint 3 and Step 15 on 2026-11-10):
+  Bedrock 1.26.60 on 2026-11-05, Step 12 on 2026-11-06, Step 13 on 2026-11-07, Step 14 on 2026-11-09, the sync of
+  2026-11-10, checkpoint 3 and Step 15 on 2026-11-10, and Step 16 on 2026-11-16):
   - superproject `main` to `https://github.com/LimoniteMC/limonite-client` (`origin`; `main`
     tracks `origin/main`);
   - the fork's `limonite` branch, at `d9cc703`, with the M1 to M4 fork commits, the upstream syncs
